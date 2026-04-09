@@ -9,6 +9,33 @@ fn ws<'src>() -> impl Parser<'src, &'src str, (), ParseExtra<'src>> + Clone {
         .repeated()
         .ignored()
 }
+fn line_ws<'src>() -> impl Parser<'src, &'src str, (), ParseExtra<'src>> + Clone {
+    one_of(" \t").repeated().ignored()
+}
+fn doc_comment_line<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> + Clone {
+    line_ws()
+        .ignore_then(just("///"))
+        .ignore_then(just(' ').or_not())
+        .ignore_then(
+            any()
+                .filter(|c: &char| *c != '\n')
+                .repeated()
+                .collect::<String>(),
+        )
+        .then_ignore(just('\n').or_not())
+}
+fn doc_block<'src>() -> impl Parser<'src, &'src str, Option<DocBlock>, ParseExtra<'src>> + Clone {
+    doc_comment_line()
+        .repeated()
+        .collect::<Vec<_>>()
+        .map(|lines| {
+            if lines.is_empty() {
+                None
+            } else {
+                Some(DocBlock(lines))
+            }
+        })
+}
 fn token_ident<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> + Clone {
     text::ident::<_, ParseExtra<'src>>().map(str::to_owned)
 }
@@ -358,30 +385,34 @@ pub fn parse_root_text_rich(
         .then_ignore(ws())
         .boxed();
     let program_parser = choice((
-        ((((((asm_keyword_parser.clone()).map(Box::new))
+        ((((((doc_block()).then((asm_keyword_parser.clone()).map(Box::new)))
             .then((a_arch64_dialect_keyword_parser.clone()).map(Box::new)))
         .then_ignore(just("{").padded()))
         .then((a64_item_parser.clone()).repeated().collect::<Vec<_>>()))
         .then_ignore(just("}").padded()))
-        .map_with(move |((keyword, dialect), items), e| Program::AArch64 {
-            dialect: dialect,
-            docs: None,
-            items: items,
-            keyword: keyword,
-            prov: prov_from_span(e.span(), file_id),
-        }),
-        ((((((asm_keyword_parser.clone()).map(Box::new))
+        .map_with(
+            move |(((docs, keyword), dialect), items), e| Program::AArch64 {
+                dialect: dialect,
+                docs: docs,
+                items: items,
+                keyword: keyword,
+                prov: prov_from_span(e.span(), file_id),
+            },
+        ),
+        ((((((doc_block()).then((asm_keyword_parser.clone()).map(Box::new)))
             .then((x86_64_dialect_keyword_parser.clone()).map(Box::new)))
         .then_ignore(just("{").padded()))
         .then((x64_item_parser.clone()).repeated().collect::<Vec<_>>()))
         .then_ignore(just("}").padded()))
-        .map_with(move |((keyword, dialect), items), e| Program::X86_64 {
-            dialect: dialect,
-            docs: None,
-            items: items,
-            keyword: keyword,
-            prov: prov_from_span(e.span(), file_id),
-        }),
+        .map_with(
+            move |(((docs, keyword), dialect), items), e| Program::X86_64 {
+                dialect: dialect,
+                docs: docs,
+                items: items,
+                keyword: keyword,
+                prov: prov_from_span(e.span(), file_id),
+            },
+        ),
     ))
     .boxed();
     program_parser

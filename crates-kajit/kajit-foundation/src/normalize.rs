@@ -51,17 +51,15 @@ pub(crate) struct NormalizedContract {
 #[derive(Debug, Clone)]
 pub(crate) struct NormalizedSyntax {
     pub(crate) root: String,
-    pub(crate) token_kinds: HashMap<String, NormalizedTokenKind>,
+    pub(crate) token_specs: HashMap<String, NormalizedTokenSpec>,
     pub(crate) rules: HashMap<String, SyntaxRule>,
     pub(crate) canonical_print: HashMap<String, String>,
     pub(crate) semantic_tokens: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum NormalizedTokenKind {
-    Ident,
-    Symbol,
-    Int,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NormalizedTokenSpec {
+    pub(crate) regex: String,
 }
 
 #[derive(Debug, Clone)]
@@ -295,30 +293,24 @@ pub(crate) fn normalize_repr(repr: &ReprBody) -> Result<NormalizedRepr, String> 
         .map(|(name, rule)| Ok((name.clone(), normalize_rule(rule)?)))
         .collect::<Result<HashMap<_, _>, String>>()?;
 
-    let token_kinds = repr
+    let token_specs = repr
         .syntax
         .tokens
         .iter()
         .map(|(name, token)| {
-            let kind = match token {
-                crate::schema::TokenExpr::Regex(patterns) => {
-                    match patterns.first().map(String::as_str) {
-                        Some("[A-Za-z_][A-Za-z0-9_]*") => NormalizedTokenKind::Ident,
-                        Some("@[A-Za-z_][A-Za-z0-9_.]*") => NormalizedTokenKind::Symbol,
-                        Some("[0-9]+") => NormalizedTokenKind::Int,
-                        Some(other) => {
-                            return Err(format!("unsupported token regex pattern {other:?}"));
-                        }
-                        None => {
-                            return Err("regex token missing pattern".to_owned());
-                        }
-                    }
-                }
+            let spec = match token {
+                crate::schema::TokenExpr::Regex(patterns) => match patterns.first() {
+                    Some(regex) if !regex.trim().is_empty() => NormalizedTokenSpec {
+                        regex: regex.clone(),
+                    },
+                    Some(_) => return Err("regex token missing pattern".to_owned()),
+                    None => return Err("regex token missing pattern".to_owned()),
+                },
                 crate::schema::TokenExpr::Other { name, .. } => {
                     return Err(format!("unsupported token expression kind {:?}", name));
                 }
             };
-            Ok((name.clone(), kind))
+            Ok((name.clone(), spec))
         })
         .collect::<Result<HashMap<_, _>, String>>()?;
 
@@ -334,7 +326,7 @@ pub(crate) fn normalize_repr(repr: &ReprBody) -> Result<NormalizedRepr, String> 
         },
         syntax: NormalizedSyntax {
             root: repr.syntax.root.clone(),
-            token_kinds,
+            token_specs,
             rules,
             canonical_print: repr.syntax.canonical_print.clone(),
             semantic_tokens: repr.syntax.semantic_tokens.clone().unwrap_or_default(),
@@ -400,4 +392,8 @@ pub(crate) fn is_string_scalar_type(repr: &NormalizedRepr, name: &str) -> bool {
 
 pub(crate) fn is_int_scalar_type(repr: &NormalizedRepr, name: &str) -> bool {
     classify_ref_type(repr, name) == NormalizedRefKind::IntScalar
+}
+
+pub(crate) fn is_docs_type(repr: &NormalizedRepr, name: &str) -> bool {
+    common_alias_target(repr, "docs") == Some(name)
 }

@@ -102,7 +102,7 @@ struct RenderParts {
 }
 
 fn render_parts(repr: &NormalizedRepr) -> RenderParts {
-    let mut token_names = repr.syntax.token_kinds.keys().cloned().collect::<Vec<_>>();
+    let mut token_names = repr.syntax.token_specs.keys().cloned().collect::<Vec<_>>();
     token_names.sort();
 
     let mut rule_names = repr.syntax.rules.keys().cloned().collect::<Vec<_>>();
@@ -141,11 +141,7 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
     let token_rows = token_names
         .iter()
         .map(|name| {
-            let kind = match repr.syntax.token_kinds.get(name).unwrap() {
-                crate::normalize::NormalizedTokenKind::Ident => "ident",
-                crate::normalize::NormalizedTokenKind::Symbol => "symbol",
-                crate::normalize::NormalizedTokenKind::Int => "int",
-            };
+            let kind = repr.syntax.token_specs.get(name).unwrap().regex.as_str();
             format!("    TokenSpec {{ name: {name:?}, kind: {kind:?} }},")
         })
         .collect::<Vec<_>>()

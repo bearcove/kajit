@@ -9,6 +9,33 @@ fn ws<'src>() -> impl Parser<'src, &'src str, (), ParseExtra<'src>> + Clone {
         .repeated()
         .ignored()
 }
+fn line_ws<'src>() -> impl Parser<'src, &'src str, (), ParseExtra<'src>> + Clone {
+    one_of(" \t").repeated().ignored()
+}
+fn doc_comment_line<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> + Clone {
+    line_ws()
+        .ignore_then(just("///"))
+        .ignore_then(just(' ').or_not())
+        .ignore_then(
+            any()
+                .filter(|c: &char| *c != '\n')
+                .repeated()
+                .collect::<String>(),
+        )
+        .then_ignore(just('\n').or_not())
+}
+fn doc_block<'src>() -> impl Parser<'src, &'src str, Option<DocBlock>, ParseExtra<'src>> + Clone {
+    doc_comment_line()
+        .repeated()
+        .collect::<Vec<_>>()
+        .map(|lines| {
+            if lines.is_empty() {
+                None
+            } else {
+                Some(DocBlock(lines))
+            }
+        })
+}
 fn token_ident<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> + Clone {
     text::ident::<_, ParseExtra<'src>>().map(str::to_owned)
 }
@@ -140,7 +167,7 @@ pub fn parse_root_text_rich(
         ty: ty,
     })
     .boxed();
-    let function_parser = ((((((((just("fn").padded()).ignore_then(
+    let function_parser = (((((((((doc_block()).then_ignore(just("fn").padded())).then(
         token_ident()
             .map_with(move |text, e| Symbol {
                 prov: prov_from_span(e.span(), file_id),
@@ -166,22 +193,24 @@ pub fn parse_root_text_rich(
             .then_ignore(ws()),
     ))
     .then((block_parser.clone()).map(Box::new)))
-    .map_with(move |(((name, params), return_type), body), e| Function {
-        body: body,
-        docs: None,
-        locals: Vec::new(),
-        name: name,
-        params: params,
-        prov: prov_from_span(e.span(), file_id),
-        return_type: return_type,
-    })
+    .map_with(
+        move |((((docs, name), params), return_type), body), e| Function {
+            body: body,
+            docs: docs,
+            locals: Vec::new(),
+            name: name,
+            params: params,
+            prov: prov_from_span(e.span(), file_id),
+            return_type: return_type,
+        },
+    )
     .boxed();
-    let module_parser = (((just("module").padded()).ignore_then(
-        (just("{").padded()).ignore_then((function_parser.clone()).repeated().collect::<Vec<_>>()),
-    ))
+    let module_parser = (((((doc_block()).then_ignore(just("module").padded()))
+        .then_ignore(just("{").padded()))
+    .then((function_parser.clone()).repeated().collect::<Vec<_>>()))
     .then_ignore(just("}").padded()))
-    .map_with(move |functions, e| Module {
-        docs: None,
+    .map_with(move |(docs, functions), e| Module {
+        docs: docs,
         functions: functions,
         prov: prov_from_span(e.span(), file_id),
         type_defs: Vec::new(),

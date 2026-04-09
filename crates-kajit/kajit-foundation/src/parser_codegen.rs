@@ -1,8 +1,8 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::normalize::{
-    DocumentedValue, NormalizedNodeDecl, NormalizedRepr, NormalizedTokenKind, SyntaxRule,
-    SyntaxTypeUse, is_int_scalar_type, is_string_scalar_type, render_default_value,
+    DocumentedValue, NormalizedNodeDecl, NormalizedRepr, NormalizedTokenSpec, SyntaxRule,
+    SyntaxTypeUse, is_docs_type, is_int_scalar_type, is_string_scalar_type, render_default_value,
 };
 use crate::render_helpers::{
     is_prov_only_struct, leaf_variant_wrapper_name, rust_ident, snake_case,
@@ -217,6 +217,29 @@ fn render_unbound_field_value(
     })
 }
 
+fn render_implicit_docs_parser(
+    repr: &NormalizedRepr,
+    field_name: &str,
+    ty: &SyntaxTypeUse,
+) -> Option<String> {
+    if field_name != "docs" {
+        return None;
+    }
+
+    match ty {
+        SyntaxTypeUse::Optional(inner) => match inner.as_ref() {
+            SyntaxTypeUse::Ref { name } if is_docs_type(repr, name) => {
+                Some("doc_block()".to_owned())
+            }
+            _ => None,
+        },
+        SyntaxTypeUse::Ref { name } if is_docs_type(repr, name) => {
+            Some("doc_block().map(|docs| docs.unwrap_or_default())".to_owned())
+        }
+        _ => None,
+    }
+}
+
 fn render_struct_parser_expr(
     repr: &NormalizedRepr,
     type_name: &str,
@@ -234,7 +257,26 @@ fn render_struct_parser_expr(
         }
     }
 
-    let items = flatten_struct_rule_items(repr, rule, fields, rule_names, node_names)?;
+    let mut items = flatten_struct_rule_items(repr, rule, fields, rule_names, node_names)?;
+    if fields.contains_key("docs")
+        && !items
+            .iter()
+            .any(|item| matches!(item, SeqItem::Bind { name, .. } if name == "docs"))
+    {
+        if let Some(parser) = render_implicit_docs_parser(
+            repr,
+            "docs",
+            &fields.get("docs").expect("docs field should exist").value,
+        ) {
+            items.insert(
+                0,
+                SeqItem::Bind {
+                    name: "docs".to_owned(),
+                    parser,
+                },
+            );
+        }
+    }
     let (chain, bound_names) = render_binding_chain(&items)?;
     let bound_set = bound_names.iter().cloned().collect::<BTreeSet<_>>();
 
@@ -313,8 +355,27 @@ fn render_enum_parser_expr(
                 "schema enum {enum_name} variant {variant_name:?} has unsupported declaration"
             ));
         };
-        let items =
+        let mut items =
             flatten_struct_rule_items(repr, named.inner.as_ref(), fields, rule_names, node_names)?;
+        if fields.contains_key("docs")
+            && !items
+                .iter()
+                .any(|item| matches!(item, SeqItem::Bind { name, .. } if name == "docs"))
+        {
+            if let Some(parser) = render_implicit_docs_parser(
+                repr,
+                "docs",
+                &fields.get("docs").expect("docs field should exist").value,
+            ) {
+                items.insert(
+                    0,
+                    SeqItem::Bind {
+                        name: "docs".to_owned(),
+                        parser,
+                    },
+                );
+            }
+        }
         let (chain, bound_names) = render_binding_chain(&items)?;
         let bound_set = bound_names.iter().cloned().collect::<BTreeSet<_>>();
         let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
@@ -495,19 +556,33 @@ fn rule_is_self_recursive(name: &str, rule: &SyntaxRule) -> bool {
     refs.contains(name)
 }
 
-fn render_token_parser_fn(token_name: &str, kind: NormalizedTokenKind) -> String {
-    let fn_name = token_parser_fn_name(token_name);
-    let body = match kind {
-        NormalizedTokenKind::Ident => "text::ident::<_, ParseExtra<'src>>().map(str::to_owned)",
-        NormalizedTokenKind::Symbol => {
-            "just('@')\n        .then(text::ident::<_, ParseExtra<'src>>().map(str::to_owned))\n        .then(\n            just('.')\n                .ignore_then(text::ident::<_, ParseExtra<'src>>().map(str::to_owned))\n                .repeated()\n                .collect::<Vec<_>>()\n        )\n        .map(|((_, head), tail)| {\n            let mut out = format!(\"@{head}\");\n            for part in tail {\n                out.push('.');\n                out.push_str(&part);\n            }\n            out\n        })"
+fn render_token_parser_body(spec: &NormalizedTokenSpec) -> Result<String, String> {
+    match spec.regex.as_str() {
+        "[A-Za-z_][A-Za-z0-9_]*" => {
+            Ok("text::ident::<_, ParseExtra<'src>>().map(str::to_owned)".to_owned())
         }
-        NormalizedTokenKind::Int => "text::int::<_, ParseExtra<'src>>(10).map(str::to_owned)",
-    };
+        "@[A-Za-z_][A-Za-z0-9_.]*" => Ok(
+            "just('@')\n        .then(text::ident::<_, ParseExtra<'src>>().map(str::to_owned))\n        .then(\n            just('.')\n                .ignore_then(text::ident::<_, ParseExtra<'src>>().map(str::to_owned))\n                .repeated()\n                .collect::<Vec<_>>()\n        )\n        .map(|((_, head), tail)| {\n            let mut out = format!(\"@{head}\");\n            for part in tail {\n                out.push('.');\n                out.push_str(&part);\n            }\n            out\n        })"
+                .to_owned(),
+        ),
+        "[0-9]+" => Ok("text::int::<_, ParseExtra<'src>>(10).map(str::to_owned)".to_owned()),
+        "\"[^\\\"]*\"" => Ok(
+            "just('\"')\n        .ignore_then(any().filter(|c: &char| *c != '\"' && *c != '\\n').repeated().collect::<String>())\n        .then_ignore(just('\"'))"
+                .to_owned(),
+        ),
+        other => Err(format!(
+            "unsupported token regex pattern {other:?}; token codegen currently supports a small explicit subset"
+        )),
+    }
+}
 
-    format!(
+fn render_token_parser_fn(token_name: &str, spec: &NormalizedTokenSpec) -> Result<String, String> {
+    let fn_name = token_parser_fn_name(token_name);
+    let body = render_token_parser_body(spec)?;
+
+    Ok(format!(
         "fn {fn_name}<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> + Clone {{\n    {body}\n}}"
-    )
+    ))
 }
 
 fn extract_single_literal(rule: &SyntaxRule) -> Option<&str> {
@@ -561,12 +636,12 @@ pub(crate) fn render_parser_block(
         .collect::<Result<Vec<_>, String>>()?
         .join("\n");
 
-    let mut token_names = repr.syntax.token_kinds.keys().cloned().collect::<Vec<_>>();
+    let mut token_names = repr.syntax.token_specs.keys().cloned().collect::<Vec<_>>();
     token_names.sort();
     let token_rows = token_names
         .iter()
-        .map(|name| render_token_parser_fn(name, *repr.syntax.token_kinds.get(name).unwrap()))
-        .collect::<Vec<_>>()
+        .map(|name| render_token_parser_fn(name, repr.syntax.token_specs.get(name).unwrap()))
+        .collect::<Result<Vec<_>, _>>()?
         .join("\n\n");
 
     Ok(format!(
@@ -578,6 +653,25 @@ fn ws<'src>() -> impl Parser<'src, &'src str, (), ParseExtra<'src>> + Clone {{
         .filter(|c: &char| c.is_whitespace())
         .repeated()
         .ignored()
+}}
+
+fn line_ws<'src>() -> impl Parser<'src, &'src str, (), ParseExtra<'src>> + Clone {{
+    one_of(" \t").repeated().ignored()
+}}
+
+fn doc_comment_line<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> + Clone {{
+    line_ws()
+        .ignore_then(just("///"))
+        .ignore_then(just(' ').or_not())
+        .ignore_then(any().filter(|c: &char| *c != '\n').repeated().collect::<String>())
+        .then_ignore(just('\n').or_not())
+}}
+
+fn doc_block<'src>() -> impl Parser<'src, &'src str, Option<DocBlock>, ParseExtra<'src>> + Clone {{
+    doc_comment_line()
+        .repeated()
+        .collect::<Vec<_>>()
+        .map(|lines| if lines.is_empty() {{ None }} else {{ Some(DocBlock(lines)) }})
 }}
 
 {token_rows}

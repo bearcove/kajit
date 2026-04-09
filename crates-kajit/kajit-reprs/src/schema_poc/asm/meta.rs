@@ -52,11 +52,11 @@ pub static REPR_CANONICAL_IDENTITIES: &[&str] = &["dialect", "label-name", "regi
 pub static TOKENS: &[TokenSpec] = &[
     TokenSpec {
         name: "ident",
-        kind: "ident",
+        kind: "[A-Za-z_][A-Za-z0-9_]*",
     },
     TokenSpec {
         name: "int",
-        kind: "int",
+        kind: "[0-9]+",
     },
 ];
 

@@ -53,15 +53,15 @@ pub static REPR_CANONICAL_IDENTITIES: &[&str] =
 pub static TOKENS: &[TokenSpec] = &[
     TokenSpec {
         name: "ident",
-        kind: "ident",
+        kind: "[A-Za-z_][A-Za-z0-9_]*",
     },
     TokenSpec {
         name: "int",
-        kind: "int",
+        kind: "[0-9]+",
     },
     TokenSpec {
         name: "symbol",
-        kind: "symbol",
+        kind: "@[A-Za-z_][A-Za-z0-9_.]*",
     },
 ];
 
