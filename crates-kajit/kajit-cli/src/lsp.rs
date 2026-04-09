@@ -3,7 +3,7 @@ use std::fs;
 use std::sync::Arc;
 
 use chumsky::error::Rich;
-use kajit_reprs::schema_poc;
+use kajit_reprs::schema_poc::asm::{self as schema_asm, Program as AsmProgram};
 use kajit_reprs::schema_poc::hir::{
     self as schema_hir, Block, Expr, Function, Local, Module, Param, Place, Prov, Stmt, TypeDef,
 };
@@ -18,6 +18,12 @@ type DocumentMap = Arc<RwLock<HashMap<Url, DocumentState>>>;
 struct DocumentState {
     content: String,
     version: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReprKind {
+    Hir,
+    Asm,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,7 +93,7 @@ impl KajitLanguageServer {
     }
 
     async fn update_document(&self, uri: Url, content: String, version: i32) {
-        let diagnostics = compute_hir_diagnostics(&content);
+        let diagnostics = compute_diagnostics(&uri, &content);
         self.client
             .publish_diagnostics(uri.clone(), diagnostics, Some(version))
             .await;
@@ -173,7 +179,7 @@ impl LanguageServer for KajitLanguageServer {
         &self,
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
-        if !is_hir_uri(&params.text_document.uri) {
+        if repr_kind_for_uri(&params.text_document.uri) != Some(ReprKind::Hir) {
             return Ok(None);
         }
 
@@ -201,9 +207,9 @@ impl LanguageServer for KajitLanguageServer {
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
-        if !is_hir_uri(&params.text_document.uri) {
+        let Some(repr_kind) = repr_kind_for_uri(&params.text_document.uri) else {
             return Ok(None);
-        }
+        };
 
         let maybe_doc = {
             let docs = self.documents.read().await;
@@ -221,7 +227,7 @@ impl LanguageServer for KajitLanguageServer {
             return Ok(None);
         };
 
-        Ok(format_hir_document(&content).map(|edit| vec![edit]))
+        Ok(format_document(repr_kind, &content).map(|edit| vec![edit]))
     }
 }
 
@@ -243,18 +249,29 @@ fn semantic_token_legend() -> SemanticTokensLegend {
     }
 }
 
-fn is_hir_uri(uri: &Url) -> bool {
-    uri.to_file_path().ok().is_some_and(|path| {
-        schema_poc::REPRS
-            .iter()
-            .any(|repr| path_matches_ext(&path, repr.file_ext))
-    })
+fn repr_kind_for_uri(uri: &Url) -> Option<ReprKind> {
+    let path = uri.to_file_path().ok()?;
+    if path_matches_ext(&path, schema_hir::REPR_FILE_EXT) {
+        Some(ReprKind::Hir)
+    } else if path_matches_ext(&path, schema_asm::REPR_FILE_EXT) {
+        Some(ReprKind::Asm)
+    } else {
+        None
+    }
 }
 
 fn path_matches_ext(path: &std::path::Path, file_ext: &str) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.ends_with(file_ext))
+}
+
+fn compute_diagnostics(uri: &Url, content: &str) -> Vec<Diagnostic> {
+    match repr_kind_for_uri(uri) {
+        Some(ReprKind::Hir) => compute_hir_diagnostics(content),
+        Some(ReprKind::Asm) => compute_asm_diagnostics(content),
+        None => Vec::new(),
+    }
 }
 
 fn compute_hir_diagnostics(content: &str) -> Vec<Diagnostic> {
@@ -273,6 +290,32 @@ fn compute_hir_diagnostics(content: &str) -> Vec<Diagnostic> {
                     code: None,
                     code_description: None,
                     source: Some("kajit-schema-poc-hir".to_string()),
+                    message: error.to_string(),
+                    related_information: None,
+                    tags: None,
+                    data: None,
+                }
+            })
+            .collect(),
+    }
+}
+
+fn compute_asm_diagnostics(content: &str) -> Vec<Diagnostic> {
+    match schema_asm::parse_root_text_rich(content, None) {
+        Ok(_) => Vec::new(),
+        Err(errors) => errors
+            .into_iter()
+            .map(|error: Rich<'_, char>| {
+                let span = error.span();
+                Diagnostic {
+                    range: Range {
+                        start: offset_to_position(content, span.start),
+                        end: offset_to_position(content, span.end),
+                    },
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    code: None,
+                    code_description: None,
+                    source: Some("kajit-schema-poc-asm".to_string()),
                     message: error.to_string(),
                     related_information: None,
                     tags: None,
@@ -304,9 +347,17 @@ fn compute_hir_semantic_tokens(content: &str) -> Vec<SemanticToken> {
     encode_semantic_tokens(&raw)
 }
 
-fn format_hir_document(content: &str) -> Option<TextEdit> {
-    let module = schema_hir::parse_root_text(content).ok()?;
-    let formatted = schema_hir::format_root_text(&module);
+fn format_document(repr_kind: ReprKind, content: &str) -> Option<TextEdit> {
+    let formatted = match repr_kind {
+        ReprKind::Hir => {
+            let module: Module = schema_hir::parse_root_text(content).ok()?;
+            schema_hir::format_root_text(&module)
+        }
+        ReprKind::Asm => {
+            let program: AsmProgram = schema_asm::parse_root_text(content).ok()?;
+            schema_asm::format_root_text(&program)
+        }
+    };
     if formatted == content {
         return None;
     }
@@ -647,12 +698,31 @@ mod tests {
     #[test]
     fn formats_hir_document() {
         let source = "module { fn main() -> Value { return 42 } }";
-        let edit = format_hir_document(source).expect("expected formatting edit");
+        let edit = format_document(ReprKind::Hir, source).expect("expected formatting edit");
         assert_eq!(edit.range.start, Position::new(0, 0));
         assert_eq!(edit.range.end, offset_to_position(source, source.len()));
         assert_eq!(
             edit.new_text,
             "module {\n    fn main() -> Value {\n        return 42\n    }\n}"
+        );
+    }
+
+    #[test]
+    fn reports_asm_parser_errors() {
+        let source = "asm aarch64 { entry: movz x0, ret }";
+        let diagnostics = compute_asm_diagnostics(source);
+        assert!(!diagnostics.is_empty());
+    }
+
+    #[test]
+    fn formats_asm_document() {
+        let source = "asm aarch64 { entry: movz x0, 42 ret }";
+        let edit = format_document(ReprKind::Asm, source).expect("expected formatting edit");
+        assert_eq!(edit.range.start, Position::new(0, 0));
+        assert_eq!(edit.range.end, offset_to_position(source, source.len()));
+        assert_eq!(
+            edit.new_text,
+            "asm aarch64 {\n    entry:\n    movz x0, 42\n    ret\n}"
         );
     }
 }
