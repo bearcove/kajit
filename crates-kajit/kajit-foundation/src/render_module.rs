@@ -574,17 +574,27 @@ fn add_breathing_room(body: &str) -> String {
             && !line.starts_with("        ")
             && trimmed.ends_with(',')
             && !trimmed.starts_with("#[");
+        let starts_field_doc = line.starts_with("        ///");
+        let prev_opens_enum_body = prev_trimmed.ends_with('{') && !prev.starts_with("    ");
 
         let prev_ends_item = prev_trimmed.ends_with('}') || prev_trimmed.ends_with(';');
         let prev_ends_variant = prev_trimmed.ends_with(',') && !prev.starts_with("        ");
+        let prev_ends_field = prev_trimmed.ends_with(',') && prev.starts_with("        ");
 
         if !out.is_empty() {
             if starts_top_level_item && prev_ends_item && !prev_trimmed.is_empty() {
                 out.push('\n');
             } else if (starts_variant_doc || starts_variant)
+                && prev_opens_enum_body
+                && !prev_trimmed.is_empty()
+            {
+                out.push('\n');
+            } else if (starts_variant_doc || starts_variant)
                 && prev_ends_variant
                 && !prev_trimmed.is_empty()
             {
+                out.push('\n');
+            } else if starts_field_doc && prev_ends_field && !prev_trimmed.is_empty() {
                 out.push('\n');
             }
         }

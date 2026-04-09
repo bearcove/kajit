@@ -122,7 +122,7 @@ pub(crate) fn render_common_placeholder(
                 .map(|name| format!("pub type {} = DocBlock;\n", pascal_case(name)))
                 .unwrap_or_default();
             format!(
-                "#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct DocBlock(pub Vec<String>);\n{alias}"
+                "/// Preserved doc-comment lines collected from leading `///` comments.\n#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct DocBlock(pub Vec<String>);\n{alias}"
             )
         }
         "Type" | "Literal" => {
@@ -435,7 +435,7 @@ pub(crate) fn render_node_decl(
                                     }
                                 })
                                 .collect::<Vec<_>>()
-                                .join("\n");
+                                .join("\n\n");
                             let variant_docs = render_doc_lines(
                                 variants.get(variant_name).unwrap().doc.as_deref(),
                                 "    ",

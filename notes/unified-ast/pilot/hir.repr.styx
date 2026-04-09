@@ -144,7 +144,8 @@ repr @module{
         provenance @Prov
         /// Symbolic identifier payload.
         symbol @Symbol
-        /// Free-form doc block payload.
+        /// Free-form doc block payload collected from leading `///` comments,
+        /// including module-level doc comments before `module`.
         docs @DocBlock
     }
 
@@ -185,7 +186,8 @@ repr @module{
     nodes {
         /// The root HIR module.
         Module @node{
-            /// Optional module-level docs.
+            /// Optional module-level docs collected from leading `///`
+            /// comments before the `module` declaration.
             docs @optional(@DocBlock)
             /// Type definitions declared in the module.
             type_defs @seq(@TypeDef)
