@@ -7,41 +7,55 @@ pub use kajit_types::{Prov, Span};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Symbol(pub String);
+
 /// A binary operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BinaryOp {
+    /// Integer subtraction.
     #[default]
-    Add,
-
     Sub,
+
+    /// Integer addition.
+    Add,
 }
+
 /// A generic parameter name.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GenericParam(pub String);
+
 /// A literal value in canonical HIR text.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Literal(pub String);
+
 /// The kind of local binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LocalKind {
+    /// A named source-level local.
     #[default]
     Local,
 
+    /// A compiler-introduced temporary.
     Temp,
 }
+
 /// A named type reference in HIR.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Type(pub String);
+
 /// The kind of type definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TypeDefKind {
+    /// A struct type definition.
     #[default]
     Struct,
 
+    /// An enum type definition.
     Enum,
 
+    /// A type alias definition.
     Alias,
 }
+
 /// A sequence of statements with shared provenance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
@@ -51,6 +65,7 @@ pub struct Block {
     /// Statements in execution order.
     pub statements: Vec<Stmt>,
 }
+
 /// An expression in structured HIR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
@@ -102,6 +117,7 @@ pub enum Expr {
         prov: Prov,
     },
 }
+
 /// A lowered function body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
@@ -126,6 +142,7 @@ pub struct Function {
     /// Declared return type.
     pub return_type: Type,
 }
+
 /// A local binding introduced inside a function.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Local {
@@ -141,6 +158,7 @@ pub struct Local {
     /// Local type.
     pub ty: Type,
 }
+
 /// The root HIR module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Module {
@@ -153,6 +171,7 @@ pub struct Module {
     /// Type definitions declared in the module.
     pub type_defs: Vec<TypeDef>,
 }
+
 /// A function parameter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Param {
@@ -165,6 +184,7 @@ pub struct Param {
     /// Parameter type.
     pub ty: Type,
 }
+
 /// A writeable place expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Place {
@@ -186,6 +206,7 @@ pub enum Place {
         prov: Prov,
     },
 }
+
 /// A statement in structured HIR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
@@ -237,6 +258,7 @@ pub enum Stmt {
         value: Option<Box<Expr>>,
     },
 }
+
 /// A type definition declared at module scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDef {

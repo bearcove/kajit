@@ -155,16 +155,25 @@ pub(crate) fn render_support_decl(
                 .iter()
                 .enumerate()
                 .map(|(idx, variant)| {
+                    let variant_docs = render_doc_lines(variant.doc.as_deref(), "    ");
                     if idx == 0 {
-                        format!("    #[default]\n    {variant},")
+                        if variant_docs.is_empty() {
+                            format!("    #[default]\n    {},", variant.value)
+                        } else {
+                            format!("{variant_docs}\n    #[default]\n    {},", variant.value)
+                        }
                     } else {
-                        format!("    {variant},")
+                        if variant_docs.is_empty() {
+                            format!("    {},", variant.value)
+                        } else {
+                            format!("{variant_docs}\n    {},", variant.value)
+                        }
                     }
                 })
                 .collect::<Vec<_>>()
                 .join("\n\n");
             format!(
-                "#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]\npub enum {name} {{\n{rows}\n}}"
+                "#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]\npub enum {name} {{\n\n{rows}\n}}"
             )
         }
     };
@@ -446,7 +455,7 @@ pub(crate) fn render_node_decl(
                 .join("\n\n");
             let docs = render_doc_lines(doc, "");
             let body = format!(
-                "#[derive(Debug, Clone, PartialEq, Eq)]\npub enum {name} {{\n{variant_rows}\n}}"
+                "#[derive(Debug, Clone, PartialEq, Eq)]\npub enum {name} {{\n\n{variant_rows}\n}}"
             );
             if docs.is_empty() {
                 body

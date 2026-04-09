@@ -6,6 +6,15 @@ use facet::Facet;
 use facet_styx::{Documented, RenderError};
 
 #[derive(Facet, Debug, Clone)]
+#[facet(metadata_container)]
+pub(crate) struct WithDoc<T> {
+    pub(crate) value: T,
+
+    #[facet(metadata = "doc")]
+    pub(crate) doc: Option<Vec<String>>,
+}
+
+#[derive(Facet, Debug, Clone)]
 #[allow(dead_code)]
 pub(crate) struct PilotSchemaDocument {
     pub(crate) meta: PilotMeta,
@@ -116,7 +125,22 @@ pub(crate) enum SupportDecl {
     String,
     StringSeq,
     Unit,
-    Enum(Vec<String>),
+    Enum(SupportVariants),
+}
+
+#[derive(Facet, Debug, Clone)]
+#[allow(dead_code)]
+#[facet(rename_all = "lowercase")]
+#[repr(u8)]
+pub(crate) enum SupportVariantDecl {
+    Unit,
+}
+
+#[derive(Facet, Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct SupportVariants {
+    #[facet(flatten)]
+    pub(crate) variants: HashMap<Documented<String>, SupportVariantDecl>,
 }
 
 #[derive(Facet, Debug, Clone)]

@@ -155,13 +155,30 @@ repr @module{
         /// A literal value in canonical HIR text.
         Literal @string
         /// A binary operator.
-        BinaryOp @enum(Add Sub)
+        BinaryOp @enum{
+            /// Integer addition.
+            Add @unit
+            /// Integer subtraction.
+            Sub @unit
+        }
         /// A generic parameter name.
         GenericParam @string
         /// The kind of local binding.
-        LocalKind @enum(Local Temp)
+        LocalKind @enum{
+            /// A named source-level local.
+            Local @unit
+            /// A compiler-introduced temporary.
+            Temp @unit
+        }
         /// The kind of type definition.
-        TypeDefKind @enum(Struct Enum Alias)
+        TypeDefKind @enum{
+            /// A struct type definition.
+            Struct @unit
+            /// An enum type definition.
+            Enum @unit
+            /// A type alias definition.
+            Alias @unit
+        }
     }
 
     /// Structural AST nodes for the wider HIR surface.

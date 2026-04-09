@@ -557,20 +557,17 @@ fn add_breathing_room(body: &str) -> String {
         let trimmed = line.trim();
         let prev_trimmed = prev.trim();
 
-        let starts_top_level_item = !line.starts_with(' ')
-            && matches!(
-                trimmed,
-                "pub trait HasProvenance"
-                    | _
-                        if trimmed.starts_with("pub struct ")
-                            || trimmed.starts_with("pub enum ")
-                            || trimmed.starts_with("pub trait ")
-                            || trimmed.starts_with("#[derive")
-                            || trimmed.starts_with("impl ")
-                            || trimmed.starts_with("pub use ")
-                            || trimmed.starts_with("pub const ")
-                            || trimmed.starts_with("pub static ")
-            );
+        let is_top_level = !line.starts_with(' ');
+        let starts_top_level_item = is_top_level
+            && (trimmed.starts_with("///")
+                || trimmed.starts_with("#[derive")
+                || trimmed.starts_with("pub struct ")
+                || trimmed.starts_with("pub enum ")
+                || trimmed.starts_with("pub trait ")
+                || trimmed.starts_with("impl ")
+                || trimmed.starts_with("pub use ")
+                || trimmed.starts_with("pub const ")
+                || trimmed.starts_with("pub static "));
 
         let starts_variant_doc = line.starts_with("    ///");
         let starts_variant = line.starts_with("    ")

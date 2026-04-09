@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::schema::{
-    NodeDecl, NodeFields, ReprBody, RuleExpr, SupportDecl, TypeUse, documented_doc,
-    documented_name, rule_literal_text, rule_named_parts,
+    NodeDecl, NodeFields, ReprBody, RuleExpr, SupportDecl, SupportVariantDecl, TypeUse,
+    documented_doc, documented_name, rule_literal_text, rule_named_parts,
 };
 
 #[derive(Debug, Clone)]
@@ -66,7 +66,7 @@ pub(crate) enum NormalizedSupportDecl {
     String,
     StringSeq,
     Unit,
-    Enum(Vec<String>),
+    Enum(Vec<DocumentedValue<String>>),
 }
 
 #[derive(Debug, Clone)]
@@ -92,8 +92,19 @@ fn normalize_support_decl(decl: &SupportDecl) -> Result<NormalizedSupportDecl, S
         SupportDecl::String => Ok(NormalizedSupportDecl::String),
         SupportDecl::StringSeq => Ok(NormalizedSupportDecl::StringSeq),
         SupportDecl::Unit => Ok(NormalizedSupportDecl::Unit),
-        SupportDecl::Enum(variants) if !variants.is_empty() => {
-            Ok(NormalizedSupportDecl::Enum(variants.clone()))
+        SupportDecl::Enum(variants) if !variants.variants.is_empty() => {
+            let mut out = Vec::new();
+            for (name, decl) in &variants.variants {
+                match decl {
+                    SupportVariantDecl::Unit => {
+                        out.push(DocumentedValue {
+                            value: documented_name(name).to_owned(),
+                            doc: documented_doc(name).map(|lines| lines.to_vec()),
+                        });
+                    }
+                }
+            }
+            Ok(NormalizedSupportDecl::Enum(out))
         }
         SupportDecl::Enum(_) => Err("support enum must have at least one variant".to_owned()),
     }
