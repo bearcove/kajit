@@ -2,9 +2,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use kajit::ir::{LambdaId, VReg};
-use kajit_mir::DebugCfgMirCommand;
 use proc_macro2::TokenStream;
+
+#[cfg(feature = "debug-cfg-mir")]
+use kajit::ir::{LambdaId, VReg};
+#[cfg(feature = "debug-cfg-mir")]
+use kajit_mir::DebugCfgMirCommand;
 
 mod cases;
 
@@ -155,7 +158,7 @@ fn main() {
         Some("corpus-cfg-mir") => print_corpus_cfg_mir(&command_args),
         Some("corpus-input") => print_corpus_input(&command_args),
         Some("minimize-cfg-mir") => minimize_cfg_mir(&command_args),
-        Some("debug-cfg-mir") => debug_cfg_mir(&command_args),
+        Some("debug-cfg-mir") => debug_cfg_mir_command(&command_args),
         _ => {
             eprintln!(
                 "usage: cargo run --manifest-path xtask/Cargo.toml -- <install|gen|corpus-cfg-mir|corpus-input|minimize-cfg-mir|debug-cfg-mir>"
@@ -165,6 +168,7 @@ fn main() {
     }
 }
 
+#[cfg(feature = "debug-cfg-mir")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DebugCfgMirArgs {
     command: DebugCfgMirCommand,
@@ -174,6 +178,7 @@ struct DebugCfgMirArgs {
     corpus_test: Option<String>,
 }
 
+#[cfg(feature = "debug-cfg-mir")]
 fn debug_cfg_mir(args: &[String]) {
     let Some(parsed) = parse_debug_cfg_mir_args(args) else {
         eprintln!(
@@ -195,6 +200,7 @@ fn debug_cfg_mir(args: &[String]) {
     print!("{output}");
 }
 
+#[cfg(feature = "debug-cfg-mir")]
 fn parse_debug_cfg_mir_args(args: &[String]) -> Option<DebugCfgMirArgs> {
     let (command_name, rest) = args.split_first()?;
     let command = match command_name.as_str() {
@@ -274,6 +280,7 @@ fn parse_debug_cfg_mir_args(args: &[String]) -> Option<DebugCfgMirArgs> {
     })
 }
 
+#[cfg(feature = "debug-cfg-mir")]
 fn debug_cfg_mir_locally(parsed: &DebugCfgMirArgs) -> Result<String, String> {
     let text = fs::read_to_string(&parsed.path)
         .map_err(|err| format!("failed to read {}: {err}", parsed.path))?;
@@ -292,6 +299,7 @@ fn debug_cfg_mir_locally(parsed: &DebugCfgMirArgs) -> Result<String, String> {
     )
 }
 
+#[cfg(feature = "debug-cfg-mir")]
 fn debug_cfg_mir_via_corpus_test(
     parsed: &DebugCfgMirArgs,
     test_name: &str,
@@ -375,6 +383,7 @@ fn debug_cfg_mir_via_corpus_test(
     Ok(output)
 }
 
+#[cfg(feature = "debug-cfg-mir")]
 fn debug_cfg_mir_command_name(command: &DebugCfgMirCommand) -> &'static str {
     match command {
         DebugCfgMirCommand::Run => "run",
@@ -383,6 +392,19 @@ fn debug_cfg_mir_command_name(command: &DebugCfgMirCommand) -> &'static str {
         DebugCfgMirCommand::WhyVreg { .. } => "why-vreg",
         DebugCfgMirCommand::Block { .. } => "block",
     }
+}
+
+#[cfg(feature = "debug-cfg-mir")]
+fn debug_cfg_mir_command(args: &[String]) {
+    debug_cfg_mir(args);
+}
+
+#[cfg(not(feature = "debug-cfg-mir"))]
+fn debug_cfg_mir_command(_args: &[String]) {
+    eprintln!(
+        "debug-cfg-mir support is disabled in this xtask build; rebuild xtask with --features debug-cfg-mir"
+    );
+    std::process::exit(2);
 }
 
 fn minimize_cfg_mir(args: &[String]) {
@@ -778,6 +800,7 @@ fn extract_case_minimized_cfg_mir(output: &str) -> Option<String> {
     Some(rest[..end_index].trim_matches('\n').to_owned() + "\n")
 }
 
+#[cfg(feature = "debug-cfg-mir")]
 fn extract_case_debug_cfg_mir_output(output: &str) -> Option<String> {
     let begin = "KAJIT_CASE_DEBUG_CFG_MIR_BEGIN";
     let end = "KAJIT_CASE_DEBUG_CFG_MIR_END";
@@ -1030,12 +1053,14 @@ fn write_file(path: &Path, content: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "debug-cfg-mir")]
     use kajit::ir::{LambdaId, VReg};
 
+    #[cfg(feature = "debug-cfg-mir")]
+    use super::{DebugCfgMirCommand, extract_case_debug_cfg_mir_output, parse_debug_cfg_mir_args};
     use super::{
-        DebugCfgMirCommand, extract_case_cfg_mir, extract_case_debug_cfg_mir_output,
-        extract_case_input_hex, extract_case_minimized_cfg_mir, extract_minimizer_status_line,
-        parse_debug_cfg_mir_args, parse_hex_bytes, parse_minimize_cfg_mir_args,
+        extract_case_cfg_mir, extract_case_input_hex, extract_case_minimized_cfg_mir,
+        extract_minimizer_status_line, parse_hex_bytes, parse_minimize_cfg_mir_args,
     };
 
     #[test]
@@ -1090,6 +1115,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "debug-cfg-mir")]
     #[test]
     fn extract_case_debug_cfg_mir_output_finds_marker_block() {
         assert_eq!(
@@ -1100,6 +1126,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "debug-cfg-mir")]
     #[test]
     fn parse_debug_cfg_mir_args_accepts_why_vreg() {
         let args = vec![
@@ -1122,6 +1149,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "debug-cfg-mir")]
     #[test]
     fn parse_debug_cfg_mir_args_accepts_block_query() {
         let args = vec![
@@ -1143,6 +1171,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "debug-cfg-mir")]
     #[test]
     fn parse_debug_cfg_mir_args_accepts_lldb_ref() {
         let args = vec![
