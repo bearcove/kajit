@@ -307,8 +307,8 @@ repr @module{
         .contents
         .clone();
 
-    assert!(ast.contains("pub blocks: Vec<Block>,"));
-    assert!(ast.contains("pub succs: Vec<BlockId>,"));
+    assert!(ast.contains("pub blocks: super::super::Pool<Block>,"));
+    assert!(ast.contains("pub succs: super::super::Order<BlockId>,"));
     assert!(meta.contains("owner: \"Program\""));
     assert!(meta.contains("field: \"blocks\""));
     assert!(meta.contains("kind: \"pool<Block>\""));

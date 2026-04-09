@@ -123,12 +123,20 @@ fn render_value_parser(
                 _ => return Err("repeat rule without repeated type".to_owned()),
             };
             let inner = render_value_parser(repr, item, inner_ty, rule_names, node_names, false)?;
-            Ok(if let Some(sep) = sep.as_deref() {
+            let collected = if let Some(sep) = sep.as_deref() {
                 format!(
                     "({inner}).separated_by(just({sep:?}).padded()).allow_trailing().collect::<Vec<_>>()"
                 )
             } else {
                 format!("({inner}).repeated().collect::<Vec<_>>()")
+            };
+            Ok(match ty {
+                SyntaxTypeUse::Seq(_) => collected,
+                SyntaxTypeUse::Pool(_) => format!("({collected}).map(super::super::Pool::from)"),
+                SyntaxTypeUse::Order(_) => {
+                    format!("({collected}).map(super::super::Order::from)")
+                }
+                _ => unreachable!("repeat rule without repeated type"),
             })
         }
         _ => Err(format!(

@@ -14,15 +14,18 @@ pub use kajit_types::{Prov, Span};
 /// The binary-op family used by the pilot text format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BinOpKind {
-    /// Integer addition.
+    /// Arithmetic right shift.
     #[default]
-    Add,
+    Sar,
+
+    /// Less-than comparison.
+    CmpLt,
+
+    /// Greater-than-or-equal comparison.
+    CmpGe,
 
     /// Bitwise OR.
     Or,
-
-    /// Greater-than comparison.
-    CmpGt,
 
     /// Bitwise AND.
     And,
@@ -30,35 +33,32 @@ pub enum BinOpKind {
     /// Bitwise XOR.
     Xor,
 
-    /// Equality comparison.
-    CmpEq,
-
-    /// Arithmetic right shift.
-    Sar,
-
-    /// Logical left shift.
-    Shl,
-
     /// Logical right shift.
     Shr,
-
-    /// Less-than comparison.
-    CmpLt,
-
-    /// Integer subtraction.
-    Sub,
-
-    /// Integer multiplication.
-    Mul,
-
-    /// Less-than-or-equal comparison.
-    CmpLe,
 
     /// Inequality comparison.
     CmpNe,
 
-    /// Greater-than-or-equal comparison.
-    CmpGe,
+    /// Integer subtraction.
+    Sub,
+
+    /// Logical left shift.
+    Shl,
+
+    /// Greater-than comparison.
+    CmpGt,
+
+    /// Equality comparison.
+    CmpEq,
+
+    /// Less-than-or-equal comparison.
+    CmpLe,
+
+    /// Integer addition.
+    Add,
+
+    /// Integer multiplication.
+    Mul,
 }
 
 /// An embedded data blob identifier.
@@ -90,12 +90,12 @@ impl BlockId {
 /// Named clobber groups printed after `!`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ClobberKind {
-    /// Caller-saved SIMD registers are clobbered.
-    #[default]
-    Simd,
-
     /// Both caller-saved GPR and SIMD registers are clobbered.
+    #[default]
     Both,
+
+    /// Caller-saved SIMD registers are clobbered.
+    Simd,
 
     /// Caller-saved GPRs are clobbered.
     Gpr,
@@ -268,19 +268,19 @@ pub struct Block {
     pub id: BlockId,
 
     /// Instruction IDs executed before the terminator.
-    pub insts: Vec<InstId>,
+    pub insts: super::super::Order<InstId>,
 
     /// SSA block parameters filled from incoming edge arguments.
-    pub params: Vec<VReg>,
+    pub params: super::super::Order<VReg>,
 
     /// Incoming edges, rebuildable from the edge list.
-    pub preds: Vec<EdgeId>,
+    pub preds: super::super::Order<EdgeId>,
 
     /// Source provenance for the block.
     pub prov: Prov,
 
     /// Outgoing edges, rebuildable from the edge list.
-    pub succs: Vec<EdgeId>,
+    pub succs: super::super::Order<EdgeId>,
 
     /// Block terminator.
     pub term: TermId,
@@ -302,7 +302,7 @@ pub enum ConstRef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataArgsLine {
     /// Data arguments available at the function entry.
-    pub args: Vec<VReg>,
+    pub args: super::super::Order<VReg>,
 
     /// Optional docs attached to the line.
     pub docs: Option<DocBlock>,
@@ -323,7 +323,7 @@ pub struct DataResultsLine {
     pub prov: Prov,
 
     /// Data results returned from the function.
-    pub results: Vec<VReg>,
+    pub results: super::super::Order<VReg>,
 }
 
 impl SlotNode for DataResultsLine {}
@@ -332,7 +332,7 @@ impl SlotNode for DataResultsLine {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Edge {
     /// Arguments passed along the edge.
-    pub args: Vec<EdgeArg>,
+    pub args: super::super::Order<EdgeArg>,
 
     /// Optional docs attached to the edge.
     pub docs: Option<DocBlock>,
@@ -383,7 +383,7 @@ pub enum FixedReg {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
     /// Live blocks in canonical order.
-    pub blocks: Vec<Block>,
+    pub blocks: super::super::Pool<Block>,
 
     /// Printed `data_args` header line for the function.
     pub data_args: Box<DataArgsLine>,
@@ -395,7 +395,7 @@ pub struct Function {
     pub docs: Option<DocBlock>,
 
     /// Control-flow edges in arena order.
-    pub edges: Vec<Edge>,
+    pub edges: super::super::Pool<Edge>,
 
     /// Entry block for the function.
     pub entry: BlockId,
@@ -404,7 +404,7 @@ pub struct Function {
     pub function_id: FunctionId,
 
     /// Non-terminator instructions in arena order.
-    pub insts: Vec<Inst>,
+    pub insts: super::super::Pool<Inst>,
 
     /// Lowered lambda identifier.
     pub lambda_id: LambdaId,
@@ -413,7 +413,7 @@ pub struct Function {
     pub prov: Prov,
 
     /// Terminators in arena order.
-    pub terms: Vec<Terminator>,
+    pub terms: super::super::Pool<Terminator>,
 }
 
 impl EntityNode for Function {}
@@ -425,7 +425,7 @@ pub struct Inst {
     pub clobbers: Option<ClobberKind>,
 
     /// Destination operands printed before `=`.
-    pub defs: Option<Vec<Operand>>,
+    pub defs: Option<super::super::Order<Operand>>,
 
     /// Optional docs attached to the instruction.
     pub docs: Option<DocBlock>,
@@ -440,7 +440,7 @@ pub struct Inst {
     pub prov: Prov,
 
     /// Source operands printed after the opcode.
-    pub uses: Option<Vec<Operand>>,
+    pub uses: Option<super::super::Order<Operand>>,
 }
 
 impl EntityNode for Inst {}
@@ -538,7 +538,7 @@ pub struct Program {
     pub docs: Option<DocBlock>,
 
     /// Lowered functions in the program.
-    pub functions: Vec<Function>,
+    pub functions: super::super::Pool<Function>,
 
     /// Source provenance for the program.
     pub prov: Prov,
@@ -583,7 +583,7 @@ pub enum Terminator {
         default: EdgeId,
         predicate: VReg,
         prov: Prov,
-        targets: Vec<EdgeId>,
+        targets: super::super::Order<EdgeId>,
     },
 
     /// Return from the current function.

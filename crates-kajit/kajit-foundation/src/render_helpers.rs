@@ -82,10 +82,16 @@ pub(crate) fn render_syntax_type_use(
             format!("Vec<{}>", render_syntax_type_use(inner, node_names, false))
         }
         SyntaxTypeUse::Pool(inner) => {
-            format!("Vec<{}>", render_syntax_type_use(inner, node_names, false))
+            format!(
+                "super::super::Pool<{}>",
+                render_syntax_type_use(inner, node_names, false)
+            )
         }
         SyntaxTypeUse::Order(inner) => {
-            format!("Vec<{}>", render_syntax_type_use(inner, node_names, false))
+            format!(
+                "super::super::Order<{}>",
+                render_syntax_type_use(inner, node_names, false)
+            )
         }
         SyntaxTypeUse::Ref { name } => {
             if box_node_refs && node_names.iter().any(|node| node == name) {

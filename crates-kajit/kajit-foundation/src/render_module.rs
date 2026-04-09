@@ -582,6 +582,118 @@ pub struct ResolutionSet {{
     pub references: Vec<ResolvedRef>,
 }}
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Pool<T>(pub Vec<T>);
+
+impl<T> Pool<T> {{
+    pub fn new() -> Self {{
+        Self(Vec::new())
+    }}
+}}
+
+impl<T> From<Vec<T>> for Pool<T> {{
+    fn from(value: Vec<T>) -> Self {{
+        Self(value)
+    }}
+}}
+
+impl<T> std::ops::Deref for Pool<T> {{
+    type Target = Vec<T>;
+
+    fn deref(&self) -> &Self::Target {{
+        &self.0
+    }}
+}}
+
+impl<T> std::ops::DerefMut for Pool<T> {{
+    fn deref_mut(&mut self) -> &mut Self::Target {{
+        &mut self.0
+    }}
+}}
+
+impl<T> IntoIterator for Pool<T> {{
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {{
+        self.0.into_iter()
+    }}
+}}
+
+impl<'a, T> IntoIterator for &'a Pool<T> {{
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {{
+        self.0.iter()
+    }}
+}}
+
+impl<'a, T> IntoIterator for &'a mut Pool<T> {{
+    type Item = &'a mut T;
+    type IntoIter = std::slice::IterMut<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {{
+        self.0.iter_mut()
+    }}
+}}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Order<T>(pub Vec<T>);
+
+impl<T> Order<T> {{
+    pub fn new() -> Self {{
+        Self(Vec::new())
+    }}
+}}
+
+impl<T> From<Vec<T>> for Order<T> {{
+    fn from(value: Vec<T>) -> Self {{
+        Self(value)
+    }}
+}}
+
+impl<T> std::ops::Deref for Order<T> {{
+    type Target = Vec<T>;
+
+    fn deref(&self) -> &Self::Target {{
+        &self.0
+    }}
+}}
+
+impl<T> std::ops::DerefMut for Order<T> {{
+    fn deref_mut(&mut self) -> &mut Self::Target {{
+        &mut self.0
+    }}
+}}
+
+impl<T> IntoIterator for Order<T> {{
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {{
+        self.0.into_iter()
+    }}
+}}
+
+impl<'a, T> IntoIterator for &'a Order<T> {{
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {{
+        self.0.iter()
+    }}
+}}
+
+impl<'a, T> IntoIterator for &'a mut Order<T> {{
+    type Item = &'a mut T;
+    type IntoIter = std::slice::IterMut<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {{
+        self.0.iter_mut()
+    }}
+}}
+
 {helper_rows}
 
 pub static REPRS: &[ReprSpec] = &[

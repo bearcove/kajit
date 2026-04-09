@@ -389,9 +389,9 @@ pub(crate) fn with_module_doc(
 pub(crate) fn render_default_value(ty: &SyntaxTypeUse, provenance_tag: &str) -> Option<String> {
     match ty {
         SyntaxTypeUse::Optional(_) => Some("None".to_owned()),
-        SyntaxTypeUse::Seq(_) | SyntaxTypeUse::Pool(_) | SyntaxTypeUse::Order(_) => {
-            Some("Vec::new()".to_owned())
-        }
+        SyntaxTypeUse::Seq(_) => Some("Vec::new()".to_owned()),
+        SyntaxTypeUse::Pool(_) => Some("super::super::Pool::default()".to_owned()),
+        SyntaxTypeUse::Order(_) => Some("super::super::Order::default()".to_owned()),
         SyntaxTypeUse::Ref { name } if name == provenance_tag => {
             Some(format!("{provenance_tag}::default()"))
         }

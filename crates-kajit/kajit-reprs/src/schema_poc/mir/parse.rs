@@ -136,19 +136,21 @@ pub fn parse_root_text_rich(
     .then_ignore(just("params=").padded()))
     .then_ignore(just("[").padded()))
     .then(
-        (v_reg_parser.clone())
+        ((v_reg_parser.clone())
             .separated_by(just(",").padded())
             .allow_trailing()
-            .collect::<Vec<_>>(),
+            .collect::<Vec<_>>())
+        .map(super::super::Order::from),
     ))
     .then_ignore(just("]").padded()))
     .then_ignore(just("insts=").padded()))
     .then_ignore(just("[").padded()))
     .then(
-        (inst_id_parser.clone())
+        ((inst_id_parser.clone())
             .separated_by(just(",").padded())
             .allow_trailing()
-            .collect::<Vec<_>>(),
+            .collect::<Vec<_>>())
+        .map(super::super::Order::from),
     ))
     .then_ignore(just("]").padded()))
     .then_ignore(just("term=t").padded()))
@@ -156,19 +158,21 @@ pub fn parse_root_text_rich(
     .then_ignore(just("preds=").padded()))
     .then_ignore(just("[").padded()))
     .then(
-        (edge_id_parser.clone())
+        ((edge_id_parser.clone())
             .separated_by(just(",").padded())
             .allow_trailing()
-            .collect::<Vec<_>>(),
+            .collect::<Vec<_>>())
+        .map(super::super::Order::from),
     ))
     .then_ignore(just("]").padded()))
     .then_ignore(just("succs=").padded()))
     .then_ignore(just("[").padded()))
     .then(
-        (edge_id_parser.clone())
+        ((edge_id_parser.clone())
             .separated_by(just(",").padded())
             .allow_trailing()
-            .collect::<Vec<_>>(),
+            .collect::<Vec<_>>())
+        .map(super::super::Order::from),
     ))
     .then_ignore(just("]").padded()))
     .map_with(
@@ -225,10 +229,11 @@ pub fn parse_root_text_rich(
     let data_args_line_parser = (((((doc_block()).then_ignore(just("data_args:").padded()))
         .then_ignore(just("[").padded()))
     .then(
-        (v_reg_parser.clone())
+        ((v_reg_parser.clone())
             .separated_by(just(",").padded())
             .allow_trailing()
-            .collect::<Vec<_>>(),
+            .collect::<Vec<_>>())
+        .map(super::super::Order::from),
     ))
     .then_ignore(just("]").padded()))
     .map_with(move |(docs, args), e| DataArgsLine {
@@ -241,10 +246,11 @@ pub fn parse_root_text_rich(
         .then_ignore(just("data_results:").padded()))
     .then_ignore(just("[").padded()))
     .then(
-        (v_reg_parser.clone())
+        ((v_reg_parser.clone())
             .separated_by(just(",").padded())
             .allow_trailing()
-            .collect::<Vec<_>>(),
+            .collect::<Vec<_>>())
+        .map(super::super::Order::from),
     ))
     .then_ignore(just("]").padded()))
     .map_with(move |(docs, results), e| DataResultsLine {
@@ -277,10 +283,11 @@ pub fn parse_root_text_rich(
     .then(block_id_parser.clone()))
     .then_ignore(just("[").padded()))
     .then(
-        (edge_arg_parser.clone())
+        ((edge_arg_parser.clone())
             .separated_by(just(",").padded())
             .allow_trailing()
-            .collect::<Vec<_>>(),
+            .collect::<Vec<_>>())
+        .map(super::super::Order::from),
     ))
     .then_ignore(just("]").padded()))
     .map_with(move |((((docs, id), from), to), args), e| Edge {
@@ -486,19 +493,21 @@ pub fn parse_root_text_rich(
     .then(inst_id_parser.clone()))
     .then_ignore(just(":").padded()))
     .then(
-        (((operand_parser.clone())
+        ((((operand_parser.clone())
             .separated_by(just(",").padded())
             .allow_trailing()
             .collect::<Vec<_>>())
+        .map(super::super::Order::from))
         .then_ignore(just("=").padded()))
         .or_not(),
     ))
     .then((inst_op_parser.clone()).map(Box::new)))
     .then(
-        ((operand_parser.clone())
+        (((operand_parser.clone())
             .separated_by(just(",").padded())
             .allow_trailing()
             .collect::<Vec<_>>())
+        .map(super::super::Order::from))
         .or_not(),
     ))
     .then(((just("!").padded()).ignore_then(clobber_kind_parser.clone())).or_not()))
@@ -563,10 +572,11 @@ pub fn parse_root_text_rich(
         (((((((((just("jump_table").padded()).ignore_then(v_reg_parser.clone()))
             .then_ignore(just("[").padded()))
         .then(
-            (edge_id_parser.clone())
+            ((edge_id_parser.clone())
                 .separated_by(just(",").padded())
                 .allow_trailing()
-                .collect::<Vec<_>>(),
+                .collect::<Vec<_>>())
+            .map(super::super::Order::from),
         ))
         .then_ignore(just("]").padded()))
         .then_ignore(just(",").padded()))
@@ -625,10 +635,14 @@ pub fn parse_root_text_rich(
     .then_ignore(just("{").padded()))
     .then((data_args_line_parser.clone()).map(Box::new)))
     .then((data_results_line_parser.clone()).map(Box::new)))
-    .then((block_parser.clone()).repeated().collect::<Vec<_>>()))
-    .then((inst_parser.clone()).repeated().collect::<Vec<_>>()))
-    .then((terminator_parser.clone()).repeated().collect::<Vec<_>>()))
-    .then((edge_parser.clone()).repeated().collect::<Vec<_>>()))
+    .then(
+        ((block_parser.clone()).repeated().collect::<Vec<_>>()).map(super::super::Pool::from),
+    ))
+    .then(((inst_parser.clone()).repeated().collect::<Vec<_>>()).map(super::super::Pool::from)))
+    .then(
+        ((terminator_parser.clone()).repeated().collect::<Vec<_>>()).map(super::super::Pool::from),
+    ))
+    .then(((edge_parser.clone()).repeated().collect::<Vec<_>>()).map(super::super::Pool::from)))
     .then_ignore(just("}").padded()))
     .map_with(
         move |(
@@ -700,7 +714,9 @@ pub fn parse_root_text_rich(
             .then_ignore(ws()),
     ))
     .then_ignore(just("{").padded()))
-    .then((function_parser.clone()).repeated().collect::<Vec<_>>()))
+    .then(
+        ((function_parser.clone()).repeated().collect::<Vec<_>>()).map(super::super::Pool::from),
+    ))
     .then_ignore(just("}").padded()))
     .map_with(
         move |(((docs, vreg_count), slot_count), functions), e| Program {
