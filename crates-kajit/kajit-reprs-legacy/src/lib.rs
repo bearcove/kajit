@@ -1,7 +1,11 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use chumsky::prelude::Rich;
 
+pub mod asm;
 pub mod hir;
+pub mod ir;
+pub mod lir;
+pub mod mir;
 
 pub fn format_rich_errors(source: &str, errs: Vec<Rich<char>>) -> String {
     let mut buf = Vec::new();
