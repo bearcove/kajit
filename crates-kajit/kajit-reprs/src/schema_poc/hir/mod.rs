@@ -6,6 +6,7 @@ pub mod hover;
 pub mod meta;
 pub mod parse;
 pub mod provenance;
+pub mod resolve;
 pub mod semantic;
 pub mod visit;
 
@@ -20,6 +21,8 @@ pub use meta::*;
 pub use parse::*;
 
 pub use provenance::*;
+
+pub use resolve::*;
 
 pub use semantic::*;
 

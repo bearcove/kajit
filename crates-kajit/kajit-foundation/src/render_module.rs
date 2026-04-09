@@ -408,6 +408,10 @@ fn semantic_tokens_{module_name}(source: &str) -> Vec<SemanticToken> {{
 fn hover_entries_{module_name}(source: &str) -> Vec<HoverEntry> {{
     {module_name}::hover_entries(source)
 }}
+
+fn resolve_{module_name}(source: &str) -> Result<ResolutionSet, String> {{
+    {module_name}::resolve(source)
+}}
 "#
             )
         })
@@ -425,6 +429,7 @@ fn hover_entries_{module_name}(source: &str) -> Vec<HoverEntry> {{
         format: format_{module_name},
         semantic_tokens: semantic_tokens_{module_name},
         hover_entries: hover_entries_{module_name},
+        resolve: resolve_{module_name},
     }}"#
             )
         })
@@ -443,6 +448,7 @@ pub struct ReprSpec {{
     pub format: fn(&str) -> Result<String, String>,
     pub semantic_tokens: fn(&str) -> Vec<SemanticToken>,
     pub hover_entries: fn(&str) -> Vec<HoverEntry>,
+    pub resolve: fn(&str) -> Result<ResolutionSet, String>,
 }}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -458,6 +464,43 @@ pub struct HoverEntry {{
     pub end: u32,
     pub markdown: String,
     pub priority: u8,
+}}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SymbolKind {{
+    Function,
+    Type,
+    Label,
+}}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SymbolDef {{
+    pub name: String,
+    pub kind: SymbolKind,
+    pub start: u32,
+    pub end: u32,
+    pub detail: Option<String>,
+    pub docs: Option<String>,
+}}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SymbolRef {{
+    pub name: String,
+    pub kind: SymbolKind,
+    pub start: u32,
+    pub end: u32,
+}}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedRef {{
+    pub reference: SymbolRef,
+    pub target: Option<usize>,
+}}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ResolutionSet {{
+    pub definitions: Vec<SymbolDef>,
+    pub references: Vec<ResolvedRef>,
 }}
 
 {helper_rows}
@@ -483,6 +526,7 @@ pub mod hover;
 pub mod meta;
 pub mod parse;
 pub mod provenance;
+pub mod resolve;
 pub mod semantic;
 pub mod visit;
 
@@ -492,6 +536,7 @@ pub use hover::*;
 pub use meta::*;
 pub use parse::*;
 pub use provenance::*;
+pub use resolve::*;
 pub use semantic::*;
 pub use visit::*;
 {tests_row}"#

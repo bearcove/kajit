@@ -16,6 +16,8 @@ pub struct ReprSpec {
     pub semantic_tokens: fn(&str) -> Vec<SemanticToken>,
 
     pub hover_entries: fn(&str) -> Vec<HoverEntry>,
+
+    pub resolve: fn(&str) -> Result<ResolutionSet, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +39,55 @@ pub struct HoverEntry {
 
     pub priority: u8,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SymbolKind {
+    Function,
+
+    Type,
+
+    Label,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SymbolDef {
+    pub name: String,
+
+    pub kind: SymbolKind,
+
+    pub start: u32,
+
+    pub end: u32,
+
+    pub detail: Option<String>,
+
+    pub docs: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SymbolRef {
+    pub name: String,
+
+    pub kind: SymbolKind,
+
+    pub start: u32,
+
+    pub end: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedRef {
+    pub reference: SymbolRef,
+
+    pub target: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ResolutionSet {
+    pub definitions: Vec<SymbolDef>,
+
+    pub references: Vec<ResolvedRef>,
+}
 fn validate_hir(source: &str) -> Result<(), String> {
     hir::parse_root_text(source).map(|_| ())
 }
@@ -49,6 +100,9 @@ fn semantic_tokens_hir(source: &str) -> Vec<SemanticToken> {
 }
 fn hover_entries_hir(source: &str) -> Vec<HoverEntry> {
     hir::hover_entries(source)
+}
+fn resolve_hir(source: &str) -> Result<ResolutionSet, String> {
+    hir::resolve(source)
 }
 fn validate_asm(source: &str) -> Result<(), String> {
     asm::parse_root_text(source).map(|_| ())
@@ -63,6 +117,9 @@ fn semantic_tokens_asm(source: &str) -> Vec<SemanticToken> {
 fn hover_entries_asm(source: &str) -> Vec<HoverEntry> {
     asm::hover_entries(source)
 }
+fn resolve_asm(source: &str) -> Result<ResolutionSet, String> {
+    asm::resolve(source)
+}
 
 pub static REPRS: &[ReprSpec] = &[
     ReprSpec {
@@ -72,6 +129,7 @@ pub static REPRS: &[ReprSpec] = &[
         format: format_hir,
         semantic_tokens: semantic_tokens_hir,
         hover_entries: hover_entries_hir,
+        resolve: resolve_hir,
     },
     ReprSpec {
         name: asm::REPR_NAME,
@@ -80,5 +138,6 @@ pub static REPRS: &[ReprSpec] = &[
         format: format_asm,
         semantic_tokens: semantic_tokens_asm,
         hover_entries: hover_entries_asm,
+        resolve: resolve_asm,
     },
 ];

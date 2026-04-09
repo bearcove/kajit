@@ -3,9 +3,11 @@ use std::fs;
 use std::sync::Arc;
 
 use chumsky::error::Rich;
-use kajit_reprs::schema_poc::SemanticToken as GeneratedSemanticToken;
 use kajit_reprs::schema_poc::asm::{self as schema_asm, Program as AsmProgram};
 use kajit_reprs::schema_poc::hir::{self as schema_hir, Module};
+use kajit_reprs::schema_poc::{
+    ResolutionSet, ResolvedRef, SemanticToken as GeneratedSemanticToken, SymbolDef,
+};
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -124,6 +126,7 @@ impl LanguageServer for KajitLanguageServer {
                     ),
                 ),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                definition_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -256,6 +259,39 @@ impl LanguageServer for KajitLanguageServer {
 
         Ok(compute_hover(
             repr_kind,
+            &content,
+            params.text_document_position_params.position,
+        ))
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let Some(repr_kind) = repr_kind_for_uri(uri) else {
+            return Ok(None);
+        };
+
+        let maybe_doc = {
+            let docs = self.documents.read().await;
+            docs.get(uri).cloned()
+        };
+
+        let content = if let Some(doc) = maybe_doc {
+            doc.content
+        } else if let Ok(path) = uri.to_file_path() {
+            match fs::read_to_string(&path) {
+                Ok(content) => content,
+                Err(_) => return Ok(None),
+            }
+        } else {
+            return Ok(None);
+        };
+
+        Ok(compute_goto_definition(
+            repr_kind,
+            uri,
             &content,
             params.text_document_position_params.position,
         ))
@@ -499,6 +535,9 @@ fn encode_semantic_tokens(
 
 fn compute_hover(repr_kind: ReprKind, content: &str, position: Position) -> Option<Hover> {
     let offset = position_to_offset(content, position) as u32;
+    if let Some(hover) = compute_resolved_symbol_hover(repr_kind, content, position) {
+        return Some(hover);
+    }
     let generated = match repr_kind {
         ReprKind::Hir => schema_hir::hover_entries(content),
         ReprKind::Asm => schema_asm::hover_entries(content),
@@ -518,6 +557,85 @@ fn compute_hover(repr_kind: ReprKind, content: &str, position: Position) -> Opti
             end: offset_to_position(content, best.end as usize),
         }),
     })
+}
+
+fn compute_resolved_symbol_hover(
+    repr_kind: ReprKind,
+    content: &str,
+    position: Position,
+) -> Option<Hover> {
+    let offset = position_to_offset(content, position) as u32;
+    let resolutions = resolve_document(repr_kind, content)?;
+    let (reference, target) = find_resolved_reference(&resolutions, offset)?;
+    let definition = resolutions.definitions.get(target?)?;
+    let markdown = render_symbol_hover(definition)?;
+    Some(Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: markdown,
+        }),
+        range: Some(Range {
+            start: offset_to_position(content, reference.reference.start as usize),
+            end: offset_to_position(content, reference.reference.end as usize),
+        }),
+    })
+}
+
+fn compute_goto_definition(
+    repr_kind: ReprKind,
+    uri: &Url,
+    content: &str,
+    position: Position,
+) -> Option<GotoDefinitionResponse> {
+    let offset = position_to_offset(content, position) as u32;
+    let resolutions = resolve_document(repr_kind, content)?;
+    let (_, target) = find_resolved_reference(&resolutions, offset)?;
+    let definition = resolutions.definitions.get(target?)?;
+    Some(GotoDefinitionResponse::Scalar(Location {
+        uri: uri.clone(),
+        range: Range {
+            start: offset_to_position(content, definition.start as usize),
+            end: offset_to_position(content, definition.end as usize),
+        },
+    }))
+}
+
+fn resolve_document(repr_kind: ReprKind, content: &str) -> Option<ResolutionSet> {
+    match repr_kind {
+        ReprKind::Hir => schema_hir::resolve(content).ok(),
+        ReprKind::Asm => schema_asm::resolve(content).ok(),
+    }
+}
+
+fn find_resolved_reference(
+    resolutions: &ResolutionSet,
+    offset: u32,
+) -> Option<(&ResolvedRef, Option<usize>)> {
+    resolutions
+        .references
+        .iter()
+        .filter(|reference| reference.reference.start <= offset && offset < reference.reference.end)
+        .min_by_key(|reference| reference.reference.end - reference.reference.start)
+        .map(|reference| (reference, reference.target))
+}
+
+fn render_symbol_hover(definition: &SymbolDef) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(detail) = &definition.detail {
+        parts.push(format!("```kajit\n{detail}\n```"));
+    } else {
+        parts.push(format!("`{}`", definition.name));
+    }
+    if let Some(docs) = &definition.docs
+        && !docs.trim().is_empty()
+    {
+        parts.push(docs.clone());
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
+    }
 }
 
 #[cfg(test)]
@@ -600,5 +718,30 @@ mod tests {
                 .value
                 .contains("Return-value and accumulator register.")
         );
+    }
+
+    #[test]
+    fn hovers_hir_function_reference_from_resolver() {
+        let source = "module {\n    fn build_vec(value: Value) -> Value {\n        return value\n    }\n\n    fn main(value: Value) -> Value {\n        return call @build_vec(value)\n    }\n}";
+        let hover = compute_hover(ReprKind::Hir, source, Position::new(6, 22))
+            .expect("expected hover on build_vec call");
+        let HoverContents::Markup(markup) = hover.contents else {
+            panic!("expected markdown hover");
+        };
+        assert!(markup.value.contains("fn build_vec(value: Value) -> Value"));
+    }
+
+    #[test]
+    fn goto_definition_for_asm_label_uses_shared_resolver() {
+        let source = "asm x86_64 {\n    entry:\n    jmp entry\n}";
+        let uri = Url::parse("file:///tmp/test.k-asm").expect("valid uri");
+        let response = compute_goto_definition(ReprKind::Asm, &uri, source, Position::new(2, 8))
+            .expect("expected label definition");
+        let GotoDefinitionResponse::Scalar(location) = response else {
+            panic!("expected scalar location");
+        };
+        assert_eq!(location.uri, uri);
+        assert_eq!(location.range.start, Position::new(1, 4));
+        assert_eq!(location.range.end, Position::new(1, 9));
     }
 }
