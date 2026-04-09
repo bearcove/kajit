@@ -44,7 +44,6 @@ repr @module{
             Module @seq(
                 "module"
                 "{"
-                /// Functions declared inside the module body.
                 @field(functions @repeat(@ref(Function)))
                 "}"
             )
@@ -52,32 +51,25 @@ repr @module{
             /// A function signature plus structured body.
             Function @seq(
                 "fn"
-                /// Function name in source order.
                 @field(name @token(ident))
                 "("
-                /// Ordered parameter list.
                 @field(params @repeat(@ref(Param) {sep ","}))
                 ")"
                 "->"
-                /// Printed return type.
                 @field(return_type @ref(Type))
-                /// Structured function body.
                 @field(body @ref(Block))
             )
 
             /// A single function parameter.
             Param @seq(
-                /// Parameter name.
                 @field(name @token(ident))
                 ":"
-                /// Parameter type annotation.
                 @field(ty @ref(Type))
             )
 
             /// A braced statement block.
             Block @seq(
                 "{"
-                /// Statements inside the block.
                 @field(statements @repeat(@ref(Stmt)))
                 "}"
             )
@@ -87,7 +79,6 @@ repr @module{
                 /// A return statement with an optional value.
                 @variant(Return @seq(
                     "return"
-                    /// Optional returned expression.
                     @field(value @optional(@ref(Expr)))
                 ))
                 /// A bare expression used as a statement.
@@ -105,10 +96,8 @@ repr @module{
                 /// A symbolic function call.
                 @variant(Call @seq(
                     "call"
-                    /// Symbolic callee name.
                     @field(callee @token(symbol))
                     "("
-                    /// Positional call arguments.
                     @field(args @repeat(@ref(Expr) {sep ","}))
                     ")"
                 ))
