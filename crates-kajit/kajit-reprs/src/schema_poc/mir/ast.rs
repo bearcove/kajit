@@ -14,51 +14,51 @@ pub use kajit_types::{Prov, Span};
 /// The binary-op family used by the pilot text format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BinOpKind {
-    /// Logical right shift.
+    /// Integer addition.
     #[default]
-    Shr,
-
-    /// Greater-than-or-equal comparison.
-    CmpGe,
-
-    /// Bitwise AND.
-    And,
-
-    /// Greater-than comparison.
-    CmpGt,
-
-    /// Arithmetic right shift.
-    Sar,
+    Add,
 
     /// Less-than comparison.
     CmpLt,
 
-    /// Bitwise XOR.
-    Xor,
+    /// Arithmetic right shift.
+    Sar,
 
-    /// Integer multiplication.
-    Mul,
+    /// Logical right shift.
+    Shr,
 
-    /// Bitwise OR.
-    Or,
+    /// Less-than-or-equal comparison.
+    CmpLe,
+
+    /// Bitwise AND.
+    And,
 
     /// Integer subtraction.
     Sub,
 
-    /// Integer addition.
-    Add,
-
-    /// Inequality comparison.
-    CmpNe,
-
     /// Equality comparison.
     CmpEq,
+
+    /// Bitwise OR.
+    Or,
+
+    /// Integer multiplication.
+    Mul,
 
     /// Logical left shift.
     Shl,
 
-    /// Less-than-or-equal comparison.
-    CmpLe,
+    /// Bitwise XOR.
+    Xor,
+
+    /// Inequality comparison.
+    CmpNe,
+
+    /// Greater-than-or-equal comparison.
+    CmpGe,
+
+    /// Greater-than comparison.
+    CmpGt,
 }
 
 /// An embedded data blob identifier.
@@ -245,14 +245,14 @@ pub enum Width {
     #[default]
     W2,
 
+    /// Eight bytes.
+    W8,
+
     /// Four bytes.
     W4,
 
     /// One byte.
     W1,
-
-    /// Eight bytes.
-    W8,
 }
 
 /// A live basic block.

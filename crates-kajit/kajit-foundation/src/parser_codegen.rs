@@ -776,12 +776,35 @@ fn extract_single_literal(rule: &SyntaxRule) -> Option<&str> {
     }
 }
 
+fn collect_rule_refs(rule: &SyntaxRule, out: &mut HashSet<String>) {
+    match rule {
+        SyntaxRule::Ref { name } => {
+            out.insert(name.clone());
+        }
+        SyntaxRule::Seq(items) | SyntaxRule::Choice(items) => {
+            for item in items {
+                collect_rule_refs(item, out);
+            }
+        }
+        SyntaxRule::Field(named) | SyntaxRule::Variant(named) => {
+            collect_rule_refs(named.inner.as_ref(), out);
+        }
+        SyntaxRule::Optional { inner } => collect_rule_refs(inner, out),
+        SyntaxRule::Repeat { item, .. } => collect_rule_refs(item, out),
+        SyntaxRule::Token { .. } | SyntaxRule::Literal(_) => {}
+    }
+}
+
 pub(crate) fn render_parser_block(
     repr: &NormalizedRepr,
     node_names: &[String],
     provenance_tag: &str,
 ) -> Result<String, String> {
     let rule_names = repr.syntax.rules.keys().cloned().collect::<HashSet<_>>();
+    let mut referenced_rules = HashSet::new();
+    for rule in repr.syntax.rules.values() {
+        collect_rule_refs(rule, &mut referenced_rules);
+    }
     let parser_order = derive_parser_order(repr)?;
     let root_name = repr.syntax.root.as_str();
     let root_parser_name = format!("{}_parser", snake_case(root_name));
@@ -815,10 +838,15 @@ pub(crate) fn render_parser_block(
                 provenance_tag,
             )?;
             let parser_name = format!("{}_parser", snake_case(name));
-            Ok(if rule_is_self_recursive(name, rule) {
-                format!("    let {parser_name} = recursive(move |{parser_name}| {parser_expr});")
+            let binding_name = if name == root_name || referenced_rules.contains(name) {
+                parser_name.clone()
             } else {
-                format!("    let {parser_name} = {parser_expr};")
+                format!("_{parser_name}")
+            };
+            Ok(if rule_is_self_recursive(name, rule) {
+                format!("    let {binding_name} = recursive(move |{parser_name}| {parser_expr});")
+            } else {
+                format!("    let {binding_name} = {parser_expr};")
             })
         })
         .collect::<Result<Vec<_>, String>>()?

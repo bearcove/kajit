@@ -786,7 +786,6 @@ fn format_module_smoke() {
 pub(crate) fn render_default_resolve_file() -> String {
     format_generated_file(
         r#"
-use super::*;
 use crate::schema_poc::ResolutionSet;
 
 pub fn resolve(_source: &str) -> Result<ResolutionSet, String> {

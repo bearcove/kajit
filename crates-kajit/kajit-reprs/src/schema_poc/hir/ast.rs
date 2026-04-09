@@ -27,12 +27,12 @@ impl Symbol {
 /// A binary operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BinaryOp {
-    /// Integer subtraction.
-    #[default]
-    Sub,
-
     /// Integer addition.
+    #[default]
     Add,
+
+    /// Integer subtraction.
+    Sub,
 }
 
 /// A generic parameter name.
@@ -60,12 +60,12 @@ pub struct Literal {
 /// The kind of local binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LocalKind {
-    /// A named source-level local.
-    #[default]
-    Local,
-
     /// A compiler-introduced temporary.
+    #[default]
     Temp,
+
+    /// A named source-level local.
+    Local,
 }
 
 /// A named type reference in HIR.

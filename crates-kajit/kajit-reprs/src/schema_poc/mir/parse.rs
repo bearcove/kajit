@@ -659,7 +659,7 @@ pub fn parse_root_text_rich(
         },
     )
     .boxed();
-    let function_id_parser = token_int()
+    let _function_id_parser = token_int()
         .try_map(move |text, span| match text.parse::<u32>() {
             Ok(value) => Ok(FunctionId(value)),
             Err(err) => Err(Rich::custom(
