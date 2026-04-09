@@ -3,6 +3,7 @@ use std::path::Path;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetArch {
     Aarch64,
+    X86_64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +58,7 @@ pub enum WaresError {
     Io(&'static str, std::io::Error),
     ObjectWrite(object::write::Error),
     UnsupportedTarget(&'static str),
+    Link(String),
 }
 
 impl std::fmt::Display for WaresError {
@@ -65,6 +67,7 @@ impl std::fmt::Display for WaresError {
             WaresError::Io(ctx, e) => write!(f, "{ctx}: {e}"),
             WaresError::ObjectWrite(e) => write!(f, "object write: {e}"),
             WaresError::UnsupportedTarget(msg) => write!(f, "{msg}"),
+            WaresError::Link(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -74,6 +77,44 @@ impl std::error::Error for WaresError {}
 pub fn write_object_file(input: &ObjectInput<'_>, path: &Path) -> Result<(), WaresError> {
     match input.target_arch {
         TargetArch::Aarch64 => write_aarch64_object_file(input, path),
+        TargetArch::X86_64 => write_x64_object_file(input, path),
+    }
+}
+
+pub struct PrintMainExecutableInput<'a> {
+    pub object: ObjectInput<'a>,
+}
+
+pub fn write_print_main_executable(
+    input: &PrintMainExecutableInput<'_>,
+    output_dir: &Path,
+    base_name: &str,
+) -> Result<std::path::PathBuf, WaresError> {
+    ensure_native_target(input.object.target_arch)?;
+    std::fs::create_dir_all(output_dir).map_err(|e| WaresError::Io("create output dir", e))?;
+
+    let obj_path = output_dir.join(format!("{base_name}.o"));
+    write_object_file(&input.object, &obj_path)?;
+
+    let c_path = output_dir.join(format!("{base_name}_main.c"));
+    write_print_main_wrapper(input.object.function_name, &c_path)?;
+
+    let exe_path = output_dir.join(base_name);
+    link_print_main_executable(&c_path, &obj_path, &exe_path)?;
+
+    Ok(exe_path)
+}
+
+fn ensure_native_target(target_arch: TargetArch) -> Result<(), WaresError> {
+    match target_arch {
+        TargetArch::Aarch64 if cfg!(target_arch = "aarch64") => Ok(()),
+        TargetArch::X86_64 if cfg!(target_arch = "x86_64") => Ok(()),
+        TargetArch::Aarch64 => Err(WaresError::UnsupportedTarget(
+            "standalone executable linking is only supported for the native host architecture (wanted aarch64)",
+        )),
+        TargetArch::X86_64 => Err(WaresError::UnsupportedTarget(
+            "standalone executable linking is only supported for the native host architecture (wanted x86_64)",
+        )),
     }
 }
 
@@ -157,6 +198,109 @@ fn write_aarch64_object_file(input: &ObjectInput<'_>, path: &Path) -> Result<(),
     for &(off, sym_id) in &extern_addr_reloc_entries {
         add_page_relocations(&mut obj, text_section, off, sym_id);
     }
+
+    let text_symbol = obj.add_symbol(Symbol {
+        name: input.function_name.as_bytes().to_vec(),
+        value: input.entry_offset as u64,
+        size: (input.code.len() - input.entry_offset) as u64,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Dynamic,
+        weak: false,
+        section: SymbolSection::Section(text_section),
+        flags: SymbolFlags::None,
+    });
+
+    if let Some(dwarf) = input.dwarf {
+        let mut debug_info_section_id = None;
+        let mut debug_line_section_id = None;
+
+        if !dwarf.debug_line.is_empty() {
+            let sid = obj.add_section(
+                dwarf_segment_name(),
+                dwarf_debug_section_name("debug_line"),
+                SectionKind::Debug,
+            );
+            obj.append_section_data(sid, &dwarf.debug_line, 1);
+            debug_line_section_id = Some(sid);
+        }
+        if !dwarf.debug_info.is_empty() {
+            let sid = obj.add_section(
+                dwarf_segment_name(),
+                dwarf_debug_section_name("debug_info"),
+                SectionKind::Debug,
+            );
+            obj.append_section_data(sid, &dwarf.debug_info, 1);
+            debug_info_section_id = Some(sid);
+        }
+        if !dwarf.debug_abbrev.is_empty() {
+            let sid = obj.add_section(
+                dwarf_segment_name(),
+                dwarf_debug_section_name("debug_abbrev"),
+                SectionKind::Debug,
+            );
+            obj.append_section_data(sid, &dwarf.debug_abbrev, 1);
+        }
+        let mut debug_aranges_section_id = None;
+        if !dwarf.debug_aranges.is_empty() {
+            let sid = obj.add_section(
+                dwarf_segment_name(),
+                dwarf_debug_section_name("debug_aranges"),
+                SectionKind::Debug,
+            );
+            obj.append_section_data(sid, &dwarf.debug_aranges, 1);
+            debug_aranges_section_id = Some(sid);
+        }
+
+        for (section, reloc) in &dwarf.relocations {
+            let target_section = match section {
+                DwarfSection::DebugInfo => debug_info_section_id,
+                DwarfSection::DebugLine => debug_line_section_id,
+                DwarfSection::DebugAranges => debug_aranges_section_id,
+            };
+            if let Some(sid) = target_section {
+                obj.add_relocation(
+                    sid,
+                    dwarf_text_relocation(text_symbol, reloc, input.entry_offset),
+                )
+                .map_err(WaresError::ObjectWrite)?;
+            }
+        }
+    }
+
+    let data = obj.write().map_err(WaresError::ObjectWrite)?;
+    std::fs::write(path, data).map_err(|e| WaresError::Io("write object", e))?;
+    Ok(())
+}
+
+fn write_x64_object_file(input: &ObjectInput<'_>, path: &Path) -> Result<(), WaresError> {
+    use object::write::{Object, Symbol, SymbolSection};
+    use object::{
+        Architecture, BinaryFormat, Endianness, SectionKind, SymbolFlags, SymbolKind, SymbolScope,
+    };
+
+    if !input.intrinsic_calls.is_empty() || !input.extern_addr_relocs.is_empty() {
+        return Err(WaresError::UnsupportedTarget(
+            "x86_64 object writing does not support external relocations yet",
+        ));
+    }
+
+    let mut obj = Object::new(
+        BinaryFormat::native_object(),
+        Architecture::X86_64,
+        Endianness::Little,
+    );
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut build_ver = object::write::MachOBuildVersion::default();
+        build_ver.platform = object::macho::PLATFORM_MACOS;
+        build_ver.minos = 14 << 16;
+        build_ver.sdk = 14 << 16;
+        obj.set_macho_build_version(build_ver);
+    }
+
+    let text_section = obj.section_id(object::write::StandardSection::Text);
+    obj.append_section_data(text_section, input.code, 16);
 
     let text_symbol = obj.add_symbol(Symbol {
         name: input.function_name.as_bytes().to_vec(),
@@ -356,4 +500,59 @@ fn dwarf_text_relocation(
             },
         }
     }
+}
+
+fn write_print_main_wrapper(function_name: &str, path: &Path) -> Result<(), WaresError> {
+    let c_code = format!(
+        r#"#include <stdint.h>
+#include <stdio.h>
+
+extern uint64_t {function_name}(void);
+
+int main(void) {{
+    uint64_t value = {function_name}();
+    printf("%llu\n", (unsigned long long)value);
+    return 0;
+}}
+"#
+    );
+
+    std::fs::write(path, c_code).map_err(|e| WaresError::Io("write C wrapper", e))
+}
+
+fn link_print_main_executable(
+    c_path: &Path,
+    obj_path: &Path,
+    exe_path: &Path,
+) -> Result<(), WaresError> {
+    let mut command = std::process::Command::new("cc");
+    command.arg("-O0");
+
+    #[cfg(target_os = "macos")]
+    {
+        command.arg("-g");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        command.arg("-g0");
+    }
+
+    command.arg("-o").arg(exe_path).arg(c_path).arg(obj_path);
+
+    #[cfg(target_os = "macos")]
+    {
+        command.arg("-lSystem");
+    }
+
+    let output = command
+        .output()
+        .map_err(|e| WaresError::Io("invoke cc", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(WaresError::Link(format!("link failed: {stderr}")));
+    }
+
+    Ok(())
 }

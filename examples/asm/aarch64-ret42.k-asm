@@ -1,0 +1,5 @@
+asm aarch64 {
+    entry:
+    movz x0, 42
+    ret
+}

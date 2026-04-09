@@ -1307,6 +1307,7 @@ dependencies = [
  "figue",
  "kajit-asm",
  "kajit-reprs",
+ "kajit-wares",
  "tokio",
  "tower-lsp",
  "tracing",

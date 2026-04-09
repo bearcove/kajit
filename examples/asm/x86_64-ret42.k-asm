@@ -1,0 +1,5 @@
+asm x86_64 {
+    entry:
+    mov rax, 42
+    ret
+}

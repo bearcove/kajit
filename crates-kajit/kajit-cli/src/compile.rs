@@ -3,6 +3,7 @@ use std::path::Path;
 
 use kajit_asm::schema_poc::FinalizedSchemaPocEmission;
 use kajit_reprs::schema_poc;
+use kajit_wares::{ObjectInput, PrintMainExecutableInput, TargetArch};
 
 use crate::validate::path_matches_ext;
 
@@ -24,32 +25,51 @@ pub(crate) fn cmd_compile(path: &Path) -> Result<(), String> {
         };
     };
 
-    print_compilation(path, &output)?;
+    let exe_path = write_schema_poc_asm_executable(path, &output)?;
+    println!("{}", exe_path.display());
     Ok(())
 }
 
-fn print_compilation(path: &Path, output: &FinalizedSchemaPocEmission) -> Result<(), String> {
-    println!("input: {}", path.display());
-    println!("repr: {}", schema_poc::asm::REPR_NAME);
-    println!("bytes: {}", output.len());
-    println!();
-    println!("hex:");
+fn write_schema_poc_asm_executable(
+    path: &Path,
+    output: &FinalizedSchemaPocEmission,
+) -> Result<std::path::PathBuf, String> {
+    let output_dir = std::path::PathBuf::from("target").join("kajit-compile");
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or_else(|| format!("cannot determine output name for {}", path.display()))?;
 
-    for (offset, chunk) in output.bytes().chunks(16).enumerate() {
-        print!("{:04x}: ", offset * 16);
-        for (idx, byte) in chunk.iter().enumerate() {
-            if idx > 0 {
-                print!(" ");
-            }
-            print!("{byte:02x}");
-        }
-        println!();
-    }
-
-    println!();
-    println!("trace:");
-    print!("{}", output.trace_text()?);
-    Ok(())
+    let (arch_suffix, object) = match output {
+        FinalizedSchemaPocEmission::AArch64(_) => (
+            "aarch64",
+            ObjectInput {
+                target_arch: TargetArch::Aarch64,
+                code: output.bytes(),
+                entry_offset: 0,
+                function_name: "kajit_main",
+                dwarf: None,
+                intrinsic_calls: &[],
+                extern_addr_relocs: &[],
+            },
+        ),
+        FinalizedSchemaPocEmission::X64(_) => (
+            "x86_64",
+            ObjectInput {
+                target_arch: TargetArch::X86_64,
+                code: output.bytes(),
+                entry_offset: 0,
+                function_name: "kajit_main",
+                dwarf: None,
+                intrinsic_calls: &[],
+                extern_addr_relocs: &[],
+            },
+        ),
+    };
+    let base_name = format!("{stem}-{arch_suffix}");
+    let input = PrintMainExecutableInput { object };
+    kajit_wares::write_print_main_executable(&input, &output_dir, &base_name)
+        .map_err(|err| format!("failed to build executable for {}: {err}", path.display()))
 }
 
 #[cfg(test)]
