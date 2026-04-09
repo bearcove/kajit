@@ -135,6 +135,7 @@ pub(crate) enum SupportDecl {
     Id,
     StringSeq,
     Unit,
+    Struct(NodeFields),
     Enum(SupportVariants),
 }
 
@@ -290,13 +291,9 @@ fn validate_repr_schema(schema: &PilotSchemaDocument, path: &Path) -> Result<Loa
         ));
     }
 
-    if !repr.nodes.as_ref().is_some_and(|nodes| {
-        nodes
-            .keys()
-            .any(|name| documented_name(name) == repr.syntax.root)
-    }) {
+    if !type_decl_exists(repr, &repr.syntax.root) {
         return Err(format!(
-            "expected {} syntax.root {:?} to name a declared node",
+            "expected {} syntax.root {:?} to name a declared type",
             path.display(),
             repr.syntax.root
         ));
@@ -323,13 +320,9 @@ fn validate_repr_schema(schema: &PilotSchemaDocument, path: &Path) -> Result<Loa
     }
 
     for (rule_name, rule) in &repr.syntax.rules {
-        if !repr
-            .nodes
-            .as_ref()
-            .is_some_and(|nodes| nodes.keys().any(|name| documented_name(name) == rule_name))
-        {
+        if !type_decl_exists(repr, rule_name) {
             return Err(format!(
-                "expected {} syntax.rules.{rule_name} to have a matching node declaration",
+                "expected {} syntax.rules.{rule_name} to have a matching type declaration",
                 path.display()
             ));
         }
@@ -473,25 +466,51 @@ fn collect_rule_tokens<'a>(rule: &'a RuleExpr, out: &mut Vec<&'a str>) {
 }
 
 fn canonical_print_target_exists(repr: &ReprBody, target: &str) -> bool {
-    let Some(nodes) = &repr.nodes else {
-        return false;
-    };
-
     if let Some((node_name, variant_name)) = target.split_once('.') {
-        return nodes.iter().any(|(name, decl)| {
-            documented_name(name) == node_name
-                && matches!(
-                    decl,
-                    NodeDecl::Enum(variants)
-                        if variants
-                            .variants
-                            .keys()
-                            .any(|variant| documented_name(variant) == variant_name)
-                )
+        return repr.nodes.as_ref().is_some_and(|nodes| {
+            nodes.iter().any(|(name, decl)| {
+                documented_name(name) == node_name
+                    && matches!(
+                        decl,
+                        NodeDecl::Enum(variants)
+                            if variants
+                                .variants
+                                .keys()
+                                .any(|variant| documented_name(variant) == variant_name)
+                    )
+            })
+        }) || repr.support.as_ref().is_some_and(|support| {
+            support.iter().any(|(name, decl)| {
+                documented_name(name) == node_name
+                    && matches!(
+                        decl,
+                        SupportDecl::Enum(variants)
+                            if variants
+                                .variants
+                                .keys()
+                                .any(|variant| documented_name(variant) == variant_name)
+                    )
+            })
         });
     }
 
-    nodes.keys().any(|name| documented_name(name) == target)
+    repr.nodes
+        .as_ref()
+        .is_some_and(|nodes| nodes.keys().any(|name| documented_name(name) == target))
+        || repr
+            .support
+            .as_ref()
+            .is_some_and(|support| support.keys().any(|name| documented_name(name) == target))
+}
+
+fn type_decl_exists(repr: &ReprBody, target: &str) -> bool {
+    repr.nodes
+        .as_ref()
+        .is_some_and(|nodes| nodes.keys().any(|name| documented_name(name) == target))
+        || repr
+            .support
+            .as_ref()
+            .is_some_and(|support| support.keys().any(|name| documented_name(name) == target))
 }
 
 fn semantic_token_target_exists(repr: &ReprBody, target: &str) -> bool {

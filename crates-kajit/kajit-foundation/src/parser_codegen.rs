@@ -1,9 +1,9 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::normalize::{
-    DocumentedValue, NormalizedNodeDecl, NormalizedRepr, NormalizedTokenSpec, SyntaxRule,
-    SyntaxTypeUse, is_docs_type, is_id_type, is_int_scalar_type, is_string_scalar_type,
-    render_default_value,
+    DocumentedValue, NormalizedNodeDecl, NormalizedRepr, NormalizedSupportDecl,
+    NormalizedTokenSpec, SyntaxRule, SyntaxTypeUse, is_docs_type, is_id_type, is_int_scalar_type,
+    is_string_scalar_type, render_default_value,
 };
 use crate::render_helpers::{
     is_prov_only_struct, leaf_variant_wrapper_name, rust_ident, snake_case,
@@ -12,6 +12,11 @@ use crate::render_helpers::{
 enum SeqItem {
     Ignore(String),
     Bind { name: String, parser: String },
+}
+
+enum RuleTargetDecl<'a> {
+    Node(&'a NormalizedNodeDecl),
+    Support(&'a NormalizedSupportDecl),
 }
 
 fn token_parser_fn_name(token_name: &str) -> String {
@@ -53,6 +58,7 @@ fn render_token_value_parser(
 }
 
 fn render_ref_value_parser(
+    repr: &NormalizedRepr,
     ref_name: &str,
     ty: &SyntaxTypeUse,
     rule_names: &HashSet<String>,
@@ -60,9 +66,7 @@ fn render_ref_value_parser(
     box_node_refs: bool,
 ) -> Result<String, String> {
     if !rule_names.contains(ref_name) {
-        return Err(format!(
-            "unsupported reference parser target {ref_name:?}; scalar values must come from @token(...)"
-        ));
+        return Err(format!("unsupported reference parser target {ref_name:?}"));
     }
 
     let base = format!("{}_parser.clone()", snake_case(ref_name));
@@ -72,6 +76,14 @@ fn render_ref_value_parser(
             if box_node_refs && node_names.iter().any(|node| node == name) =>
         {
             format!("({base}).map(Box::new)")
+        }
+        SyntaxTypeUse::Ref { name }
+            if matches!(
+                repr.support.get(name).map(|decl| &decl.value),
+                Some(NormalizedSupportDecl::Struct(_))
+            ) =>
+        {
+            base
         }
         _ => base,
     })
@@ -88,7 +100,7 @@ fn render_value_parser(
     match rule {
         SyntaxRule::Token { name } => render_token_value_parser(repr, name, ty),
         SyntaxRule::Ref { name } => {
-            render_ref_value_parser(name, ty, rule_names, node_names, box_node_refs)
+            render_ref_value_parser(repr, name, ty, rule_names, node_names, box_node_refs)
         }
         SyntaxRule::Optional { inner } => {
             let SyntaxTypeUse::Optional(inner_ty) = ty else {
@@ -219,6 +231,96 @@ fn render_unbound_field_value(
     render_default_value(ty, provenance_tag).ok_or_else(|| {
         format!("field {field_name:?} is not bound by syntax and has no implicit synthesis rule")
     })
+}
+
+fn render_scalar_support_rule_expr(
+    repr: &NormalizedRepr,
+    support_name: &str,
+    decl: &NormalizedSupportDecl,
+    rule: &SyntaxRule,
+    rule_names: &HashSet<String>,
+    node_names: &[String],
+) -> Result<String, String> {
+    let support_ty = SyntaxTypeUse::Ref {
+        name: support_name.to_owned(),
+    };
+
+    match rule {
+        SyntaxRule::Token { .. }
+        | SyntaxRule::Ref { .. }
+        | SyntaxRule::Optional { .. }
+        | SyntaxRule::Repeat { .. } => {
+            return render_value_parser(repr, rule, &support_ty, rule_names, node_names, false);
+        }
+        SyntaxRule::Seq(items) => {
+            let expected_field = match decl {
+                NormalizedSupportDecl::String => "text",
+                NormalizedSupportDecl::Int | NormalizedSupportDecl::Id => "value",
+                _ => unreachable!(),
+            };
+            let mut items_out = Vec::new();
+            let mut bound = None;
+            for item in items {
+                match item {
+                    SyntaxRule::Literal(text) => {
+                        items_out.push(SeqItem::Ignore(format!("just({text:?}).padded()")));
+                    }
+                    SyntaxRule::Field(named) if named.name == expected_field => {
+                        let parser = match named.inner.as_ref() {
+                            SyntaxRule::Token { name } => {
+                                format!("{}().then_ignore(ws())", token_parser_fn_name(name))
+                            }
+                            SyntaxRule::Ref { name } => {
+                                if !rule_names.contains(name) {
+                                    return Err(format!(
+                                        "scalar support rule for {support_name} references unknown parser target {name:?}"
+                                    ));
+                                }
+                                format!("{}_parser.clone()", snake_case(name))
+                            }
+                            other => {
+                                return Err(format!(
+                                    "scalar support rule for {support_name} field {expected_field:?} must come from @token(...) or @ref(...), got {other:?}"
+                                ));
+                            }
+                        };
+                        items_out.push(SeqItem::Bind {
+                            name: expected_field.to_owned(),
+                            parser,
+                        });
+                        bound = Some(expected_field.to_owned());
+                    }
+                    other => {
+                        return Err(format!(
+                            "scalar support rule for {support_name} has unsupported item {other:?}"
+                        ));
+                    }
+                }
+            }
+            let Some(bound_name) = bound else {
+                return Err(format!(
+                    "scalar support rule for {support_name} must bind field {expected_field:?}"
+                ));
+            };
+            let (chain, _bound_names) = render_binding_chain(&items_out)?;
+            let body = match decl {
+                NormalizedSupportDecl::String => format!(
+                    "({chain}).map_with(move |{bound_name}, e| {support_name} {{ prov: prov_from_span(e.span(), file_id), text: {bound_name} }})"
+                ),
+                NormalizedSupportDecl::Int => format!(
+                    "({chain}).try_map(move |{bound_name}, span| match {bound_name}.parse::<u64>() {{ Ok(value) => Ok({support_name} {{ prov: prov_from_span(span, file_id), value }}), Err(err) => Err(Rich::custom(span, format!(\"invalid integer literal {{{bound_name}:?}}: {{err}}\"))) }})"
+                ),
+                NormalizedSupportDecl::Id => format!(
+                    "({chain}).try_map(move |{bound_name}, span| match {bound_name}.parse::<u32>() {{ Ok(value) => Ok({support_name}(value)), Err(err) => Err(Rich::custom(span, format!(\"invalid id literal {{{bound_name}:?}}: {{err}}\"))) }})"
+                ),
+                _ => unreachable!(),
+            };
+            Ok(format!("{body}.boxed()"))
+        }
+        other => Err(format!(
+            "scalar support rule for {support_name} has unsupported shape {other:?}"
+        )),
+    }
 }
 
 fn render_implicit_docs_parser(
@@ -445,22 +547,24 @@ fn render_rule_parser_expr(
     repr: &NormalizedRepr,
     rule_name: &str,
     rule: &SyntaxRule,
-    decl: &NormalizedNodeDecl,
+    decl: RuleTargetDecl<'_>,
     rule_names: &HashSet<String>,
     node_names: &[String],
     provenance_tag: &str,
 ) -> Result<String, String> {
     match decl {
-        NormalizedNodeDecl::Record { fields, .. } => render_struct_parser_expr(
-            repr,
-            rule_name,
-            fields,
-            rule,
-            rule_names,
-            node_names,
-            provenance_tag,
-        ),
-        NormalizedNodeDecl::Enum(variants) => render_enum_parser_expr(
+        RuleTargetDecl::Node(NormalizedNodeDecl::Record { fields, .. }) => {
+            render_struct_parser_expr(
+                repr,
+                rule_name,
+                fields,
+                rule,
+                rule_names,
+                node_names,
+                provenance_tag,
+            )
+        }
+        RuleTargetDecl::Node(NormalizedNodeDecl::Enum(variants)) => render_enum_parser_expr(
             repr,
             rule_name,
             variants,
@@ -469,6 +573,65 @@ fn render_rule_parser_expr(
             node_names,
             provenance_tag,
         ),
+        RuleTargetDecl::Support(NormalizedSupportDecl::Struct(fields)) => {
+            render_struct_parser_expr(
+                repr,
+                rule_name,
+                fields,
+                rule,
+                rule_names,
+                node_names,
+                provenance_tag,
+            )
+        }
+        RuleTargetDecl::Support(NormalizedSupportDecl::Enum(variants)) => {
+            let SyntaxRule::Choice(items) = rule else {
+                return Err(format!("enum rule for {rule_name} must be choice"));
+            };
+            let mut parsers = Vec::new();
+            for item in items {
+                let SyntaxRule::Variant(named) = item else {
+                    return Err(format!(
+                        "enum rule for {rule_name} contains non-variant item"
+                    ));
+                };
+                let variant_name = named.name.as_str();
+                if !variants.iter().any(|variant| variant.value == variant_name) {
+                    return Err(format!(
+                        "support enum {rule_name} is missing variant declaration {variant_name:?}"
+                    ));
+                }
+                let Some(text) = extract_single_literal(named.inner.as_ref()) else {
+                    return Err(format!(
+                        "support enum {rule_name} variant {variant_name:?} must be a literal"
+                    ));
+                };
+                parsers.push(format!("just({text:?}).to({rule_name}::{variant_name})"));
+            }
+            Ok(if parsers.len() == 1 {
+                format!("({}).then_ignore(ws()).boxed()", parsers[0])
+            } else {
+                format!("choice(({})).then_ignore(ws()).boxed()", parsers.join(", "))
+            })
+        }
+        RuleTargetDecl::Support(
+            NormalizedSupportDecl::String | NormalizedSupportDecl::Int | NormalizedSupportDecl::Id,
+        ) => render_scalar_support_rule_expr(
+            repr,
+            rule_name,
+            match decl {
+                RuleTargetDecl::Support(kind) => kind,
+                _ => unreachable!(),
+            },
+            rule,
+            rule_names,
+            node_names,
+        ),
+        RuleTargetDecl::Support(NormalizedSupportDecl::StringSeq | NormalizedSupportDecl::Unit) => {
+            Err(format!(
+                "support rule target {rule_name:?} has no parser strategy yet"
+            ))
+        }
     }
 }
 
@@ -612,11 +775,16 @@ pub(crate) fn render_parser_block(
                 .rules
                 .get(name)
                 .ok_or_else(|| format!("missing syntax rule for {name}"))?;
-            let decl = &repr
+            let decl = repr
                 .nodes
                 .get(name)
-                .ok_or_else(|| format!("missing node declaration for {name}"))?
-                .value;
+                .map(|decl| RuleTargetDecl::Node(&decl.value))
+                .or_else(|| {
+                    repr.support
+                        .get(name)
+                        .map(|decl| RuleTargetDecl::Support(&decl.value))
+                })
+                .ok_or_else(|| format!("missing type declaration for {name}"))?;
             let parser_expr = render_rule_parser_expr(
                 repr,
                 name,

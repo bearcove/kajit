@@ -156,6 +156,7 @@ pub(crate) fn render_support_decl(
     name: &str,
     decl: &NormalizedSupportDecl,
     doc: Option<&[String]>,
+    node_names: &[String],
 ) -> String {
     let docs = render_doc_lines(doc, "");
     let body = match decl {
@@ -173,6 +174,27 @@ pub(crate) fn render_support_decl(
         ),
         NormalizedSupportDecl::Unit => {
             format!("#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct {name};")
+        }
+        NormalizedSupportDecl::Struct(fields) => {
+            let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
+            field_names.sort();
+            let field_rows = field_names
+                .iter()
+                .map(|field_name| {
+                    let field = fields.get(field_name).unwrap();
+                    let ty = render_syntax_type_use(&field.value, node_names, true);
+                    let docs = render_doc_lines(field.doc.as_deref(), "    ");
+                    if docs.is_empty() {
+                        format!("    pub {}: {},", rust_ident(field_name), ty)
+                    } else {
+                        format!("{docs}\n    pub {}: {},", rust_ident(field_name), ty)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "#[derive(Debug, Clone, PartialEq, Eq)]\npub struct {name} {{\n{field_rows}\n}}"
+            )
         }
         NormalizedSupportDecl::Enum(variants) => {
             let rows = variants

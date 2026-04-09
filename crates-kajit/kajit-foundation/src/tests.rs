@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::PathBuf;
 
 use crate::normalize;
 use crate::render_module;
@@ -111,4 +112,118 @@ repr @module{
     assert!(meta.contains("name: \"Inst\""));
     assert!(meta.contains("kind: \"entity\""));
     assert!(meta.contains("kind: \"slot\""));
+}
+
+#[test]
+fn supports_structured_support_types_and_support_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("supportful.repr.styx");
+    fs::write(
+        &path,
+        r#"
+meta {
+    id kajit:test/structured-support
+    version 1
+    description "structured support schema"
+}
+
+repr @module{
+    name Supportful
+    file_ext .k-support
+    contract {
+        purpose "supportful"
+        canonical_identities (program)
+        round_trip canonical-print
+        provenance required
+    }
+    syntax {
+        root Program
+        tokens {
+            int @regex("[0-9]+")
+        }
+        rules {
+            Program @seq(
+                "program"
+                @field(loc @ref(TokenLoc))
+                @field(width @ref(Width))
+            )
+            Count @token(int)
+            TokenLoc @seq(
+                "@"
+                @field(line @ref(Count))
+                ":"
+                @field(column @ref(Count))
+            )
+            Width @choice(
+                @variant(W1 "w1")
+                @variant(W2 "w2")
+            )
+        }
+        canonical_print {
+            Program "program {loc} {width}"
+        }
+    }
+    common {
+        provenance @Prov
+    }
+    support {
+        Count @id
+        TokenLoc @struct{
+            line @Count
+            column @Count
+        }
+        Width @enum{
+            W1 @unit
+            W2 @unit
+        }
+    }
+    nodes {
+        Program @node{
+            prov @Prov
+            loc @TokenLoc
+            width @Width
+        }
+    }
+}
+"#,
+    )
+    .unwrap();
+
+    let loaded = schema::load_pilot_schema(&path).unwrap();
+    let repr =
+        normalize::with_module_doc(normalize::normalize_repr(&loaded.body).unwrap(), loaded.doc);
+    let files = render_module::render_repr_poc_files(&[repr]);
+
+    let ast = files
+        .iter()
+        .find(|file| file.relative_path == "supportful/ast.rs")
+        .unwrap()
+        .contents
+        .clone();
+    let parse = files
+        .iter()
+        .find(|file| file.relative_path == "supportful/parse.rs")
+        .unwrap()
+        .contents
+        .clone();
+
+    assert!(ast.contains("pub struct Count(pub u32);"));
+    assert!(ast.contains("pub struct TokenLoc {"));
+    assert!(ast.contains("pub line: Count,"));
+    assert!(ast.contains("pub column: Count,"));
+    assert!(ast.contains("pub enum Width"));
+    assert!(parse.contains("let count_parser ="));
+    assert!(parse.contains("let token_loc_parser ="));
+    assert!(parse.contains("let width_parser ="));
+    assert!(parse.contains("Width::W1"));
+    assert!(parse.contains("Width::W2"));
+}
+
+#[test]
+fn mir_pilot_schema_loads_and_normalizes() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../notes/unified-ast/pilot/mir.repr.styx");
+
+    let loaded = schema::load_pilot_schema(&path).unwrap();
+    let _repr = normalize::normalize_repr(&loaded.body).unwrap();
 }

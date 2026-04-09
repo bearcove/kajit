@@ -212,7 +212,7 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         .iter()
         .map(|name| {
             let decl = repr.support.get(name).unwrap();
-            render_support_decl(name, &decl.value, decl.doc.as_deref())
+            render_support_decl(name, &decl.value, decl.doc.as_deref(), &node_names)
         })
         .collect::<Vec<_>>()
         .join("\n\n");
@@ -236,6 +236,13 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
                         }
                     }
                 }
+            }
+        }
+    }
+    for decl in repr.support.values() {
+        if let crate::normalize::NormalizedSupportDecl::Struct(fields) = &decl.value {
+            for ty in fields.values() {
+                collect_syntax_type_tags(&ty.value, &mut placeholder_names);
             }
         }
     }

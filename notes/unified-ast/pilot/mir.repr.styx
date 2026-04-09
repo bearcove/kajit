@@ -45,6 +45,50 @@ repr @module{
 
         /// Grammar rules for the currently supported pilot subset.
         rules {
+            Nat @token(int)
+            VReg @token(int)
+            FunctionId @token(int)
+            LambdaId @token(int)
+            BlockId @token(int)
+            EdgeId @token(int)
+            InstId @token(int)
+            TermId @token(int)
+            SlotId @token(int)
+            StackAllocId @token(int)
+            BlobId @token(int)
+            Width @choice(
+                @variant(W1 @seq("w1"))
+                @variant(W2 @seq("w2"))
+                @variant(W4 @seq("w4"))
+                @variant(W8 @seq("w8"))
+            )
+            RegClass @choice(
+                @variant(Gpr @seq("gpr"))
+                @variant(Simd @seq("simd"))
+            )
+            ClobberKind @choice(
+                @variant(Gpr @seq("gpr"))
+                @variant(Simd @seq("simd"))
+                @variant(Both @seq("both"))
+            )
+            BinOpKind @choice(
+                @variant(Add @seq("add"))
+                @variant(Sub @seq("sub"))
+                @variant(Mul @seq("mul"))
+                @variant(And @seq("and"))
+                @variant(Or @seq("or"))
+                @variant(Sar @seq("sar"))
+                @variant(Shr @seq("shr"))
+                @variant(Shl @seq("shl"))
+                @variant(Xor @seq("xor"))
+                @variant(CmpEq @seq("cmpeq"))
+                @variant(CmpNe @seq("cmpne"))
+                @variant(CmpLt @seq("cmplt"))
+                @variant(CmpLe @seq("cmple"))
+                @variant(CmpGt @seq("cmpgt"))
+                @variant(CmpGe @seq("cmpge"))
+            )
+
             /// A whole CFG-MIR document.
             Program @seq(
                 "cfg_program"
@@ -147,6 +191,130 @@ repr @module{
                 "["
                 @field(args @repeat(@ref(EdgeArg) {sep ","}))
                 "]"
+            )
+
+            Operand @seq(
+                "v"
+                @field(vreg @ref(VReg))
+                ":"
+                @field(class @ref(RegClass))
+                @optional(@seq(
+                    "/"
+                    @field(fixed @ref(FixedReg))
+                ))
+            )
+
+            FixedReg @choice(
+                @variant(AbiArg @seq(
+                    "arg"
+                    @field(index @ref(Nat))
+                ))
+                @variant(AbiRet @seq(
+                    "ret"
+                    @field(index @ref(Nat))
+                ))
+                @variant(HwReg @seq(
+                    "hw"
+                    @field(index @ref(Nat))
+                ))
+            )
+
+            ConstRef @choice(
+                @variant(Named @seq(
+                    "@"
+                    @field(name @token(ident))
+                ))
+                @variant(Value @field(value @ref(Nat)))
+            )
+
+            IntrinsicRef @choice(
+                @variant(Named @seq(
+                    "@"
+                    @field(name @token(ident))
+                ))
+                @variant(Address @field(value @ref(Nat)))
+            )
+
+            UnaryOp @choice(
+                @variant(SignExtend @seq(
+                    "SignExtend"
+                    "{"
+                    "from_width:"
+                    @field(from_width @ref(Width))
+                    "}"
+                ))
+            )
+
+            InstOp @choice(
+                @variant(Const @seq(
+                    "const("
+                    @field(value @ref(ConstRef))
+                    ")"
+                ))
+                @variant(DataAddr @seq(
+                    "data_addr("
+                    @field(blob_id @ref(BlobId))
+                    ")"
+                ))
+                @variant(ExternAddr @seq(
+                    "extern_addr("
+                    @field(symbol @ref(IntrinsicRef))
+                    ")"
+                ))
+                @variant(BinOp @seq(
+                    @field(op @ref(BinOpKind))
+                ))
+                @variant(UnaryOp @seq(
+                    @field(op @ref(UnaryOp))
+                ))
+                @variant(Copy @seq(
+                    "copy"
+                ))
+                @variant(StackAlloc @seq(
+                    "stack_alloc("
+                    @field(id @ref(StackAllocId))
+                    ")"
+                ))
+                @variant(StoreToAddr @seq(
+                    "store_addr(["
+                    @field(width @ref(Width))
+                    "])"
+                ))
+                @variant(LoadFromAddr @seq(
+                    "load_addr(["
+                    @field(width @ref(Width))
+                    "])"
+                ))
+                @variant(WriteToSlot @seq(
+                    "write_slot("
+                    @field(slot @ref(SlotId))
+                    ")"
+                ))
+                @variant(ReadFromSlot @seq(
+                    "read_slot("
+                    @field(slot @ref(SlotId))
+                    ")"
+                ))
+                @variant(CallIntrinsic @seq(
+                    "call_intrinsic("
+                    @field(func @ref(IntrinsicRef))
+                    ")"
+                ))
+                @variant(CallPure @seq(
+                    "call_pure("
+                    @field(func @ref(IntrinsicRef))
+                    ")"
+                ))
+                @variant(CallEffect @seq(
+                    "call_effect("
+                    @field(func @ref(IntrinsicRef))
+                    ")"
+                ))
+                @variant(CallLambda @seq(
+                    "call_lambda(@"
+                    @field(target @ref(LambdaId))
+                    ")"
+                ))
             )
 
             /// A single instruction in CFG-MIR.
@@ -369,6 +537,8 @@ repr @module{
 
     /// Semantic support types that are not themselves structural nodes.
     support {
+        /// A plain non-negative integer literal/count.
+        Nat @int
         /// A virtual register index.
         VReg @id
         /// A function identifier in the current CFG-MIR container.
@@ -460,9 +630,9 @@ repr @module{
             /// Optional program-level docs.
             docs @optional(@DocBlock)
             /// Total number of vregs available in this program.
-            vreg_count @token(int)
+            vreg_count @Nat
             /// Total number of stack slots available in this program.
-            slot_count @token(int)
+            slot_count @Nat
             /// Lowered functions in the program.
             functions @seq(@Function)
         }
@@ -537,17 +707,17 @@ repr @module{
         }
 
         /// A single edge-argument binding.
-        EdgeArg @choice(
+        EdgeArg @enum{
             /// Identity mapping: the same vreg flows through unchanged.
-            @variant(Identity @seq(
-                @field(vreg @VReg)
-            ))
+            Identity @struct{
+                vreg @VReg
+            }
             /// Explicit source-to-target mapping for a successor parameter.
-            @variant(Mapped @seq(
-                @field(target @VReg)
-                @field(source @VReg)
-            ))
-        )
+            Mapped @struct{
+                target @VReg
+                source @VReg
+            }
+        }
 
         /// A control-flow edge between two blocks.
         Edge @entity{
@@ -565,19 +735,6 @@ repr @module{
             args @seq(@EdgeArg)
         }
 
-        /// A single edge-argument binding.
-        EdgeArg @choice(
-            /// Identity mapping: the same vreg flows through unchanged.
-            @variant(Identity @seq(
-                @field(vreg @ref(VReg))
-            ))
-            /// Explicit source-to-target mapping for a successor parameter.
-            @variant(Mapped @seq(
-                @field(target @ref(VReg))
-                @field(source @ref(VReg))
-            ))
-        )
-
         /// A register operand used by an instruction.
         Operand @slot{
             /// Source provenance for the operand.
@@ -591,145 +748,116 @@ repr @module{
         }
 
         /// A fixed-register constraint attached to an operand.
-        FixedReg @choice(
+        FixedReg @enum{
             /// An ABI argument register.
-            @variant(AbiArg @seq(
-                "arg"
-                @field(index @token(int))
-            ))
+            AbiArg @struct{
+                index @Nat
+            }
             /// An ABI return register.
-            @variant(AbiRet @seq(
-                "ret"
-                @field(index @token(int))
-            ))
+            AbiRet @struct{
+                index @Nat
+            }
             /// A hardware register encoding.
-            @variant(HwReg @seq(
-                "hw"
-                @field(index @token(int))
-            ))
-        )
+            HwReg @struct{
+                index @Nat
+            }
+        }
 
         /// A symbolic constant reference used by `const(...)`.
-        ConstRef @choice(
+        ConstRef @enum{
             /// A named constant.
-            @variant(Named @seq(
-                "@"
-                @field(name @token(ident))
-            ))
+            Named @struct{
+                name @Symbol
+            }
             /// A raw integer constant.
-            @variant(Value @field(value @token(int)))
-        )
+            Value @struct{
+                value @Nat
+            }
+        }
 
         /// A named or raw function-pointer reference used by call forms.
-        IntrinsicRef @choice(
+        IntrinsicRef @enum{
             /// A named intrinsic reference.
-            @variant(Named @seq(
-                "@"
-                @field(name @token(ident))
-            ))
+            Named @struct{
+                name @Symbol
+            }
             /// A raw address reference.
-            @variant(Address @field(value @token(int)))
-        )
+            Address @struct{
+                value @Nat
+            }
+        }
 
         /// An instruction opcode as a semantic node.
-        InstOp @choice(
+        InstOp @enum{
             /// Materialize an immediate constant.
-            @variant(Const @seq(
-                "const("
-                @field(value @ref(ConstRef))
-                ")"
-            ))
+            Const @struct{
+                value @ConstRef
+            }
             /// Load the runtime address of an embedded data blob.
-            @variant(DataAddr @seq(
-                "data_addr("
-                @field(blob_id @ref(BlobId))
-                ")"
-            ))
+            DataAddr @struct{
+                blob_id @BlobId
+            }
             /// Load the address of an external symbol.
-            @variant(ExternAddr @seq(
-                "extern_addr("
-                @field(symbol @ref(IntrinsicRef))
-                ")"
-            ))
+            ExternAddr @struct{
+                symbol @IntrinsicRef
+            }
             /// Execute a binary arithmetic or comparison op.
-            @variant(BinOp @seq(
-                @field(op @ref(BinOpKind))
-            ))
+            BinOp @struct{
+                op @BinOpKind
+            }
             /// Execute a unary op.
-            @variant(UnaryOp @seq(
-                @field(op @ref(UnaryOp))
-            ))
+            UnaryOp @struct{
+                op @UnaryOp
+            }
             /// Copy a value between virtual registers.
-            @variant(Copy @seq(
-                "copy"
-            ))
+            Copy @struct{
+                prov @Prov
+            }
             /// Produce the address of an abstract stack allocation.
-            @variant(StackAlloc @seq(
-                "stack_alloc("
-                @field(id @ref(StackAllocId))
-                ")"
-            ))
+            StackAlloc @struct{
+                id @StackAllocId
+            }
             /// Store a scalar value to memory.
-            @variant(StoreToAddr @seq(
-                "store_addr(["
-                @field(width @ref(Width))
-                "])"
-            ))
+            StoreToAddr @struct{
+                width @Width
+            }
             /// Load a scalar value from memory.
-            @variant(LoadFromAddr @seq(
-                "load_addr(["
-                @field(width @ref(Width))
-                "])"
-            ))
+            LoadFromAddr @struct{
+                width @Width
+            }
             /// Write a value to a stack slot.
-            @variant(WriteToSlot @seq(
-                "write_slot("
-                @field(slot @ref(SlotId))
-                ")"
-            ))
+            WriteToSlot @struct{
+                slot @SlotId
+            }
             /// Read a value from a stack slot.
-            @variant(ReadFromSlot @seq(
-                "read_slot("
-                @field(slot @ref(SlotId))
-                ")"
-            ))
+            ReadFromSlot @struct{
+                slot @SlotId
+            }
             /// Call an external/raw intrinsic by reference.
-            @variant(CallIntrinsic @seq(
-                "call_intrinsic("
-                @field(func @ref(IntrinsicRef))
-                ")"
-            ))
+            CallIntrinsic @struct{
+                func @IntrinsicRef
+            }
             /// Call a pure intrinsic by reference.
-            @variant(CallPure @seq(
-                "call_pure("
-                @field(func @ref(IntrinsicRef))
-                ")"
-            ))
+            CallPure @struct{
+                func @IntrinsicRef
+            }
             /// Call an effectful intrinsic by reference.
-            @variant(CallEffect @seq(
-                "call_effect("
-                @field(func @ref(IntrinsicRef))
-                ")"
-            ))
+            CallEffect @struct{
+                func @IntrinsicRef
+            }
             /// Call another lowered lambda by ID.
-            @variant(CallLambda @seq(
-                "call_lambda(@"
-                @field(target @ref(LambdaId))
-                ")"
-            ))
-        )
+            CallLambda @struct{
+                target @LambdaId
+            }
+        }
 
         /// Unary-op payloads used by the pilot text format.
-        UnaryOp @choice(
+        UnaryOp @enum{
             /// Sign-extend from a source width to 64 bits.
-            @variant(SignExtend @seq(
-                "SignExtend"
-                "{"
-                "from_width:"
-                @field(from_width @ref(Width))
-                "}"
-            ))
-        )
+            SignExtend @struct{
+                from_width @Width
+            }
+        }
 
         /// A single non-terminator instruction in CFG-MIR.
         Inst @entity{
@@ -749,154 +877,34 @@ repr @module{
             clobbers @optional(@ClobberKind)
         }
 
-        /// Instruction opcodes as canonical textual forms.
-        InstOp @choice(
-            /// Materialize an immediate constant.
-            @variant(Const @seq(
-                "const("
-                @field(value @ref(ConstRef))
-                ")"
-            ))
-            /// Load the runtime address of an embedded data blob.
-            @variant(DataAddr @seq(
-                "data_addr("
-                @field(blob_id @ref(BlobId))
-                ")"
-            ))
-            /// Load the address of an external symbol.
-            @variant(ExternAddr @seq(
-                "extern_addr("
-                @field(symbol @ref(IntrinsicRef))
-                ")"
-            ))
-            /// Execute a binary arithmetic or comparison op.
-            @variant(BinOp @seq(
-                @field(op @ref(BinOpKind))
-            ))
-            /// Execute a unary op.
-            @variant(UnaryOp @seq(
-                @field(op @ref(UnaryOp))
-            ))
-            /// Copy a value between virtual registers.
-            @variant(Copy @seq(
-                "copy"
-            ))
-            /// Produce the address of an abstract stack allocation.
-            @variant(StackAlloc @seq(
-                "stack_alloc("
-                @field(id @ref(StackAllocId))
-                ")"
-            ))
-            /// Store a scalar value to memory.
-            @variant(StoreToAddr @seq(
-                "store_addr(["
-                @field(width @ref(Width))
-                "])"
-            ))
-            /// Load a scalar value from memory.
-            @variant(LoadFromAddr @seq(
-                "load_addr(["
-                @field(width @ref(Width))
-                "])"
-            ))
-            /// Write a value to a stack slot.
-            @variant(WriteToSlot @seq(
-                "write_slot("
-                @field(slot @ref(SlotId))
-                ")"
-            ))
-            /// Read a value from a stack slot.
-            @variant(ReadFromSlot @seq(
-                "read_slot("
-                @field(slot @ref(SlotId))
-                ")"
-            ))
-            /// Call an external/raw intrinsic by reference.
-            @variant(CallIntrinsic @seq(
-                "call_intrinsic("
-                @field(func @ref(IntrinsicRef))
-                ")"
-            ))
-            /// Call a pure intrinsic by reference.
-            @variant(CallPure @seq(
-                "call_pure("
-                @field(func @ref(IntrinsicRef))
-                ")"
-            ))
-            /// Call an effectful intrinsic by reference.
-            @variant(CallEffect @seq(
-                "call_effect("
-                @field(func @ref(IntrinsicRef))
-                ")"
-            ))
-            /// Call another lowered lambda by ID.
-            @variant(CallLambda @seq(
-                "call_lambda(@"
-                @field(target @ref(LambdaId))
-                ")"
-            ))
-        )
-
-        /// Unary-op payloads used by the pilot text format.
-        UnaryOp @choice(
-            /// Sign-extend from a source width to 64 bits.
-            @variant(SignExtend @seq(
-                "SignExtend"
-                "{"
-                "from_width:"
-                @field(from_width @ref(Width))
-                "}"
-            ))
-        )
-
         /// A block terminator.
-        Terminator @choice(
+        Terminator @enum{
             /// Return from the current function.
-            @variant(Return @seq(
-                "return"
-            ))
+            Return @struct{
+                prov @Prov
+            }
             /// Unconditional branch to a single edge.
-            @variant(Branch @seq(
-                "branch"
-                "e"
-                @field(edge @ref(EdgeId))
-            ))
+            Branch @struct{
+                edge @EdgeId
+            }
             /// Branch if the condition is nonzero.
-            @variant(BranchIf @seq(
-                "branch_if"
-                @field(cond @ref(VReg))
-                "->"
-                "e"
-                @field(taken @ref(EdgeId))
-                ","
-                "fallthrough"
-                "e"
-                @field(fallthrough @ref(EdgeId))
-            ))
+            BranchIf @struct{
+                cond @VReg
+                taken @EdgeId
+                fallthrough @EdgeId
+            }
             /// Branch if the condition is zero.
-            @variant(BranchIfZero @seq(
-                "branch_if_zero"
-                @field(cond @ref(VReg))
-                "->"
-                "e"
-                @field(taken @ref(EdgeId))
-                ","
-                "fallthrough"
-                "e"
-                @field(fallthrough @ref(EdgeId))
-            ))
+            BranchIfZero @struct{
+                cond @VReg
+                taken @EdgeId
+                fallthrough @EdgeId
+            }
             /// Jump through a table of edge targets.
-            @variant(JumpTable @seq(
-                "jump_table"
-                @field(predicate @ref(VReg))
-                "["
-                @field(targets @repeat(@ref(EdgeId) {sep ","}))
-                "]"
-                ","
-                "default"
-                "e"
-                @field(default @ref(EdgeId))
-            ))
-        )
+            JumpTable @struct{
+                predicate @VReg
+                targets @seq(@EdgeId)
+                default @EdgeId
+            }
+        }
     }
 }

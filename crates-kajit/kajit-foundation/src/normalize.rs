@@ -75,6 +75,7 @@ pub(crate) enum NormalizedSupportDecl {
     Id,
     StringSeq,
     Unit,
+    Struct(HashMap<String, DocumentedValue<SyntaxTypeUse>>),
     Enum(Vec<DocumentedValue<String>>),
 }
 
@@ -126,6 +127,9 @@ fn normalize_support_decl(decl: &SupportDecl) -> Result<NormalizedSupportDecl, S
         SupportDecl::Id => Ok(NormalizedSupportDecl::Id),
         SupportDecl::StringSeq => Ok(NormalizedSupportDecl::StringSeq),
         SupportDecl::Unit => Ok(NormalizedSupportDecl::Unit),
+        SupportDecl::Struct(fields) => Ok(NormalizedSupportDecl::Struct(normalize_node_fields(
+            fields,
+        )?)),
         SupportDecl::Enum(variants) if !variants.variants.is_empty() => {
             let mut out = Vec::new();
             for (name, decl) in &variants.variants {
@@ -409,6 +413,7 @@ pub(crate) fn classify_ref_type(repr: &NormalizedRepr, name: &str) -> Normalized
         Some(NormalizedSupportDecl::Id) => NormalizedRefKind::Id,
         Some(NormalizedSupportDecl::StringSeq) => NormalizedRefKind::StringSeq,
         Some(NormalizedSupportDecl::Unit) => NormalizedRefKind::Unit,
+        Some(NormalizedSupportDecl::Struct(_)) => NormalizedRefKind::Unknown,
         Some(NormalizedSupportDecl::Enum(_)) => NormalizedRefKind::Enum,
         None => NormalizedRefKind::Unknown,
     }
