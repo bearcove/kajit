@@ -49,6 +49,50 @@ impl std::fmt::Display for {root_name} {{
     }}
 }}
 
+const INDENT_WIDTH: usize = 4;
+
+struct Writer {{
+    out: String,
+    indent: usize,
+    at_line_start: bool,
+}}
+
+impl Writer {{
+    fn new() -> Self {{
+        Self {{
+            out: String::new(),
+            indent: 0,
+            at_line_start: false,
+        }}
+    }}
+
+    fn text(&mut self, text: &str) {{
+        for ch in text.chars() {{
+            if self.at_line_start && ch != '\n' {{
+                for _ in 0..self.indent {{
+                    self.out.push(' ');
+                }}
+                self.at_line_start = false;
+            }}
+
+            self.out.push(ch);
+            if ch == '\n' {{
+                self.at_line_start = true;
+            }}
+        }}
+    }}
+
+    fn with_indent(&mut self, f: impl FnOnce(&mut Self)) {{
+        self.indent += INDENT_WIDTH;
+        f(self);
+        self.indent -= INDENT_WIDTH;
+    }}
+
+    fn finish(self) -> String {{
+        self.out
+    }}
+}}
+
 {formatters}
 "#,
         root_name = root_name,
@@ -64,17 +108,18 @@ fn render_node_formatter(
     node_names: &[String],
 ) -> Result<String, String> {
     let fn_name = format!("format_{}", snake_case(node_name));
+    let write_name = format!("write_{}", snake_case(node_name));
     match decl {
         NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
             if let Some(template) = repr.syntax.canonical_print.get(node_name) {
                 let parts = parse_template(template)?;
-                let body = render_template_parts(&parts, "node", fields, None, node_names)?;
+                let body = render_template_lines(&parts, "node", fields, None, node_names)?;
                 Ok(format!(
-                    "pub fn {fn_name}(node: &{node_name}) -> String {{\n{body}\n}}"
+                    "pub fn {fn_name}(node: &{node_name}) -> String {{\n    let mut w = Writer::new();\n    {write_name}(&mut w, node);\n    w.finish()\n}}\n\nfn {write_name}(w: &mut Writer, node: &{node_name}) {{\n{body}\n}}"
                 ))
             } else {
                 Ok(format!(
-                    "pub fn {fn_name}(node: &{node_name}) -> String {{\n    format!(\"{{:?}}\", node)\n}}"
+                    "pub fn {fn_name}(node: &{node_name}) -> String {{\n    format!(\"{{:?}}\", node)\n}}\n\nfn {write_name}(w: &mut Writer, node: &{node_name}) {{\n    w.text(&format!(\"{{:?}}\", node));\n}}"
                 ))
             }
         }
@@ -103,10 +148,7 @@ fn render_node_formatter(
                     } else {
                         let mut binders = used
                             .iter()
-                            .map(|field| {
-                                let ident = rust_ident(field);
-                                ident
-                            })
+                            .map(|field| rust_ident(field))
                             .collect::<Vec<_>>();
                         if used.len() != field_names.len() {
                             binders.push("..".to_owned());
@@ -130,7 +172,7 @@ fn render_node_formatter(
                             )
                         })
                         .collect::<HashMap<_, _>>();
-                    let body = render_template_parts(
+                    let body = render_template_lines(
                         &parts,
                         "node",
                         fields,
@@ -142,76 +184,67 @@ fn render_node_formatter(
                     ));
                 } else {
                     arms.push(format!(
-                        "        other @ {node_name}::{variant_name} {{ .. }} => format!(\"{{:?}}\", other)"
+                        "        other @ {node_name}::{variant_name} {{ .. }} => {{ w.text(&format!(\"{{:?}}\", other)); }}"
                     ));
                 }
             }
             Ok(format!(
-                "pub fn {fn_name}(node: &{node_name}) -> String {{\n    match node {{\n{}\n    }}\n}}",
+                "pub fn {fn_name}(node: &{node_name}) -> String {{\n    let mut w = Writer::new();\n    {write_name}(&mut w, node);\n    w.finish()\n}}\n\nfn {write_name}(w: &mut Writer, node: &{node_name}) {{\n    match node {{\n{}\n    }}\n}}",
                 arms.join(",\n")
             ))
         }
     }
 }
 
-fn render_template_parts(
+fn render_template_lines(
     parts: &[TemplatePart],
     node_expr: &str,
     fields: &HashMap<String, DocumentedValue<SyntaxTypeUse>>,
     overrides: Option<&HashMap<String, (String, SyntaxTypeUse)>>,
     node_names: &[String],
 ) -> Result<String, String> {
-    let mut lines = vec!["    let mut out = String::new();".to_owned()];
-    lines.extend(render_template_lines(
-        parts, "out", node_expr, fields, overrides, node_names,
-    )?);
-    lines.push("    out".to_owned());
-    Ok(lines.join("\n"))
-}
-
-fn render_template_lines(
-    parts: &[TemplatePart],
-    out_name: &str,
-    node_expr: &str,
-    fields: &HashMap<String, DocumentedValue<SyntaxTypeUse>>,
-    overrides: Option<&HashMap<String, (String, SyntaxTypeUse)>>,
-    node_names: &[String],
-) -> Result<Vec<String>, String> {
     let mut lines = Vec::new();
+    let mut at_line_start = false;
     for part in parts {
         match part {
             TemplatePart::Literal(text) => {
-                lines.push(format!("    {out_name}.push_str({text:?});"));
+                lines.push(format!("    w.text({text:?});"));
+                at_line_start = text.ends_with('\n');
             }
             TemplatePart::Field { name, joiner } => {
                 let (expr, ty) = lookup_field(name, node_expr, fields, overrides)?;
-                let rendered = render_value_format_expr(&expr, &ty, joiner.as_deref(), node_names)?;
-                lines.push(format!("    {out_name}.push_str(&({rendered}));"));
+                lines.extend(render_value_write_lines(
+                    "w",
+                    &expr,
+                    &ty,
+                    joiner.as_deref(),
+                    node_names,
+                    at_line_start,
+                )?);
+                at_line_start = false;
             }
             TemplatePart::Optional { name, parts } => {
                 let (expr, ty) = lookup_field(name, node_expr, fields, overrides)?;
                 let SyntaxTypeUse::Optional(inner_ty) = ty else {
                     return Err(format!("optional template field {name:?} is not optional"));
                 };
-                let value_expr = format!("{expr}.as_ref()");
                 let mut nested_overrides = overrides.cloned().unwrap_or_default();
                 nested_overrides.insert(name.clone(), ("value".to_owned(), (*inner_ty).clone()));
                 let nested = render_template_lines(
                     parts,
-                    out_name,
                     node_expr,
                     fields,
                     Some(&nested_overrides),
                     node_names,
                 )?;
-                lines.push(format!(
-                    "    if let Some(value) = {value_expr} {{\n{}\n    }}",
-                    nested.join("\n")
-                ));
+                lines.push(format!("    if let Some(value) = {expr}.as_ref() {{"));
+                lines.push(nested);
+                lines.push("    }".to_owned());
+                at_line_start = false;
             }
         }
     }
-    Ok(lines)
+    Ok(lines.join("\n"))
 }
 
 fn lookup_field(
@@ -234,30 +267,71 @@ fn lookup_field(
     ))
 }
 
-fn render_value_format_expr(
+fn render_value_write_lines(
+    writer_name: &str,
     expr: &str,
     ty: &SyntaxTypeUse,
     joiner: Option<&str>,
     node_names: &[String],
-) -> Result<String, String> {
+    at_line_start: bool,
+) -> Result<Vec<String>, String> {
     match ty {
         SyntaxTypeUse::Optional(_) => {
             Err("optional formatting must be handled by TemplatePart::Optional".to_owned())
         }
         SyntaxTypeUse::Seq(inner) => {
-            let inner_expr = render_value_format_expr("value", inner, None, node_names)?;
             let sep = joiner.unwrap_or("\n");
-            Ok(format!(
-                "{expr}.iter().map(|value| {inner_expr}).collect::<Vec<_>>().join({sep:?})"
-            ))
+            let mut lines = vec![format!(
+                "    for (idx, value) in {expr}.iter().enumerate() {{"
+            )];
+            lines.push("        if idx != 0 {".to_owned());
+            lines.push(format!("            {writer_name}.text({sep:?});"));
+            lines.push("        }".to_owned());
+            if should_indent_value(inner, node_names) && at_line_start {
+                lines.push(format!(
+                    "        {writer_name}.with_indent(|{writer_name}| {{"
+                ));
+                lines.extend(
+                    render_value_write_lines(writer_name, "value", inner, None, node_names, false)?
+                        .into_iter()
+                        .map(|line| format!("    {line}")),
+                );
+                lines.push("        });".to_owned());
+            } else {
+                lines.extend(
+                    render_value_write_lines(writer_name, "value", inner, None, node_names, false)?
+                        .into_iter()
+                        .map(|line| format!("    {line}")),
+                );
+            }
+            lines.push("    }".to_owned());
+            Ok(lines)
         }
         SyntaxTypeUse::Ref { name } if node_names.iter().any(|node| node == name) => {
-            Ok(format!("format_{}(&{expr})", snake_case(name)))
+            let write_name = format!("write_{}", snake_case(name));
+            if at_line_start {
+                Ok(vec![format!(
+                    "    {writer_name}.with_indent(|{writer_name}| {write_name}({writer_name}, &{expr}));"
+                )])
+            } else {
+                Ok(vec![format!("    {write_name}({writer_name}, &{expr});")])
+            }
         }
-        SyntaxTypeUse::Ref { name } => Ok(match name.as_str() {
-            "Symbol" | "Type" | "Literal" => format!("{expr}.0.clone()"),
-            _ => format!("format!(\"{{:?}}\", {expr})"),
-        }),
+        SyntaxTypeUse::Ref { name } => Ok(vec![match name.as_str() {
+            "Symbol" | "Type" | "Literal" => {
+                format!("    {writer_name}.text(&{expr}.0);")
+            }
+            _ => format!("    {writer_name}.text(&format!(\"{{:?}}\", {expr}));"),
+        }]),
+    }
+}
+
+fn should_indent_value(ty: &SyntaxTypeUse, node_names: &[String]) -> bool {
+    match ty {
+        SyntaxTypeUse::Ref { name } => node_names.iter().any(|node| node == name),
+        SyntaxTypeUse::Seq(inner) | SyntaxTypeUse::Optional(inner) => {
+            should_indent_value(inner, node_names)
+        }
     }
 }
 

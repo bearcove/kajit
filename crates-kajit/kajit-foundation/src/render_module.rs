@@ -552,6 +552,8 @@ pub trait HasProvenance {{
 fn render_format_file(parts: &RenderParts) -> String {
     format!(
         r#"
+#![allow(dead_code)]
+
 use super::*;
 
 {formatter_rows}
@@ -581,7 +583,10 @@ fn format_module_smoke() {
     let text = "module { fn main() -> Value { return } }";
     let module = parse_root_text(text).unwrap();
     let formatted = format_root_text(&module);
-    assert_eq!(formatted, "module {\nfn main() -> Value {\nreturn\n}\n}");
+    assert_eq!(
+        formatted,
+        "module {\n    fn main() -> Value {\n        return\n    }\n}"
+    );
 
     let reparsed = parse_root_text(&formatted).unwrap();
     assert_eq!(reparsed, module);

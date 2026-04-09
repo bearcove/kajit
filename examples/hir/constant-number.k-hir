@@ -1,5 +1,5 @@
 module {
-fn const_number() -> Value {
-return 42
-}
+    fn const_number() -> Value {
+        return 42
+    }
 }

@@ -43,7 +43,7 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(
             result.unwrap(),
-            "module {\nfn main() -> Value {\nreturn 42\n}\n}"
+            "module {\n    fn main() -> Value {\n        return 42\n    }\n}"
         );
     }
 }

@@ -1,6 +1,6 @@
 module {
-fn echo(value: Value) -> Value {
-value
-return value
-}
+    fn echo(value: Value) -> Value {
+        value
+        return value
+    }
 }

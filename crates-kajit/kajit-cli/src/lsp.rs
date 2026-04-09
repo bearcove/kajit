@@ -652,7 +652,7 @@ mod tests {
         assert_eq!(edit.range.end, offset_to_position(source, source.len()));
         assert_eq!(
             edit.new_text,
-            "module {\nfn main() -> Value {\nreturn 42\n}\n}"
+            "module {\n    fn main() -> Value {\n        return 42\n    }\n}"
         );
     }
 }

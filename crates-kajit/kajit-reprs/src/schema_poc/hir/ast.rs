@@ -47,15 +47,15 @@ pub struct Type(pub String);
 /// The kind of type definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TypeDefKind {
-    /// A struct type definition.
-    #[default]
-    Struct,
-
     /// A type alias definition.
+    #[default]
     Alias,
 
     /// An enum type definition.
     Enum,
+
+    /// A struct type definition.
+    Struct,
 }
 
 /// A sequence of statements with shared provenance.
