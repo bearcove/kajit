@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fs;
 use std::sync::Arc;
 
 use chumsky::Parser;
@@ -169,18 +170,29 @@ impl LanguageServer for KajitLanguageServer {
         &self,
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
-        let docs = self.documents.read().await;
-        let Some(doc) = docs.get(&params.text_document.uri) else {
-            return Ok(None);
-        };
-
         if !is_hir_uri(&params.text_document.uri) {
             return Ok(None);
         }
 
-        let tokens = compute_hir_semantic_tokens(&doc.content);
+        let maybe_doc = {
+            let docs = self.documents.read().await;
+            docs.get(&params.text_document.uri).cloned()
+        };
+
+        let (content, result_id) = if let Some(doc) = maybe_doc {
+            (doc.content, Some(doc.version.to_string()))
+        } else if let Ok(path) = params.text_document.uri.to_file_path() {
+            match fs::read_to_string(&path) {
+                Ok(content) => (content, None),
+                Err(_) => return Ok(None),
+            }
+        } else {
+            return Ok(None);
+        };
+
+        let tokens = compute_hir_semantic_tokens(&content);
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
-            result_id: Some(doc.version.to_string()),
+            result_id,
             data: tokens,
         })))
     }
