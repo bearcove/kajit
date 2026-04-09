@@ -37,7 +37,7 @@ pub struct PrintSpec {
 
 pub const REPR_NAME: &str = "HIR";
 
-pub const REPR_FILE_EXT: &str = ".vixen-hir";
+pub const REPR_FILE_EXT: &str = ".k-hir";
 
 pub const REPR_PURPOSE: &str = "Human-semantic structured IR";
 

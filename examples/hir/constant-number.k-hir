@@ -1,29 +1,5 @@
-hir_module {
-  regions []
-  stores []
-  types [
-    type t0 "ConstantNumber" size=4 = struct {
-      "value": u32 @0
-    }
-  ]
-  callables []
-  functions [
-    function f0 "const_number" {
-      regions []
-      stores []
-      params [
-        l0 param "cursor": u64
-        l1 param "out": t0
-      ]
-      locals []
-      return unit
-      scopes [
-        scope sc0 parent none comment "constant destination-writing HIR"
-      ]
-      body @sc0 {
-        stmt0: init field(l1, "value") = 0x2a
-        stmt1: return
-      }
-    }
-  ]
+module {
+fn const_number() -> Value {
+return 42
+}
 }

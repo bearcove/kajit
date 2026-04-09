@@ -210,6 +210,8 @@ fn render_struct_parser_expr(
             let ident = rust_ident(field_name);
             let value = if bound_set.contains(&ident) {
                 ident.clone()
+            } else if field_name == "prov" {
+                "prov_from_span(e.span(), file_id)".to_owned()
             } else {
                 render_default_value(&fields.get(field_name).unwrap().value, provenance_tag)
             };
@@ -217,15 +219,23 @@ fn render_struct_parser_expr(
         })
         .collect::<Vec<_>>()
         .join(", ");
+    let span_ident = if fields.contains_key("prov") {
+        "e"
+    } else {
+        "_e"
+    };
 
     let map = if bound_names.is_empty() {
-        format!(".map(|()| {type_name} {{ {field_rows} }})")
+        format!(".map_with(move |(), {span_ident}| {type_name} {{ {field_rows} }})")
     } else if bound_names.len() == 1 {
-        format!(".map(|{}| {type_name} {{ {field_rows} }})", bound_names[0])
+        format!(
+            ".map_with(move |{}, {span_ident}| {type_name} {{ {field_rows} }})",
+            bound_names[0],
+        )
     } else {
         format!(
-            ".map(|{}| {type_name} {{ {field_rows} }})",
-            nested_tuple_pattern(&bound_names)
+            ".map_with(move |{}, {span_ident}| {type_name} {{ {field_rows} }})",
+            nested_tuple_pattern(&bound_names),
         )
     };
 
@@ -276,6 +286,8 @@ fn render_enum_parser_expr(
                 let ident = rust_ident(field_name);
                 let value = if bound_set.contains(&ident) {
                     ident.clone()
+                } else if field_name == "prov" {
+                    "prov_from_span(e.span(), file_id)".to_owned()
                 } else {
                     render_default_value(&fields.get(field_name).unwrap().value, provenance_tag)
                 };
@@ -283,17 +295,24 @@ fn render_enum_parser_expr(
             })
             .collect::<Vec<_>>()
             .join(", ");
+        let span_ident = if fields.contains_key("prov") {
+            "e"
+        } else {
+            "_e"
+        };
         let parser = if bound_names.is_empty() {
-            format!("({chain}).map(|()| {enum_name}::{variant_name} {{ {field_rows} }})")
+            format!(
+                "({chain}).map_with(move |(), {span_ident}| {enum_name}::{variant_name} {{ {field_rows} }})"
+            )
         } else if bound_names.len() == 1 {
             format!(
-                "({chain}).map(|{}| {enum_name}::{variant_name} {{ {field_rows} }})",
-                bound_names[0]
+                "({chain}).map_with(move |{}, {span_ident}| {enum_name}::{variant_name} {{ {field_rows} }})",
+                bound_names[0],
             )
         } else {
             format!(
-                "({chain}).map(|{}| {enum_name}::{variant_name} {{ {field_rows} }})",
-                nested_tuple_pattern(&bound_names)
+                "({chain}).map_with(move |{}, {span_ident}| {enum_name}::{variant_name} {{ {field_rows} }})",
+                nested_tuple_pattern(&bound_names),
             )
         };
         variant_parsers.push(parser);
@@ -403,9 +422,19 @@ fn int_token<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> +
         .padded_by(ws())
 }}
 
-pub fn parse_module_text(source: &str) -> Result<Module, String> {{
+fn prov_from_span(span: chumsky::span::SimpleSpan<usize>, file_id: Option<u32>) -> Prov {{
+    Prov {{
+        file_id,
+        span: Some(Span {{
+            start: span.start as u32,
+            end: span.end as u32,
+        }}),
+    }}
+}}
+
+pub fn parse_module_text_rich(source: &str, file_id: Option<u32>) -> Result<Module, Vec<Rich<'_, char>>> {{
     let param_parser = {param_parser};
-    let expr_parser = recursive(|expr_parser| {expr_parser_body});
+    let expr_parser = recursive(move |expr_parser| {expr_parser_body});
     let stmt_parser = {stmt_parser};
     let block_parser = {block_parser};
     let function_parser = {function_parser};
@@ -415,7 +444,14 @@ pub fn parse_module_text(source: &str) -> Result<Module, String> {{
         .then_ignore(end())
         .parse(source)
         .into_result()
-        .map_err(|errs| crate::format_rich_errors(source, errs))
+}}
+
+pub fn parse_module_text_with_file_id(source: &str, file_id: Option<u32>) -> Result<Module, String> {{
+    parse_module_text_rich(source, file_id).map_err(|errs| crate::format_rich_errors(source, errs))
+}}
+
+pub fn parse_module_text(source: &str) -> Result<Module, String> {{
+    parse_module_text_with_file_id(source, None)
 }}
 "#,
         param_parser = parser_defs[0],

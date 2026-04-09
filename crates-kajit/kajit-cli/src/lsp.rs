@@ -2,9 +2,11 @@ use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 
-use chumsky::Parser;
 use chumsky::error::Rich;
-use kajit_reprs::hir::lexer::{Span as HirSpan, Token as HirToken, lexer as hir_lexer};
+use kajit_reprs::schema_poc;
+use kajit_reprs::schema_poc::hir::{
+    self as schema_hir, Block, Expr, Function, Local, Module, Param, Place, Prov, Stmt, TypeDef,
+};
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -217,131 +219,328 @@ fn semantic_token_legend() -> SemanticTokensLegend {
 }
 
 fn is_hir_uri(uri: &Url) -> bool {
-    uri.path().ends_with(".k-hir")
+    uri.to_file_path().ok().is_some_and(|path| {
+        schema_poc::REPRS
+            .iter()
+            .any(|repr| path_matches_ext(&path, repr.file_ext))
+    })
+}
+
+fn path_matches_ext(path: &std::path::Path, file_ext: &str) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(file_ext))
 }
 
 fn compute_hir_diagnostics(content: &str) -> Vec<Diagnostic> {
-    let (_, errors) = hir_lexer().parse(content).into_output_errors();
-
-    errors
-        .into_iter()
-        .map(|error: Rich<'_, char, HirSpan>| {
-            let span = *error.span();
-            Diagnostic {
-                range: span_to_range(content, span),
-                severity: Some(DiagnosticSeverity::ERROR),
-                code: None,
-                code_description: None,
-                source: Some("kajit-hir".to_string()),
-                message: error.to_string(),
-                related_information: None,
-                tags: None,
-                data: None,
-            }
-        })
-        .collect()
+    match schema_hir::parse_module_text_rich(content, None) {
+        Ok(_) => Vec::new(),
+        Err(errors) => errors
+            .into_iter()
+            .map(|error: Rich<'_, char>| {
+                let span = error.span();
+                Diagnostic {
+                    range: Range {
+                        start: offset_to_position(content, span.start),
+                        end: offset_to_position(content, span.end),
+                    },
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    code: None,
+                    code_description: None,
+                    source: Some("kajit-schema-poc-hir".to_string()),
+                    message: error.to_string(),
+                    related_information: None,
+                    tags: None,
+                    data: None,
+                }
+            })
+            .collect(),
+    }
 }
 
 fn compute_hir_semantic_tokens(content: &str) -> Vec<SemanticToken> {
-    let (tokens, _errors) = hir_lexer().parse(content).into_output_errors();
-    let Some(tokens) = tokens else {
+    let Ok(module) = schema_hir::parse_module_text_rich(content, None) else {
         return Vec::new();
     };
 
     let mut raw = Vec::new();
-    for (token, span) in tokens {
-        let Some(token_type) = classify_hir_token(&token) else {
-            continue;
-        };
-
-        let range = span_to_range(content, span);
-        if range.start.line == range.end.line {
-            let length = range.end.character.saturating_sub(range.start.character);
-            if length > 0 {
-                raw.push(RawSemanticToken {
-                    line: range.start.line,
-                    start_char: range.start.character,
-                    length,
-                    token_type,
-                });
-            }
-            continue;
-        }
-
-        let start_offset = span.start;
-        let end_offset = span.end;
-        let mut line_start = start_offset;
-        for segment in content[start_offset..end_offset].split_inclusive('\n') {
-            let segment_len = segment.len();
-            let segment_end = line_start + segment_len;
-            let token_end = if segment.ends_with('\n') {
-                segment_end.saturating_sub(1)
-            } else {
-                segment_end
-            };
-            if token_end > line_start {
-                let start = offset_to_position(content, line_start);
-                let end = offset_to_position(content, token_end);
-                raw.push(RawSemanticToken {
-                    line: start.line,
-                    start_char: start.character,
-                    length: end.character.saturating_sub(start.character),
-                    token_type,
-                });
-            }
-            line_start = segment_end;
-        }
+    if let Some(range) = find_in_text(content, "module") {
+        push_range_token(&mut raw, range, KajitSemanticTokenType::Keyword);
     }
+    collect_module_tokens(content, &module, &mut raw);
 
     raw.sort_by(|a, b| a.line.cmp(&b.line).then(a.start_char.cmp(&b.start_char)));
+    raw.dedup_by(|a, b| {
+        a.line == b.line
+            && a.start_char == b.start_char
+            && a.length == b.length
+            && a.token_type == b.token_type
+    });
     encode_semantic_tokens(&raw)
 }
 
-fn classify_hir_token(token: &HirToken<'_>) -> Option<KajitSemanticTokenType> {
-    use HirToken::*;
+fn collect_module_tokens(content: &str, module: &Module, raw: &mut Vec<RawSemanticToken>) {
+    for type_def in &module.type_defs {
+        collect_type_def_tokens(content, type_def, raw);
+    }
+    for function in &module.functions {
+        collect_function_tokens(content, function, raw);
+    }
+}
 
-    match token {
-        Str(_) => Some(KajitSemanticTokenType::String),
-        Int(_) | HexInt(_) => Some(KajitSemanticTokenType::Number),
-        ExternSymbol(_) => Some(KajitSemanticTokenType::Function),
-        LocalId(_) => Some(KajitSemanticTokenType::Variable),
-        FunctionId(_) => Some(KajitSemanticTokenType::Function),
-        TypeDefId(_) | KwType | KwStruct | KwEnum | KwUnit | KwBool | KwAddr | KwSlice
-        | KwArray | KwStr | KwHandle => Some(KajitSemanticTokenType::Type),
-        KwFunction | KwCall | KwLoad | KwDeref | KwSliceData | KwSliceLen | KwField | KwIndex
-        | KwAddrOf | KwVariant | KwUnary | KwBinary | KwIf | KwElse | KwLoop | KwMatch | KwArm
-        | KwBreak | KwContinue | KwReturn | KwInit | KwAssign | KwStore | KwExpr | KwParam
-        | KwLet | KwTemp | KwDestination | KwParent | KwComment | KwDocs | KwScope | KwScopes
-        | KwLocals | KwParams | KwCapabilities | KwControl | KwDomains | KwEffect | KwSafety
-        | KwIntrinsic | KwBody | KwPure | KwReads | KwMutates | KwBarrier | KwRead | KwMutate
-        | KwBuiltin | KwHost | KwReturns | KwMayFail | KwNeverReturns | KwSafeCore
-        | KwOpaqueHost | KwUnsafeInterop | KwMaxIterations | KwSize | KwDiscWidth | KwW1 | KwW2
-        | KwW4 | KwW8 | KwRegion | KwGenericStore | KwHirModule | KwRegions | KwStores
-        | KwTypes | KwFunctions | KwTransparent | KwMut | KwTransient | KwPersistent | KwNot
-        | KwNeg | KwAdd | KwSub | KwMul | KwDiv | KwBitand | KwBitor | KwXor | KwShl | KwShr
-        | KwSar | KwEq | KwNe | KwLt | KwLe | KwGt | KwGe | KwAnd | KwOr | KwTrue | KwFalse
-        | KwNone => Some(KajitSemanticTokenType::Keyword),
-        Colon | ColonColon | Comma | Eq | At | Amp | Minus | LAngle | RAngle => {
-            Some(KajitSemanticTokenType::Operator)
+fn collect_type_def_tokens(content: &str, type_def: &TypeDef, raw: &mut Vec<RawSemanticToken>) {
+    if let Some(range) = find_in_prov(content, &type_def.prov, &type_def.name.0) {
+        push_range_token(raw, range, KajitSemanticTokenType::Type);
+    }
+}
+
+fn collect_function_tokens(content: &str, function: &Function, raw: &mut Vec<RawSemanticToken>) {
+    if let Some(range) = find_in_prov(content, &function.prov, "fn") {
+        push_range_token(raw, range, KajitSemanticTokenType::Keyword);
+    }
+    if let Some(range) = find_after_in_prov(content, &function.prov, "fn", &function.name.0) {
+        push_range_token(raw, range, KajitSemanticTokenType::Function);
+    }
+    if let Some(range) = find_after_in_prov(content, &function.prov, "->", &function.return_type.0)
+    {
+        push_range_token(raw, range, KajitSemanticTokenType::Type);
+    }
+    for param in &function.params {
+        collect_param_tokens(content, param, raw);
+    }
+    for local in &function.locals {
+        collect_local_tokens(content, local, raw);
+    }
+    collect_block_tokens(content, &function.body, raw);
+}
+
+fn collect_param_tokens(content: &str, param: &Param, raw: &mut Vec<RawSemanticToken>) {
+    if let Some(range) = find_in_prov(content, &param.prov, &param.name.0) {
+        push_range_token(raw, range, KajitSemanticTokenType::Parameter);
+    }
+    if let Some(range) = find_after_in_prov(content, &param.prov, ":", &param.ty.0) {
+        push_range_token(raw, range, KajitSemanticTokenType::Type);
+    }
+}
+
+fn collect_local_tokens(content: &str, local: &Local, raw: &mut Vec<RawSemanticToken>) {
+    if let Some(range) = find_in_prov(content, &local.prov, &local.name.0) {
+        push_range_token(raw, range, KajitSemanticTokenType::Variable);
+    }
+    if let Some(range) = find_after_in_prov(content, &local.prov, ":", &local.ty.0) {
+        push_range_token(raw, range, KajitSemanticTokenType::Type);
+    }
+}
+
+fn collect_block_tokens(content: &str, block: &Block, raw: &mut Vec<RawSemanticToken>) {
+    for stmt in &block.statements {
+        collect_stmt_tokens(content, stmt, raw);
+    }
+}
+
+fn collect_stmt_tokens(content: &str, stmt: &Stmt, raw: &mut Vec<RawSemanticToken>) {
+    match stmt {
+        Stmt::Assign { place, value, .. } => {
+            collect_place_tokens(content, place, raw);
+            collect_expr_tokens(content, value, raw);
         }
-        Ident(name) => classify_ident(*name),
-        LBrace | RBrace | LBracket | RBracket | LParen | RParen => None,
-        RegionId(_) | StoreId(_) | ScopeId(_) | StmtId(_) => Some(KajitSemanticTokenType::Property),
+        Stmt::Expr { value, .. } => collect_expr_tokens(content, value, raw),
+        Stmt::If {
+            condition,
+            then,
+            r#else,
+            prov,
+        } => {
+            if let Some(range) = find_in_prov(content, prov, "if") {
+                push_range_token(raw, range, KajitSemanticTokenType::Keyword);
+            }
+            if let Some(range) = find_in_prov(content, prov, "else") {
+                push_range_token(raw, range, KajitSemanticTokenType::Keyword);
+            }
+            collect_expr_tokens(content, condition, raw);
+            collect_block_tokens(content, then, raw);
+            if let Some(r#else) = r#else {
+                collect_block_tokens(content, r#else, raw);
+            }
+        }
+        Stmt::Init { place, value, prov } => {
+            if let Some(range) = find_in_prov(content, prov, "init") {
+                push_range_token(raw, range, KajitSemanticTokenType::Keyword);
+            }
+            collect_place_tokens(content, place, raw);
+            collect_expr_tokens(content, value, raw);
+        }
+        Stmt::Return { value, prov } => {
+            if let Some(range) = find_in_prov(content, prov, "return") {
+                push_range_token(raw, range, KajitSemanticTokenType::Keyword);
+            }
+            if let Some(value) = value {
+                collect_expr_tokens(content, value, raw);
+            }
+        }
     }
 }
 
-fn classify_ident(name: &str) -> Option<KajitSemanticTokenType> {
-    if name.chars().next().is_some_and(char::is_uppercase) {
-        return Some(KajitSemanticTokenType::Type);
+fn collect_expr_tokens(content: &str, expr: &Expr, raw: &mut Vec<RawSemanticToken>) {
+    match expr {
+        Expr::Binary { lhs, rhs, prov, .. } => {
+            collect_expr_tokens(content, lhs, raw);
+            if let Some(range) = find_any_operator_in_prov(content, prov) {
+                push_range_token(raw, range, KajitSemanticTokenType::Operator);
+            }
+            collect_expr_tokens(content, rhs, raw);
+        }
+        Expr::Call { args, callee, prov } => {
+            if let Some(range) = find_in_prov(content, prov, "call") {
+                push_range_token(raw, range, KajitSemanticTokenType::Keyword);
+            }
+            if let Some(range) = find_after_in_prov(content, prov, "call", &callee.0) {
+                push_range_token(raw, range, KajitSemanticTokenType::Function);
+            }
+            for arg in args {
+                collect_expr_tokens(content, arg, raw);
+            }
+        }
+        Expr::Field { base, field, prov } => {
+            collect_expr_tokens(content, base, raw);
+            if let Some(range) = find_last_in_prov(content, prov, &field.0) {
+                push_range_token(raw, range, KajitSemanticTokenType::Property);
+            }
+        }
+        Expr::Literal { prov, .. } => {
+            if let Some(range) = range_from_prov(content, prov) {
+                push_range_token(raw, range, KajitSemanticTokenType::Number);
+            }
+        }
+        Expr::Local { prov, .. } => {
+            if let Some(range) = range_from_prov(content, prov) {
+                push_range_token(raw, range, KajitSemanticTokenType::Variable);
+            }
+        }
     }
-    Some(KajitSemanticTokenType::Property)
 }
 
-fn span_to_range(content: &str, span: HirSpan) -> Range {
+fn collect_place_tokens(content: &str, place: &Place, raw: &mut Vec<RawSemanticToken>) {
+    match place {
+        Place::Field { base, field, prov } => {
+            collect_place_tokens(content, base, raw);
+            if let Some(range) = find_last_in_prov(content, prov, &field.0) {
+                push_range_token(raw, range, KajitSemanticTokenType::Property);
+            }
+        }
+        Place::Local { prov, .. } => {
+            if let Some(range) = range_from_prov(content, prov) {
+                push_range_token(raw, range, KajitSemanticTokenType::Variable);
+            }
+        }
+    }
+}
+
+fn range_from_prov(content: &str, prov: &Prov) -> Option<Range> {
+    let span = prov.span.as_ref()?;
+    Some(Range {
+        start: offset_to_position(content, span.start as usize),
+        end: offset_to_position(content, span.end as usize),
+    })
+}
+
+fn span_bytes(prov: &Prov, content: &str) -> Option<(usize, usize)> {
+    let span = prov.span.as_ref()?;
+    let start = span.start as usize;
+    let end = span.end as usize;
+    if start > end || end > content.len() {
+        return None;
+    }
+    Some((start, end))
+}
+
+fn find_in_text(content: &str, needle: &str) -> Option<Range> {
+    let start = content.find(needle)?;
+    Some(byte_range_to_range(content, start, start + needle.len()))
+}
+
+fn find_in_prov(content: &str, prov: &Prov, needle: &str) -> Option<Range> {
+    find_in_span(content, span_bytes(prov, content)?, needle)
+}
+
+fn find_last_in_prov(content: &str, prov: &Prov, needle: &str) -> Option<Range> {
+    find_last_in_span(content, span_bytes(prov, content)?, needle)
+}
+
+fn find_after_in_prov(content: &str, prov: &Prov, anchor: &str, needle: &str) -> Option<Range> {
+    find_after_in_span(content, span_bytes(prov, content)?, anchor, needle)
+}
+
+fn find_in_span(content: &str, (start, end): (usize, usize), needle: &str) -> Option<Range> {
+    let offset = content.get(start..end)?.find(needle)?;
+    Some(byte_range_to_range(
+        content,
+        start + offset,
+        start + offset + needle.len(),
+    ))
+}
+
+fn find_last_in_span(content: &str, (start, end): (usize, usize), needle: &str) -> Option<Range> {
+    let offset = content.get(start..end)?.rfind(needle)?;
+    Some(byte_range_to_range(
+        content,
+        start + offset,
+        start + offset + needle.len(),
+    ))
+}
+
+fn find_after_in_span(
+    content: &str,
+    (start, end): (usize, usize),
+    anchor: &str,
+    needle: &str,
+) -> Option<Range> {
+    let slice = content.get(start..end)?;
+    let anchor_start = slice.find(anchor)?;
+    let search_start = start + anchor_start + anchor.len();
+    let offset = content.get(search_start..end)?.find(needle)?;
+    Some(byte_range_to_range(
+        content,
+        search_start + offset,
+        search_start + offset + needle.len(),
+    ))
+}
+
+fn find_any_operator_in_prov(content: &str, prov: &Prov) -> Option<Range> {
+    const OPERATORS: &[&str] = &["==", "!=", "<=", ">=", "+", "-", "*", "/", "&&", "||"];
+    for operator in OPERATORS {
+        if let Some(range) = find_in_prov(content, prov, operator) {
+            return Some(range);
+        }
+    }
+    None
+}
+
+fn byte_range_to_range(content: &str, start: usize, end: usize) -> Range {
     Range {
-        start: offset_to_position(content, span.start),
-        end: offset_to_position(content, span.end),
+        start: offset_to_position(content, start),
+        end: offset_to_position(content, end),
     }
+}
+
+fn push_range_token(
+    raw: &mut Vec<RawSemanticToken>,
+    range: Range,
+    token_type: KajitSemanticTokenType,
+) {
+    if range.start.line != range.end.line {
+        return;
+    }
+    let length = range.end.character.saturating_sub(range.start.character);
+    if length == 0 {
+        return;
+    }
+    raw.push(RawSemanticToken {
+        line: range.start.line,
+        start_char: range.start.character,
+        length,
+        token_type,
+    });
 }
 
 fn offset_to_position(content: &str, offset: usize) -> Position {
@@ -392,14 +591,14 @@ mod tests {
 
     #[test]
     fn produces_hir_semantic_tokens() {
-        let source = r#"hir_module { functions [ function f0 params [] body { return "ok" } ] }"#;
+        let source = "module { fn main() -> Value { return 42 } }";
         let tokens = compute_hir_semantic_tokens(source);
         assert!(!tokens.is_empty());
     }
 
     #[test]
-    fn reports_lexer_errors() {
-        let source = "\"unterminated";
+    fn reports_parser_errors() {
+        let source = "module { fn broken( -> Value { return } }";
         let diagnostics = compute_hir_diagnostics(source);
         assert!(!diagnostics.is_empty());
     }

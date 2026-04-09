@@ -229,9 +229,9 @@ fn validate_hir_pilot_schema(
         ));
     }
 
-    if repr.file_ext != ".vixen-hir" {
+    if repr.file_ext != ".k-hir" {
         return Err(format!(
-            "expected {} file_ext to be .vixen-hir, got {:?}",
+            "expected {} file_ext to be .k-hir, got {:?}",
             path.display(),
             repr.file_ext
         ));

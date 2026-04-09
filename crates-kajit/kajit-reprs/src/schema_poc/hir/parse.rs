@@ -38,25 +38,30 @@ fn int_token<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> +
         .map(str::to_owned)
         .padded_by(ws())
 }
-pub fn parse_module_text(source: &str) -> Result<Module, String> {
+fn prov_from_span(span: chumsky::span::SimpleSpan<usize>, file_id: Option<u32>) -> Prov {
+    Prov {
+        file_id,
+        span: Some(Span {
+            start: span.start as u32,
+            end: span.end as u32,
+        }),
+    }
+}
+pub fn parse_module_text_rich(
+    source: &str,
+
+    file_id: Option<u32>,
+) -> Result<Module, Vec<Rich<'_, char>>> {
     let param_parser = (((ident_token().map(Symbol)).then_ignore(just(":").padded()))
         .then(ident_token().map(Type)))
-    .map(|(name, ty)| Param {
+    .map_with(move |(name, ty), e| Param {
         name: name,
-        prov: Prov::default(),
+        prov: prov_from_span(e.span(), file_id),
         ty: ty,
     })
     .boxed();
-    let expr_parser = recursive(|expr_parser| {
+    let expr_parser = recursive(move |expr_parser| {
         choice((
-            (ident_token().map(Symbol)).map(|name| Expr::Local {
-                name: name,
-                prov: Prov::default(),
-            }),
-            (int_token().map(Literal)).map(|value| Expr::Literal {
-                prov: Prov::default(),
-                value: value,
-            }),
             (((((just("call").padded()).ignore_then(symbol_token().map(Symbol)))
                 .then_ignore(just("(").padded()))
             .then(
@@ -66,22 +71,30 @@ pub fn parse_module_text(source: &str) -> Result<Module, String> {
                     .collect::<Vec<_>>(),
             ))
             .then_ignore(just(")").padded()))
-            .map(|(callee, args)| Expr::Call {
+            .map_with(move |(callee, args), e| Expr::Call {
                 args: args,
                 callee: callee,
-                prov: Prov::default(),
+                prov: prov_from_span(e.span(), file_id),
+            }),
+            (ident_token().map(Symbol)).map_with(move |name, e| Expr::Local {
+                name: name,
+                prov: prov_from_span(e.span(), file_id),
+            }),
+            (int_token().map(Literal)).map_with(move |value, e| Expr::Literal {
+                prov: prov_from_span(e.span(), file_id),
+                value: value,
             }),
         ))
         .boxed()
     });
     let stmt_parser = choice((
         ((just("return").padded()).ignore_then(((expr_parser.clone()).map(Box::new)).or_not()))
-            .map(|value| Stmt::Return {
-                prov: Prov::default(),
+            .map_with(move |value, e| Stmt::Return {
+                prov: prov_from_span(e.span(), file_id),
                 value: value,
             }),
-        ((expr_parser.clone()).map(Box::new)).map(|value| Stmt::Expr {
-            prov: Prov::default(),
+        ((expr_parser.clone()).map(Box::new)).map_with(move |value, e| Stmt::Expr {
+            prov: prov_from_span(e.span(), file_id),
             value: value,
         }),
     ))
@@ -89,8 +102,8 @@ pub fn parse_module_text(source: &str) -> Result<Module, String> {
     let block_parser = (((just("{").padded())
         .ignore_then((stmt_parser.clone()).repeated().collect::<Vec<_>>()))
     .then_ignore(just("}").padded()))
-    .map(|statements| Block {
-        prov: Prov::default(),
+    .map_with(move |statements, e| Block {
+        prov: prov_from_span(e.span(), file_id),
         statements: statements,
     })
     .boxed();
@@ -107,13 +120,13 @@ pub fn parse_module_text(source: &str) -> Result<Module, String> {
     .then_ignore(just("->").padded()))
     .then(ident_token().map(Type)))
     .then((block_parser.clone()).map(Box::new)))
-    .map(|(((name, params), return_type), body)| Function {
+    .map_with(move |(((name, params), return_type), body), e| Function {
         body: body,
         docs: None,
         locals: Vec::new(),
         name: name,
         params: params,
-        prov: Prov::default(),
+        prov: prov_from_span(e.span(), file_id),
         return_type: return_type,
     })
     .boxed();
@@ -121,15 +134,21 @@ pub fn parse_module_text(source: &str) -> Result<Module, String> {
         (just("{").padded()).ignore_then((function_parser.clone()).repeated().collect::<Vec<_>>()),
     ))
     .then_ignore(just("}").padded()))
-    .map(|functions| Module {
+    .map_with(move |functions, _e| Module {
         docs: None,
         functions: functions,
         type_defs: Vec::new(),
     })
     .boxed();
-    module_parser
-        .then_ignore(end())
-        .parse(source)
-        .into_result()
-        .map_err(|errs| crate::format_rich_errors(source, errs))
+    module_parser.then_ignore(end()).parse(source).into_result()
+}
+pub fn parse_module_text_with_file_id(
+    source: &str,
+
+    file_id: Option<u32>,
+) -> Result<Module, String> {
+    parse_module_text_rich(source, file_id).map_err(|errs| crate::format_rich_errors(source, errs))
+}
+pub fn parse_module_text(source: &str) -> Result<Module, String> {
+    parse_module_text_with_file_id(source, None)
 }

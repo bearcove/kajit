@@ -1,37 +1,6 @@
-hir_module {
-  regions []
-  stores []
-  types [
-    type t0 "ConstantNumber" size=4 = struct {
-      "value": u32 @0
-    }
-  ]
-  callables []
-  functions [
-    function f0 "local_across_if" {
-      regions []
-      stores []
-      params [
-        l0 param "cursor": u64
-        l1 param "out": t0
-      ]
-      locals [
-        l2 temp "tmp": u32
-      ]
-      return unit
-      scopes [
-        scope sc0 parent none comment "local scalar across empty else"
-      ]
-      body @sc0 {
-        stmt0: init l2 = 0x2
-        stmt1: if false @sc0 {
-          stmt2: return
-        } else @sc0 {
-        }
-        stmt3: assign l2 = binary bitor(l2, 0x4)
-        stmt4: init field(l1, "value") = l2
-        stmt5: return
-      }
-    }
-  ]
+module {
+fn echo(value: Value) -> Value {
+value
+return value
+}
 }

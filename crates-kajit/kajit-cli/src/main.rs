@@ -1,7 +1,9 @@
 use facet::Facet;
 use figue as args;
+use std::path::PathBuf;
 
 mod lsp;
+mod validate;
 
 /// kajit — JIT deserializer toolkit
 #[derive(Facet, Debug)]
@@ -23,6 +25,13 @@ enum Command {
         #[facet(args::named, default = true)]
         stdio: bool,
     },
+
+    /// Validate a Kajit text file based on its extension
+    Validate {
+        /// Path to the file to validate
+        #[facet(args::positional)]
+        path: PathBuf,
+    },
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -36,5 +45,11 @@ async fn main() {
 
     match args.command {
         Command::Lsp { stdio } => lsp::cmd_lsp(stdio).await,
+        Command::Validate { path } => {
+            if let Err(err) = validate::cmd_validate(&path) {
+                eprintln!("{err}");
+                std::process::exit(1);
+            }
+        }
     }
 }

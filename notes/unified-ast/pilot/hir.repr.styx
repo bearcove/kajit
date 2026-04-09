@@ -12,7 +12,7 @@ repr @module{
     /// Human-facing representation name.
     name HIR
     /// Canonical text file extension for HIR documents.
-    file_ext .vixen-hir
+    file_ext .k-hir
 
     /// High-level stage contract for HIR.
     contract {
@@ -89,10 +89,6 @@ repr @module{
 
             /// Expression forms supported by the pilot parser.
             Expr @choice(
-                /// A local value reference.
-                @variant(Local @field(name @token(ident)))
-                /// A decimal integer literal.
-                @variant(Literal @field(value @token(int)))
                 /// A symbolic function call.
                 @variant(Call @seq(
                     "call"
@@ -101,6 +97,10 @@ repr @module{
                     @field(args @repeat(@ref(Expr) {sep ","}))
                     ")"
                 ))
+                /// A local value reference.
+                @variant(Local @field(name @token(ident)))
+                /// A decimal integer literal.
+                @variant(Literal @field(value @token(int)))
             )
         }
 
