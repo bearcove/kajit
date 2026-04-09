@@ -13,28 +13,10 @@ path = "src/main.rs"
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [features]
-default = ["lldb"]
-lldb = ["dep:lldb"]
+default = []
 
 [dependencies]
-kajit = { path = "../kajit" }
-lldb = { path = "../../vendor/lldb-rs", optional = true }
-kajit-hir = { path = "../kajit-hir" }
-kajit-ir = { path = "../kajit-ir" }
-kajit-lir = { path = "../kajit-lir" }
-kajit-mir = { path = "../kajit-mir" }
-kajit-reprs = { path = "../kajit-reprs" }
-kajit-types = { path = "../kajit-types" }
 facet = "0.44"
 figue = "2"
-rust-mcp-sdk = { version = "0.8", default-features = false, features = [
-  "stdio",
-  "server",
-  "macros",
-] }
-async-trait = "0.1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
