@@ -1,0 +1,86 @@
+hir_module {
+  regions [
+    r0 "input"
+  ]
+  stores []
+  types [
+    type t0 "Cursor" <region "r_input"> = struct {
+      "bytes": Slice<r0, u8>
+      "pos": u64
+    }
+    type t1 "Vec" size=24 = struct {
+      "cap": u64 @0
+      "ptr": addr<persistent> @8
+      "len": u64 @16
+    }
+    type t2 "HostStringRaw" size=24 = struct {
+      "cap": u64 @0
+      "ptr": addr<persistent> @8
+      "len": u64 @16
+    }
+  ]
+  callables [
+    callable c0 host "runtime.alloc_persistent" {
+      params [u64, u64]
+      intrinsic alloc_persistent
+      returns [addr<persistent>]
+      effect mutates
+      domains ["persistent_heap":mutate]
+      control may_fail
+      capabilities ["runtime.alloc"]
+      safety opaque_host
+      docs "Allocate persistent memory that may escape in the result."
+    }
+  ]
+  functions [
+    function f0 "build_vec_with_one_empty_string" {
+      regions [r0]
+      stores []
+      params [
+        l0 param "cursor": &mut t0<r0>
+        l1 destination "out": t1
+      ]
+      locals [
+        l2 temp "list_len": u64
+        l3 temp "list_bytes": u64
+        l4 temp "list_ptr": addr<persistent>
+        l5 temp "list_index": u64
+        l6 temp "list_elem": t2
+        l7 temp "string_len": u32
+        l8 temp "string_ptr": addr<persistent>
+        l9 temp "string_raw": t2
+      ]
+      return unit
+      scopes [
+        scope sc0 parent none comment "handwritten Vec<String> builder"
+      ]
+      body @sc0 {
+        stmt0: init l2 = 0x1
+        stmt1: init l3 = binary mul(l2, 0x18)
+        stmt2: init l4 = call c0(l3, 0x8)
+        stmt3: init l5 = 0x0
+        stmt20: loop @sc0 {
+          stmt4: if binary eq(l5, l2) @sc0 {
+            stmt5: break
+          } else @sc0 {
+          }
+          stmt6: init l7 = 0x0
+          stmt7: init l8 = call c0(l7, 0x1)
+          stmt8: init l9 = variant "String" {
+            "len" = l7,
+            "ptr" = l8,
+            "cap" = l7
+          }
+          stmt9: init l6 = l9
+          stmt10: store index(l4, l5) = l6
+          stmt11: assign l5 = binary add(l5, 0x1)
+          stmt12: continue
+        }
+        stmt13: init field(l1, "cap") = l2
+        stmt14: init field(l1, "ptr") = l4
+        stmt15: init field(l1, "len") = l2
+        stmt16: return
+      }
+    }
+  ]
+}

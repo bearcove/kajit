@@ -205,7 +205,7 @@ fn semantic_token_legend() -> SemanticTokensLegend {
 }
 
 fn is_hir_uri(uri: &Url) -> bool {
-    uri.path().ends_with(".vixen-hir")
+    uri.path().ends_with(".k-hir")
 }
 
 fn compute_hir_diagnostics(content: &str) -> Vec<Diagnostic> {

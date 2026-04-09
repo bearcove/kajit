@@ -25,10 +25,10 @@ Schema (facet Shape)
 ```
 
 **File extensions:**
-- `.vixen-hir` — HIR text
-- `.vixen-ir` — RVSDG IR text
-- `.vixen-mir` — CFG-MIR text
-- `.vixen-asm` — assembly text
+- `.k-hir` — HIR text
+- `.k-ir` — RVSDG IR text
+- `.k-mir` — CFG-MIR text
+- `.k-asm` — assembly text
 
 **Why HIR exists:** Multiple frontends (deserializers + Vixen rule language) need a shared semantic layer. RVSDG is too low-level to be human-readable. HIR preserves names, scopes, comments, spans. HIR is the debugger source view. See `docs/hir-design.md`.
 
@@ -108,10 +108,10 @@ For example, `scalar_u32/postcard` runs:
 The `kajit` binary (in `kajit-cli`) is the primary tool for inspecting and debugging the compilation pipeline. Use it instead of env-var-driven test dumps.
 
 ```bash
-# Compile a .vixen-hir file through the full pipeline
-cargo run -p kajit-cli -- compile /tmp/test.vixen-hir
-cargo run -p kajit-cli -- compile /tmp/test.vixen-hir -s cfg
-cargo run -p kajit-cli -- compile /tmp/test.vixen-hir -s hir,ir,cfg,asm
+# Compile a .k-hir file through the full pipeline
+cargo run -p kajit-cli -- compile /tmp/test.k-hir
+cargo run -p kajit-cli -- compile /tmp/test.k-hir -s cfg
+cargo run -p kajit-cli -- compile /tmp/test.k-hir -s hir,ir,cfg,asm
 
 # Dump all pipeline stages for u32 (format decoder)
 cargo run -p kajit-cli -- compile-format postcard u32
