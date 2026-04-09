@@ -2,6 +2,7 @@
 
 pub mod asm;
 pub mod hir;
+pub mod mir;
 
 #[derive(Clone, Copy)]
 pub struct ReprSpec {
@@ -120,6 +121,22 @@ fn hover_entries_asm(source: &str) -> Vec<HoverEntry> {
 fn resolve_asm(source: &str) -> Result<ResolutionSet, String> {
     asm::resolve(source)
 }
+fn validate_mir(source: &str) -> Result<(), String> {
+    mir::parse_root_text(source).map(|_| ())
+}
+fn format_mir(source: &str) -> Result<String, String> {
+    let root = mir::parse_root_text(source)?;
+    Ok(mir::format_root_text(&root))
+}
+fn semantic_tokens_mir(source: &str) -> Vec<SemanticToken> {
+    mir::semantic_tokens(source)
+}
+fn hover_entries_mir(source: &str) -> Vec<HoverEntry> {
+    mir::hover_entries(source)
+}
+fn resolve_mir(source: &str) -> Result<ResolutionSet, String> {
+    mir::resolve(source)
+}
 
 pub static REPRS: &[ReprSpec] = &[
     ReprSpec {
@@ -139,5 +156,14 @@ pub static REPRS: &[ReprSpec] = &[
         semantic_tokens: semantic_tokens_asm,
         hover_entries: hover_entries_asm,
         resolve: resolve_asm,
+    },
+    ReprSpec {
+        name: mir::REPR_NAME,
+        file_ext: mir::REPR_FILE_EXT,
+        validate: validate_mir,
+        format: format_mir,
+        semantic_tokens: semantic_tokens_mir,
+        hover_entries: hover_entries_mir,
+        resolve: resolve_mir,
     },
 ];

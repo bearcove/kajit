@@ -26,10 +26,15 @@ fn combined_markdown(
     }
 }
 
-fn recurse_calls_for_type(ty: &SyntaxTypeUse, expr: &str, node_names: &[String]) -> Vec<String> {
+fn recurse_calls_for_type(
+    ty: &SyntaxTypeUse,
+    expr: &str,
+    node_names: &[String],
+    borrowed: bool,
+) -> Vec<String> {
     match ty {
         SyntaxTypeUse::Optional(inner) => {
-            let inner_calls = recurse_calls_for_type(inner, "value", node_names);
+            let inner_calls = recurse_calls_for_type(inner, "value", node_names, true);
             if inner_calls.is_empty() {
                 Vec::new()
             } else {
@@ -44,12 +49,17 @@ fn recurse_calls_for_type(ty: &SyntaxTypeUse, expr: &str, node_names: &[String])
             }
         }
         SyntaxTypeUse::Seq(inner) => {
-            let inner_calls = recurse_calls_for_type(inner, "value", node_names);
+            let inner_calls = recurse_calls_for_type(inner, "value", node_names, true);
             if inner_calls.is_empty() {
                 Vec::new()
             } else {
+                let iter_expr = if borrowed {
+                    expr.to_owned()
+                } else {
+                    format!("&{expr}")
+                };
                 vec![format!(
-                    "for value in {expr} {{\n{}\n}}",
+                    "for value in {iter_expr} {{\n{}\n}}",
                     inner_calls
                         .into_iter()
                         .map(|line| format!("    {line}"))
@@ -59,6 +69,11 @@ fn recurse_calls_for_type(ty: &SyntaxTypeUse, expr: &str, node_names: &[String])
             }
         }
         SyntaxTypeUse::Ref { name } if node_names.iter().any(|node| node == name) => {
+            let expr = if borrowed {
+                expr.to_owned()
+            } else {
+                format!("&{expr}")
+            };
             vec![format!("collect_{}({expr}, out);", snake_case(name))]
         }
         _ => Vec::new(),
@@ -186,8 +201,9 @@ pub(crate) fn render_hover_block(
                 rows.extend(field_names.into_iter().flat_map(|field_name| {
                     recurse_calls_for_type(
                         &fields[&field_name].value,
-                        &format!("&node.{}", rust_ident(&field_name)),
+                        &format!("node.{}", rust_ident(&field_name)),
                         node_names,
+                        false,
                     )
                 }));
                 rows.join("\n")
@@ -240,6 +256,7 @@ pub(crate) fn render_hover_block(
                                         &fields[field_name].value,
                                         &rust_ident(field_name),
                                         node_names,
+                                        true,
                                     )
                                 }));
                                 let rows = rows.join("\n");

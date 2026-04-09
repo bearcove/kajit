@@ -783,6 +783,20 @@ fn format_module_smoke() {
     .to_owned()
 }
 
+pub(crate) fn render_default_resolve_file() -> String {
+    format_generated_file(
+        r#"
+use super::*;
+use crate::schema_poc::ResolutionSet;
+
+pub fn resolve(_source: &str) -> Result<ResolutionSet, String> {
+    Ok(ResolutionSet::default())
+}
+"#
+        .to_owned(),
+    )
+}
+
 fn format_generated_file(raw: String) -> String {
     let body = prettyplease::unparse(&syn::parse_file(&raw).expect("generated file should parse"));
     let body = add_breathing_room(&body);

@@ -17,6 +17,7 @@ pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> 
     let schema_paths = [
         workspace_root.join("notes/unified-ast/pilot/hir.repr.styx"),
         workspace_root.join("notes/unified-ast/pilot/asm.repr.styx"),
+        workspace_root.join("notes/unified-ast/pilot/mir.repr.styx"),
     ];
     let mut reprs = Vec::new();
     for schema_path in schema_paths {
@@ -48,6 +49,16 @@ pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> 
         fs::write(&path, generated.contents)
             .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
         written.push(path);
+    }
+
+    for repr in &reprs {
+        let module_dir = out_dir.join(repr.name.to_ascii_lowercase());
+        let resolve_path = module_dir.join("resolve.rs");
+        if !resolve_path.exists() {
+            fs::write(&resolve_path, render_module::render_default_resolve_file())
+                .map_err(|e| format!("failed to write {}: {e}", resolve_path.display()))?;
+            written.push(resolve_path);
+        }
     }
 
     Ok(written)

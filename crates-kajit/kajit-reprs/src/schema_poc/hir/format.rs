@@ -209,3 +209,51 @@ pub fn format_type_def(node: &TypeDef) -> String {
 fn write_type_def(w: &mut Writer, node: &TypeDef) {
     w.text(&format!("{:?}", node));
 }
+pub fn format_binary_op(node: &BinaryOp) -> String {
+    let mut w = Writer::new();
+    write_binary_op(&mut w, node);
+    w.finish()
+}
+fn write_binary_op(w: &mut Writer, node: &BinaryOp) {
+    match node {
+        BinaryOp::Add => {
+            w.text("Add");
+        }
+        BinaryOp::Sub => {
+            w.text("Sub");
+        }
+    }
+}
+pub fn format_local_kind(node: &LocalKind) -> String {
+    let mut w = Writer::new();
+    write_local_kind(&mut w, node);
+    w.finish()
+}
+fn write_local_kind(w: &mut Writer, node: &LocalKind) {
+    match node {
+        LocalKind::Local => {
+            w.text("Local");
+        }
+        LocalKind::Temp => {
+            w.text("Temp");
+        }
+    }
+}
+pub fn format_type_def_kind(node: &TypeDefKind) -> String {
+    let mut w = Writer::new();
+    write_type_def_kind(&mut w, node);
+    w.finish()
+}
+fn write_type_def_kind(w: &mut Writer, node: &TypeDefKind) {
+    match node {
+        TypeDefKind::Alias => {
+            w.text("Alias");
+        }
+        TypeDefKind::Enum => {
+            w.text("Enum");
+        }
+        TypeDefKind::Struct => {
+            w.text("Struct");
+        }
+    }
+}

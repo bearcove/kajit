@@ -56,6 +56,7 @@ repr @module{
             SlotId @token(int)
             StackAllocId @token(int)
             BlobId @token(int)
+            Symbol @token(ident)
             Width @choice(
                 @variant(W1 @seq("w1"))
                 @variant(W2 @seq("w2"))
@@ -222,7 +223,7 @@ repr @module{
             ConstRef @choice(
                 @variant(Named @seq(
                     "@"
-                    @field(name @token(ident))
+                    @field(name @ref(Symbol))
                 ))
                 @variant(Value @field(value @ref(Nat)))
             )
@@ -230,7 +231,7 @@ repr @module{
             IntrinsicRef @choice(
                 @variant(Named @seq(
                     "@"
-                    @field(name @token(ident))
+                    @field(name @ref(Symbol))
                 ))
                 @variant(Address @field(value @ref(Nat)))
             )
@@ -539,6 +540,8 @@ repr @module{
     support {
         /// A plain non-negative integer literal/count.
         Nat @int
+        /// A bare symbolic identifier.
+        Symbol @string
         /// A virtual register index.
         VReg @id
         /// A function identifier in the current CFG-MIR container.
@@ -649,10 +652,10 @@ repr @module{
             function_id @FunctionId
             /// Entry block for the function.
             entry @BlockId
-            /// Data arguments available at the function entry.
-            data_args @seq(@VReg)
-            /// Data results returned from the function.
-            data_results @seq(@VReg)
+            /// Printed `data_args` header line for the function.
+            data_args @DataArgsLine
+            /// Printed `data_results` header line for the function.
+            data_results @DataResultsLine
             /// Live blocks in canonical order.
             blocks @seq(@Block)
             /// Non-terminator instructions in arena order.
@@ -710,10 +713,12 @@ repr @module{
         EdgeArg @enum{
             /// Identity mapping: the same vreg flows through unchanged.
             Identity @struct{
+                prov @Prov
                 vreg @VReg
             }
             /// Explicit source-to-target mapping for a successor parameter.
             Mapped @struct{
+                prov @Prov
                 target @VReg
                 source @VReg
             }
@@ -751,14 +756,17 @@ repr @module{
         FixedReg @enum{
             /// An ABI argument register.
             AbiArg @struct{
+                prov @Prov
                 index @Nat
             }
             /// An ABI return register.
             AbiRet @struct{
+                prov @Prov
                 index @Nat
             }
             /// A hardware register encoding.
             HwReg @struct{
+                prov @Prov
                 index @Nat
             }
         }
@@ -767,10 +775,12 @@ repr @module{
         ConstRef @enum{
             /// A named constant.
             Named @struct{
+                prov @Prov
                 name @Symbol
             }
             /// A raw integer constant.
             Value @struct{
+                prov @Prov
                 value @Nat
             }
         }
@@ -779,10 +789,12 @@ repr @module{
         IntrinsicRef @enum{
             /// A named intrinsic reference.
             Named @struct{
+                prov @Prov
                 name @Symbol
             }
             /// A raw address reference.
             Address @struct{
+                prov @Prov
                 value @Nat
             }
         }
@@ -791,22 +803,27 @@ repr @module{
         InstOp @enum{
             /// Materialize an immediate constant.
             Const @struct{
+                prov @Prov
                 value @ConstRef
             }
             /// Load the runtime address of an embedded data blob.
             DataAddr @struct{
+                prov @Prov
                 blob_id @BlobId
             }
             /// Load the address of an external symbol.
             ExternAddr @struct{
+                prov @Prov
                 symbol @IntrinsicRef
             }
             /// Execute a binary arithmetic or comparison op.
             BinOp @struct{
+                prov @Prov
                 op @BinOpKind
             }
             /// Execute a unary op.
             UnaryOp @struct{
+                prov @Prov
                 op @UnaryOp
             }
             /// Copy a value between virtual registers.
@@ -815,38 +832,47 @@ repr @module{
             }
             /// Produce the address of an abstract stack allocation.
             StackAlloc @struct{
+                prov @Prov
                 id @StackAllocId
             }
             /// Store a scalar value to memory.
             StoreToAddr @struct{
+                prov @Prov
                 width @Width
             }
             /// Load a scalar value from memory.
             LoadFromAddr @struct{
+                prov @Prov
                 width @Width
             }
             /// Write a value to a stack slot.
             WriteToSlot @struct{
+                prov @Prov
                 slot @SlotId
             }
             /// Read a value from a stack slot.
             ReadFromSlot @struct{
+                prov @Prov
                 slot @SlotId
             }
             /// Call an external/raw intrinsic by reference.
             CallIntrinsic @struct{
+                prov @Prov
                 func @IntrinsicRef
             }
             /// Call a pure intrinsic by reference.
             CallPure @struct{
+                prov @Prov
                 func @IntrinsicRef
             }
             /// Call an effectful intrinsic by reference.
             CallEffect @struct{
+                prov @Prov
                 func @IntrinsicRef
             }
             /// Call another lowered lambda by ID.
             CallLambda @struct{
+                prov @Prov
                 target @LambdaId
             }
         }
@@ -855,6 +881,7 @@ repr @module{
         UnaryOp @enum{
             /// Sign-extend from a source width to 64 bits.
             SignExtend @struct{
+                prov @Prov
                 from_width @Width
             }
         }
@@ -868,11 +895,11 @@ repr @module{
             /// Stable instruction ID.
             id @InstId
             /// Destination operands printed before `=`.
-            defs @seq(@Operand)
+            defs @optional(@seq(@Operand))
             /// The opcode and its payload.
             op @InstOp
             /// Source operands printed after the opcode.
-            uses @seq(@Operand)
+            uses @optional(@seq(@Operand))
             /// Optional caller-saved clobber marker.
             clobbers @optional(@ClobberKind)
         }
@@ -885,22 +912,26 @@ repr @module{
             }
             /// Unconditional branch to a single edge.
             Branch @struct{
+                prov @Prov
                 edge @EdgeId
             }
             /// Branch if the condition is nonzero.
             BranchIf @struct{
+                prov @Prov
                 cond @VReg
                 taken @EdgeId
                 fallthrough @EdgeId
             }
             /// Branch if the condition is zero.
             BranchIfZero @struct{
+                prov @Prov
                 cond @VReg
                 taken @EdgeId
                 fallthrough @EdgeId
             }
             /// Jump through a table of edge targets.
             JumpTable @struct{
+                prov @Prov
                 predicate @VReg
                 targets @seq(@EdgeId)
                 default @EdgeId

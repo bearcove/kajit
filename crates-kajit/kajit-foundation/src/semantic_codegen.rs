@@ -80,10 +80,15 @@ fn collect_annotated_literals(
     }
 }
 
-fn recurse_calls_for_type(ty: &SyntaxTypeUse, expr: &str, node_names: &[String]) -> Vec<String> {
+fn recurse_calls_for_type(
+    ty: &SyntaxTypeUse,
+    expr: &str,
+    node_names: &[String],
+    borrowed: bool,
+) -> Vec<String> {
     match ty {
         SyntaxTypeUse::Optional(inner) => {
-            let inner_calls = recurse_calls_for_type(inner, "value", node_names);
+            let inner_calls = recurse_calls_for_type(inner, "value", node_names, true);
             if inner_calls.is_empty() {
                 Vec::new()
             } else {
@@ -98,12 +103,17 @@ fn recurse_calls_for_type(ty: &SyntaxTypeUse, expr: &str, node_names: &[String])
             }
         }
         SyntaxTypeUse::Seq(inner) => {
-            let inner_calls = recurse_calls_for_type(inner, "value", node_names);
+            let inner_calls = recurse_calls_for_type(inner, "value", node_names, true);
             if inner_calls.is_empty() {
                 Vec::new()
             } else {
+                let iter_expr = if borrowed {
+                    expr.to_owned()
+                } else {
+                    format!("&{expr}")
+                };
                 vec![format!(
-                    "for value in {expr} {{\n{}\n}}",
+                    "for value in {iter_expr} {{\n{}\n}}",
                     inner_calls
                         .into_iter()
                         .map(|line| format!("    {line}"))
@@ -113,6 +123,11 @@ fn recurse_calls_for_type(ty: &SyntaxTypeUse, expr: &str, node_names: &[String])
             }
         }
         SyntaxTypeUse::Ref { name } if node_names.iter().any(|node| node == name) => {
+            let expr = if borrowed {
+                expr.to_owned()
+            } else {
+                format!("&{expr}")
+            };
             vec![format!(
                 "collect_{}(source, {expr}, out);",
                 snake_case(name)
@@ -257,8 +272,9 @@ pub(crate) fn render_semantic_block(
                         .flat_map(|field_name| {
                             recurse_calls_for_type(
                                 &fields[&field_name].value,
-                                &format!("&node.{}", rust_ident(&field_name)),
+                                &format!("node.{}", rust_ident(&field_name)),
                                 node_names,
+                                false,
                             )
                         })
                         .collect::<Vec<_>>()
@@ -360,12 +376,13 @@ pub(crate) fn render_semantic_block(
                                 let recurse_rows = field_names
                                     .iter()
                                     .flat_map(|field_name| {
-                                        recurse_calls_for_type(
-                                            &fields[field_name].value,
-                                            &rust_ident(field_name),
-                                            node_names,
-                                        )
-                                    })
+                                    recurse_calls_for_type(
+                                        &fields[field_name].value,
+                                        &rust_ident(field_name),
+                                        node_names,
+                                        true,
+                                    )
+                                })
                                     .collect::<Vec<_>>();
                                 let rows = [
                                     "let current_prov = node.provenance();".to_owned(),

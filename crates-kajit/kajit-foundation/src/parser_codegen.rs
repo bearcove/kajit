@@ -97,6 +97,12 @@ fn render_value_parser(
     node_names: &[String],
     box_node_refs: bool,
 ) -> Result<String, String> {
+    if let SyntaxTypeUse::Optional(inner_ty) = ty
+        && !matches!(rule, SyntaxRule::Optional { .. })
+    {
+        return render_value_parser(repr, rule, inner_ty, rule_names, node_names, box_node_refs);
+    }
+
     match rule {
         SyntaxRule::Token { name } => render_token_value_parser(repr, name, ty),
         SyntaxRule::Ref { name } => {
@@ -157,6 +163,20 @@ fn flatten_struct_rule_items(
             Ok(vec![SeqItem::Bind {
                 name: field_name.to_owned(),
                 parser,
+            }])
+        }
+        SyntaxRule::Optional { inner } => {
+            let nested = flatten_struct_rule_items(repr, inner, fields, rule_names, node_names)?;
+            let (chain, names) = render_binding_chain(&nested)?;
+            if names.len() != 1 {
+                return Err(format!(
+                    "optional struct item must bind exactly one field, got {:?}",
+                    names
+                ));
+            }
+            Ok(vec![SeqItem::Bind {
+                name: names[0].clone(),
+                parser: format!("({chain}).or_not()"),
             }])
         }
         SyntaxRule::Literal(text) => Ok(vec![SeqItem::Ignore(format!("just({text:?}).padded()"))]),

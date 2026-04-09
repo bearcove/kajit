@@ -60,12 +60,12 @@ pub struct Literal {
 /// The kind of local binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LocalKind {
-    /// A compiler-introduced temporary.
-    #[default]
-    Temp,
-
     /// A named source-level local.
+    #[default]
     Local,
+
+    /// A compiler-introduced temporary.
+    Temp,
 }
 
 /// A named type reference in HIR.
