@@ -2,11 +2,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 mod formatter_codegen;
+mod hover_codegen;
 mod normalize;
 mod parser_codegen;
 mod render_helpers;
 mod render_module;
 mod schema;
+mod semantic_codegen;
 
 pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> {
     let schema_paths = [

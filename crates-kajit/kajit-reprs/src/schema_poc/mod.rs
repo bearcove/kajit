@@ -12,6 +12,30 @@ pub struct ReprSpec {
     pub validate: fn(&str) -> Result<(), String>,
 
     pub format: fn(&str) -> Result<String, String>,
+
+    pub semantic_tokens: fn(&str) -> Vec<SemanticToken>,
+
+    pub hover_entries: fn(&str) -> Vec<HoverEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticToken {
+    pub start: u32,
+
+    pub end: u32,
+
+    pub kind: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HoverEntry {
+    pub start: u32,
+
+    pub end: u32,
+
+    pub markdown: String,
+
+    pub priority: u8,
 }
 fn validate_hir(source: &str) -> Result<(), String> {
     hir::parse_root_text(source).map(|_| ())
@@ -20,12 +44,24 @@ fn format_hir(source: &str) -> Result<String, String> {
     let root = hir::parse_root_text(source)?;
     Ok(hir::format_root_text(&root))
 }
+fn semantic_tokens_hir(source: &str) -> Vec<SemanticToken> {
+    hir::semantic_tokens(source)
+}
+fn hover_entries_hir(source: &str) -> Vec<HoverEntry> {
+    hir::hover_entries(source)
+}
 fn validate_asm(source: &str) -> Result<(), String> {
     asm::parse_root_text(source).map(|_| ())
 }
 fn format_asm(source: &str) -> Result<String, String> {
     let root = asm::parse_root_text(source)?;
     Ok(asm::format_root_text(&root))
+}
+fn semantic_tokens_asm(source: &str) -> Vec<SemanticToken> {
+    asm::semantic_tokens(source)
+}
+fn hover_entries_asm(source: &str) -> Vec<HoverEntry> {
+    asm::hover_entries(source)
 }
 
 pub static REPRS: &[ReprSpec] = &[
@@ -34,11 +70,15 @@ pub static REPRS: &[ReprSpec] = &[
         file_ext: hir::REPR_FILE_EXT,
         validate: validate_hir,
         format: format_hir,
+        semantic_tokens: semantic_tokens_hir,
+        hover_entries: hover_entries_hir,
     },
     ReprSpec {
         name: asm::REPR_NAME,
         file_ext: asm::REPR_FILE_EXT,
         validate: validate_asm,
         format: format_asm,
+        semantic_tokens: semantic_tokens_asm,
+        hover_entries: hover_entries_asm,
     },
 ];

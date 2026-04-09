@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use crate::normalize::{
-    DocumentedValue, NormalizedNodeDecl, NormalizedRepr, SyntaxTypeUse, is_string_scalar_type,
+    DocumentedValue, NormalizedNodeDecl, NormalizedRepr, SyntaxTypeUse, is_int_scalar_type,
+    is_string_scalar_type,
 };
-use crate::render_helpers::{rust_ident, snake_case};
+use crate::render_helpers::{is_prov_only_struct, rust_ident, snake_case};
 
 #[derive(Debug, Clone)]
 enum TemplatePart {
@@ -145,7 +146,17 @@ fn render_node_formatter(
 
                     let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
                     field_names.sort();
-                    let pattern = if used.is_empty() {
+                    let prov_tag = repr
+                        .common
+                        .get("provenance")
+                        .and_then(|ty| match ty {
+                            SyntaxTypeUse::Ref { name } => Some(name.as_str()),
+                            _ => None,
+                        })
+                        .unwrap_or("Prov");
+                    let pattern = if is_prov_only_struct(fields, prov_tag) {
+                        "_value".to_owned()
+                    } else if used.is_empty() {
                         "..".to_owned()
                     } else {
                         let mut binders = used
@@ -182,13 +193,33 @@ fn render_node_formatter(
                         repr,
                         node_names,
                     )?;
-                    arms.push(format!(
-                        "        {node_name}::{variant_name} {{ {pattern} }} => {{\n{body}\n        }}"
-                    ));
+                    if is_prov_only_struct(fields, prov_tag) {
+                        arms.push(format!(
+                            "        {node_name}::{variant_name}({pattern}) => {{\n{body}\n        }}"
+                        ));
+                    } else {
+                        arms.push(format!(
+                            "        {node_name}::{variant_name} {{ {pattern} }} => {{\n{body}\n        }}"
+                        ));
+                    }
                 } else {
-                    arms.push(format!(
-                        "        other @ {node_name}::{variant_name} {{ .. }} => {{ w.text(&format!(\"{{:?}}\", other)); }}"
-                    ));
+                    let prov_tag = repr
+                        .common
+                        .get("provenance")
+                        .and_then(|ty| match ty {
+                            SyntaxTypeUse::Ref { name } => Some(name.as_str()),
+                            _ => None,
+                        })
+                        .unwrap_or("Prov");
+                    if is_prov_only_struct(fields, prov_tag) {
+                        arms.push(format!(
+                            "        other @ {node_name}::{variant_name}(..) => {{ w.text(&format!(\"{{:?}}\", other)); }}"
+                        ));
+                    } else {
+                        arms.push(format!(
+                            "        other @ {node_name}::{variant_name} {{ .. }} => {{ w.text(&format!(\"{{:?}}\", other)); }}"
+                        ));
+                    }
                 }
             }
             Ok(format!(
@@ -342,7 +373,10 @@ fn render_value_write_lines(
         }
         SyntaxTypeUse::Ref { name } => Ok(vec![match () {
             _ if is_string_scalar_type(repr, name) => {
-                format!("    {writer_name}.text(&{expr}.0);")
+                format!("    {writer_name}.text(&{expr}.text);")
+            }
+            _ if is_int_scalar_type(repr, name) => {
+                format!("    {writer_name}.text(&{expr}.value.to_string());")
             }
             _ => format!("    {writer_name}.text(&format!(\"{{:?}}\", {expr}));"),
         }]),

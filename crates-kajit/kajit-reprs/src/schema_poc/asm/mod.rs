@@ -2,19 +2,25 @@
 
 pub mod ast;
 pub mod format;
+pub mod hover;
 pub mod meta;
 pub mod parse;
 pub mod provenance;
+pub mod semantic;
 pub mod visit;
 
 pub use ast::*;
 
 pub use format::*;
 
+pub use hover::*;
+
 pub use meta::*;
 
 pub use parse::*;
 
 pub use provenance::*;
+
+pub use semantic::*;
 
 pub use visit::*;

@@ -69,7 +69,7 @@ fn allocate_a64_labels(
     for item in items {
         if let A64Item::Label { name, .. } = item {
             label_map
-                .entry(name.0.clone())
+                .entry(name.text.clone())
                 .or_insert_with(|| emitter.new_label());
         }
     }
@@ -91,27 +91,29 @@ fn emit_a64_item(
             let label_id = lookup_a64_label(label_map, name)?;
             emitter.bind_label(label_id).map_err(map_err)
         }
-        A64Item::Ret { prov } => {
+        A64Item::Ret { prov, .. } => {
             set_source_location(emitter, prov, source);
             emitter.emit_ret().map_err(map_err)
         }
-        A64Item::Nop { prov } => {
+        A64Item::Nop { prov, .. } => {
             set_source_location(emitter, prov, source);
             emitter.emit_nop().map_err(map_err)
         }
-        A64Item::Movz { rd, imm, prov } => {
+        A64Item::Movz { rd, imm, prov, .. } => {
             set_source_location(emitter, prov, source);
             emitter
                 .emit_movz_imm(Width::X64, lower_a64_reg(rd), parse_imm_u16(imm)?, 0)
                 .map_err(map_err)
         }
-        A64Item::Mov { rd, rm, prov } => {
+        A64Item::Mov { rd, rm, prov, .. } => {
             set_source_location(emitter, prov, source);
             emitter
                 .emit_mov_reg(Width::X64, lower_a64_reg(rd), lower_a64_reg(rm))
                 .map_err(map_err)
         }
-        A64Item::AddImm { rd, rn, imm, prov } => {
+        A64Item::AddImm {
+            rd, rn, imm, prov, ..
+        } => {
             set_source_location(emitter, prov, source);
             emitter
                 .emit_add_imm(
@@ -123,7 +125,7 @@ fn emit_a64_item(
                 )
                 .map_err(map_err)
         }
-        A64Item::B { target, prov } => {
+        A64Item::B { target, prov, .. } => {
             set_source_location(emitter, prov, source);
             let label_id = lookup_a64_label(label_map, target)?;
             emitter.emit_b_label(label_id).map_err(map_err)
@@ -152,7 +154,7 @@ fn allocate_x64_labels(
     for item in items {
         if let X64Item::Label { name, .. } = item {
             label_map
-                .entry(name.0.clone())
+                .entry(name.text.clone())
                 .or_insert_with(|| emitter.new_label());
         }
     }
@@ -171,15 +173,15 @@ fn emit_x64_item(
             let label_id = lookup_x64_label(label_map, name)?;
             emitter.bind_label(label_id).map_err(map_err)
         }
-        X64Item::Ret { prov } => {
+        X64Item::Ret { prov, .. } => {
             set_source_location(emitter, prov, source);
             emitter.emit_with(crate::x64::encode_ret).map_err(map_err)
         }
-        X64Item::Nop { prov } => {
+        X64Item::Nop { prov, .. } => {
             set_source_location(emitter, prov, source);
             emitter.emit_with(crate::x64::encode_nop).map_err(map_err)
         }
-        X64Item::MovImm { rd, imm, prov } => {
+        X64Item::MovImm { rd, imm, prov, .. } => {
             set_source_location(emitter, prov, source);
             let rd = lower_x64_reg(rd);
             let imm = parse_imm_u64(imm)?;
@@ -187,7 +189,7 @@ fn emit_x64_item(
                 .emit_with(|buf| crate::x64::encode_mov_r64_imm64(rd, imm, buf))
                 .map_err(map_err)
         }
-        X64Item::MovReg { rd, rm, prov } => {
+        X64Item::MovReg { rd, rm, prov, .. } => {
             set_source_location(emitter, prov, source);
             emitter
                 .emit_with(|buf| {
@@ -195,14 +197,14 @@ fn emit_x64_item(
                 })
                 .map_err(map_err)
         }
-        X64Item::AddImm { rd, imm, prov } => {
+        X64Item::AddImm { rd, imm, prov, .. } => {
             set_source_location(emitter, prov, source);
             let imm = parse_imm_u32(imm)?;
             emitter
                 .emit_with(|buf| crate::x64::encode_add_r64_imm32(lower_x64_reg(rd), imm, buf))
                 .map_err(map_err)
         }
-        X64Item::Jmp { target, prov } => {
+        X64Item::Jmp { target, prov, .. } => {
             set_source_location(emitter, prov, source);
             let label_id = lookup_x64_label(label_map, target)?;
             emitter.emit_jmp_label(label_id).map_err(map_err)
@@ -212,41 +214,35 @@ fn emit_x64_item(
 
 fn lower_a64_reg(reg: &A64Reg) -> crate::aarch64::Reg {
     match reg {
-        A64Reg::X0 {} => crate::aarch64::Reg::X0,
-        A64Reg::X1 {} => crate::aarch64::Reg::X1,
-        A64Reg::X2 {} => crate::aarch64::Reg::X2,
-        A64Reg::X3 {} => crate::aarch64::Reg::X3,
-        A64Reg::Sp {} => crate::aarch64::Reg::SP,
+        A64Reg::X0(..) => crate::aarch64::Reg::X0,
+        A64Reg::X1(..) => crate::aarch64::Reg::X1,
+        A64Reg::X2(..) => crate::aarch64::Reg::X2,
+        A64Reg::X3(..) => crate::aarch64::Reg::X3,
+        A64Reg::Sp(..) => crate::aarch64::Reg::SP,
     }
 }
 
 fn lower_x64_reg(reg: &X64Reg) -> u8 {
     match reg {
-        X64Reg::Rax {} => 0,
-        X64Reg::Rcx {} => 1,
-        X64Reg::Rdx {} => 2,
-        X64Reg::Rbx {} => 3,
-        X64Reg::Rsp {} => 4,
-        X64Reg::Rbp {} => 5,
+        X64Reg::Rax(..) => 0,
+        X64Reg::Rcx(..) => 1,
+        X64Reg::Rdx(..) => 2,
+        X64Reg::Rbx(..) => 3,
+        X64Reg::Rsp(..) => 4,
+        X64Reg::Rbp(..) => 5,
     }
 }
 
 fn parse_imm_u16(imm: &Imm) -> Result<u16, String> {
-    imm.0
-        .parse::<u16>()
-        .map_err(|e| format!("invalid u16 immediate `{}`: {e}", imm.0))
+    u16::try_from(imm.value).map_err(|e| format!("invalid u16 immediate `{}`: {e}", imm.value))
 }
 
 fn parse_imm_u32(imm: &Imm) -> Result<u32, String> {
-    imm.0
-        .parse::<u32>()
-        .map_err(|e| format!("invalid u32 immediate `{}`: {e}", imm.0))
+    u32::try_from(imm.value).map_err(|e| format!("invalid u32 immediate `{}`: {e}", imm.value))
 }
 
 fn parse_imm_u64(imm: &Imm) -> Result<u64, String> {
-    imm.0
-        .parse::<u64>()
-        .map_err(|e| format!("invalid u64 immediate `{}`: {e}", imm.0))
+    Ok(imm.value)
 }
 
 fn lookup_a64_label(
@@ -254,9 +250,9 @@ fn lookup_a64_label(
     name: &LabelName,
 ) -> Result<crate::aarch64::LabelId, String> {
     label_map
-        .get(&name.0)
+        .get(&name.text)
         .copied()
-        .ok_or_else(|| format!("unknown AArch64 label `{}`", name.0))
+        .ok_or_else(|| format!("unknown AArch64 label `{}`", name.text))
 }
 
 fn lookup_x64_label(
@@ -264,9 +260,9 @@ fn lookup_x64_label(
     name: &LabelName,
 ) -> Result<crate::x64::LabelId, String> {
     label_map
-        .get(&name.0)
+        .get(&name.text)
         .copied()
-        .ok_or_else(|| format!("unknown x86-64 label `{}`", name.0))
+        .ok_or_else(|| format!("unknown x86-64 label `{}`", name.text))
 }
 
 fn set_source_location(emitter: &mut impl SourceLocEmitter, prov: &Prov, source: &str) {

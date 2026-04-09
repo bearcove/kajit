@@ -41,20 +41,37 @@ repr @module{
 
         /// Grammar rules for the currently supported pilot subset.
         rules {
+            /// The fixed `asm` header keyword.
+            AsmKeyword @seq("asm")
+
+            /// The AArch64 dialect tag named in the header.
+            AArch64DialectKeyword @seq("aarch64")
+
+            /// The x86-64 dialect tag named in the header.
+            X86_64DialectKeyword @seq("x86_64")
+
+            RetKeyword @seq("ret")
+            NopKeyword @seq("nop")
+            MovKeyword @seq("mov")
+            MovzKeyword @seq("movz")
+            AddKeyword @seq("add")
+            BKeyword @seq("b")
+            JmpKeyword @seq("jmp")
+
             /// A whole assembly program, disambiguated by dialect header.
             Program @choice(
                 /// An AArch64 assembly unit.
                 @variant(AArch64 @seq(
-                    "asm"
-                    "aarch64"
+                    @field(keyword @ref(AsmKeyword))
+                    @field(dialect @ref(AArch64DialectKeyword))
                     "{"
                     @field(items @repeat(@ref(A64Item)))
                     "}"
                 ))
                 /// An x86-64 assembly unit.
                 @variant(X86_64 @seq(
-                    "asm"
-                    "x86_64"
+                    @field(keyword @ref(AsmKeyword))
+                    @field(dialect @ref(X86_64DialectKeyword))
                     "{"
                     @field(items @repeat(@ref(X64Item)))
                     "}"
@@ -79,29 +96,29 @@ repr @module{
                 ))
                 /// Return from the current function.
                 @variant(Ret @seq(
-                    "ret"
+                    @field(op @ref(RetKeyword))
                 ))
                 /// A no-op instruction.
                 @variant(Nop @seq(
-                    "nop"
+                    @field(op @ref(NopKeyword))
                 ))
                 /// Move an immediate into a register.
                 @variant(Movz @seq(
-                    "movz"
+                    @field(op @ref(MovzKeyword))
                     @field(rd @ref(A64Reg))
                     ","
                     @field(imm @token(int))
                 ))
                 /// Move a register into another register.
                 @variant(Mov @seq(
-                    "mov"
+                    @field(op @ref(MovKeyword))
                     @field(rd @ref(A64Reg))
                     ","
                     @field(rm @ref(A64Reg))
                 ))
                 /// Add an immediate to a register.
                 @variant(AddImm @seq(
-                    "add"
+                    @field(op @ref(AddKeyword))
                     @field(rd @ref(A64Reg))
                     ","
                     @field(rn @ref(A64Reg))
@@ -110,7 +127,7 @@ repr @module{
                 ))
                 /// Branch to a label.
                 @variant(B @seq(
-                    "b"
+                    @field(op @ref(BKeyword))
                     @field(target @token(ident))
                 ))
             )
@@ -134,36 +151,36 @@ repr @module{
                 ))
                 /// Return from the current function.
                 @variant(Ret @seq(
-                    "ret"
+                    @field(op @ref(RetKeyword))
                 ))
                 /// A no-op instruction.
                 @variant(Nop @seq(
-                    "nop"
+                    @field(op @ref(NopKeyword))
                 ))
                 /// Move an immediate into a register.
                 @variant(MovImm @seq(
-                    "mov"
+                    @field(op @ref(MovKeyword))
                     @field(rd @ref(X64Reg))
                     ","
                     @field(imm @token(int))
                 ))
                 /// Move a register into another register.
                 @variant(MovReg @seq(
-                    "mov"
+                    @field(op @ref(MovKeyword))
                     @field(rd @ref(X64Reg))
                     ","
                     @field(rm @ref(X64Reg))
                 ))
                 /// Add an immediate to a register.
                 @variant(AddImm @seq(
-                    "add"
+                    @field(op @ref(AddKeyword))
                     @field(rd @ref(X64Reg))
                     ","
                     @field(imm @token(int))
                 ))
                 /// Jump to a label.
                 @variant(Jmp @seq(
-                    "jmp"
+                    @field(op @ref(JmpKeyword))
                     @field(target @token(ident))
                 ))
             )
@@ -171,10 +188,21 @@ repr @module{
 
         /// Canonical printer templates for the pilot subset.
         canonical_print {
+            AsmKeyword "asm"
+            AArch64DialectKeyword "aarch64"
+            X86_64DialectKeyword "x86_64"
+            RetKeyword "ret"
+            NopKeyword "nop"
+            MovKeyword "mov"
+            MovzKeyword "movz"
+            AddKeyword "add"
+            BKeyword "b"
+            JmpKeyword "jmp"
+
             /// Canonical AArch64 program layout.
-            Program.AArch64 "asm aarch64 {\n{items}\n}"
+            Program.AArch64 "{keyword} {dialect} {\n{items}\n}"
             /// Canonical x86-64 program layout.
-            Program.X86_64 "asm x86_64 {\n{items}\n}"
+            Program.X86_64 "{keyword} {dialect} {\n{items}\n}"
 
             A64Reg.X0 "x0"
             A64Reg.X1 "x1"
@@ -183,12 +211,12 @@ repr @module{
             A64Reg.Sp "sp"
 
             A64Item.Label "{name}:"
-            A64Item.Ret "ret"
-            A64Item.Nop "nop"
-            A64Item.Movz "movz {rd}, {imm}"
-            A64Item.Mov "mov {rd}, {rm}"
-            A64Item.AddImm "add {rd}, {rn}, {imm}"
-            A64Item.B "b {target}"
+            A64Item.Ret "{op}"
+            A64Item.Nop "{op}"
+            A64Item.Movz "{op} {rd}, {imm}"
+            A64Item.Mov "{op} {rd}, {rm}"
+            A64Item.AddImm "{op} {rd}, {rn}, {imm}"
+            A64Item.B "{op} {target}"
 
             X64Reg.Rax "rax"
             X64Reg.Rbx "rbx"
@@ -198,12 +226,54 @@ repr @module{
             X64Reg.Rbp "rbp"
 
             X64Item.Label "{name}:"
-            X64Item.Ret "ret"
-            X64Item.Nop "nop"
-            X64Item.MovImm "mov {rd}, {imm}"
-            X64Item.MovReg "mov {rd}, {rm}"
-            X64Item.AddImm "add {rd}, {imm}"
-            X64Item.Jmp "jmp {target}"
+            X64Item.Ret "{op}"
+            X64Item.Nop "{op}"
+            X64Item.MovImm "{op} {rd}, {imm}"
+            X64Item.MovReg "{op} {rd}, {rm}"
+            X64Item.AddImm "{op} {rd}, {imm}"
+            X64Item.Jmp "{op} {target}"
+        }
+
+        semantic_tokens {
+            field.Program.AArch64.keyword keyword
+            field.Program.AArch64.dialect keyword
+            field.Program.X86_64.keyword keyword
+            field.Program.X86_64.dialect keyword
+
+            field.A64Item.Ret.op keyword
+            field.A64Item.Nop.op keyword
+            field.A64Item.Movz.op keyword
+            field.A64Item.Mov.op keyword
+            field.A64Item.AddImm.op keyword
+            field.A64Item.B.op keyword
+
+            field.X64Item.Ret.op keyword
+            field.X64Item.Nop.op keyword
+            field.X64Item.MovImm.op keyword
+            field.X64Item.MovReg.op keyword
+            field.X64Item.AddImm.op keyword
+            field.X64Item.Jmp.op keyword
+
+            field.A64Item.Label.name label
+            field.A64Item.B.target label
+            field.A64Item.Movz.imm number
+            field.A64Item.AddImm.imm number
+            field.X64Item.Label.name label
+            field.X64Item.Jmp.target label
+            field.X64Item.MovImm.imm number
+            field.X64Item.AddImm.imm number
+
+            variant.A64Reg.X0 enumMember
+            variant.A64Reg.X1 enumMember
+            variant.A64Reg.X2 enumMember
+            variant.A64Reg.X3 enumMember
+            variant.A64Reg.Sp enumMember
+            variant.X64Reg.Rax enumMember
+            variant.X64Reg.Rbx enumMember
+            variant.X64Reg.Rcx enumMember
+            variant.X64Reg.Rdx enumMember
+            variant.X64Reg.Rsp enumMember
+            variant.X64Reg.Rbp enumMember
         }
     }
 
@@ -220,7 +290,7 @@ repr @module{
         /// A symbolic label name.
         LabelName @string
         /// A decimal immediate value in canonical ASM text.
-        Imm @string
+        Imm @int
     }
 
     /// Structural AST nodes for the pilot ASM surface.
@@ -229,6 +299,12 @@ repr @module{
         Program @enum{
             /// An AArch64 assembly unit.
             AArch64 @struct{
+                /// Leading `asm` keyword.
+                keyword @AsmKeyword
+                /// Dialect tag from the header.
+                dialect @AArch64DialectKeyword
+                /// Source provenance for the program.
+                prov @Prov
                 /// Optional program-level docs.
                 docs @optional(@DocBlock)
                 /// Ordered labels and instructions.
@@ -237,6 +313,12 @@ repr @module{
 
             /// An x86-64 assembly unit.
             X86_64 @struct{
+                /// Leading `asm` keyword.
+                keyword @AsmKeyword
+                /// Dialect tag from the header.
+                dialect @X86_64DialectKeyword
+                /// Source provenance for the program.
+                prov @Prov
                 /// Optional program-level docs.
                 docs @optional(@DocBlock)
                 /// Ordered labels and instructions.
@@ -244,13 +326,42 @@ repr @module{
             }
         }
 
+        /// The fixed leading keyword in an ASM document header.
+        AsmKeyword @struct{ prov @Prov }
+
+        /// The AArch64 dialect tag in the header.
+        AArch64DialectKeyword @struct{ prov @Prov }
+
+        /// The x86-64 dialect tag in the header.
+        X86_64DialectKeyword @struct{ prov @Prov }
+
+        /// Return from the current function.
+        RetKeyword @struct{ prov @Prov }
+        /// Perform no operation.
+        NopKeyword @struct{ prov @Prov }
+        /// Move data between registers or operands.
+        MovKeyword @struct{ prov @Prov }
+        /// Move a zero-extended immediate into a register.
+        MovzKeyword @struct{ prov @Prov }
+        /// Add an operand to a destination register.
+        AddKeyword @struct{ prov @Prov }
+        /// Branch to a label in AArch64.
+        BKeyword @struct{ prov @Prov }
+        /// Jump to a label in x86-64.
+        JmpKeyword @struct{ prov @Prov }
+
         /// The AArch64 register subset supported by the pilot.
         A64Reg @enum{
-            X0 @struct{}
-            X1 @struct{}
-            X2 @struct{}
-            X3 @struct{}
-            Sp @struct{}
+            /// General-purpose register x0.
+            X0 @struct{ prov @Prov }
+            /// General-purpose register x1.
+            X1 @struct{ prov @Prov }
+            /// General-purpose register x2.
+            X2 @struct{ prov @Prov }
+            /// General-purpose register x3.
+            X3 @struct{ prov @Prov }
+            /// Stack pointer register.
+            Sp @struct{ prov @Prov }
         }
 
         /// AArch64 labels and instructions.
@@ -265,18 +376,24 @@ repr @module{
 
             /// A return instruction.
             Ret @struct{
+                /// Opcode keyword.
+                op @RetKeyword
                 /// Source provenance for the item.
                 prov @Prov
             }
 
             /// A no-op instruction.
             Nop @struct{
+                /// Opcode keyword.
+                op @NopKeyword
                 /// Source provenance for the item.
                 prov @Prov
             }
 
             /// Move an immediate into a register.
             Movz @struct{
+                /// Opcode keyword.
+                op @MovzKeyword
                 /// Source provenance for the item.
                 prov @Prov
                 /// Destination register.
@@ -287,6 +404,8 @@ repr @module{
 
             /// Move a register into another register.
             Mov @struct{
+                /// Opcode keyword.
+                op @MovKeyword
                 /// Source provenance for the item.
                 prov @Prov
                 /// Destination register.
@@ -297,6 +416,8 @@ repr @module{
 
             /// Add an immediate to a register.
             AddImm @struct{
+                /// Opcode keyword.
+                op @AddKeyword
                 /// Source provenance for the item.
                 prov @Prov
                 /// Destination register.
@@ -309,6 +430,8 @@ repr @module{
 
             /// Branch to a symbolic label.
             B @struct{
+                /// Opcode keyword.
+                op @BKeyword
                 /// Source provenance for the item.
                 prov @Prov
                 /// Branch target label.
@@ -318,12 +441,18 @@ repr @module{
 
         /// The x86-64 register subset supported by the pilot.
         X64Reg @enum{
-            Rax @struct{}
-            Rbx @struct{}
-            Rcx @struct{}
-            Rdx @struct{}
-            Rsp @struct{}
-            Rbp @struct{}
+            /// Return-value and accumulator register.
+            Rax @struct{ prov @Prov }
+            /// Callee-saved general-purpose register.
+            Rbx @struct{ prov @Prov }
+            /// Count register.
+            Rcx @struct{ prov @Prov }
+            /// Data register.
+            Rdx @struct{ prov @Prov }
+            /// Stack pointer register.
+            Rsp @struct{ prov @Prov }
+            /// Base/frame pointer register.
+            Rbp @struct{ prov @Prov }
         }
 
         /// x86-64 labels and instructions.
@@ -338,18 +467,24 @@ repr @module{
 
             /// A return instruction.
             Ret @struct{
+                /// Opcode keyword.
+                op @RetKeyword
                 /// Source provenance for the item.
                 prov @Prov
             }
 
             /// A no-op instruction.
             Nop @struct{
+                /// Opcode keyword.
+                op @NopKeyword
                 /// Source provenance for the item.
                 prov @Prov
             }
 
             /// Move an immediate into a register.
             MovImm @struct{
+                /// Opcode keyword.
+                op @MovKeyword
                 /// Source provenance for the item.
                 prov @Prov
                 /// Destination register.
@@ -360,6 +495,8 @@ repr @module{
 
             /// Move a register into another register.
             MovReg @struct{
+                /// Opcode keyword.
+                op @MovKeyword
                 /// Source provenance for the item.
                 prov @Prov
                 /// Destination register.
@@ -370,6 +507,8 @@ repr @module{
 
             /// Add an immediate to a register.
             AddImm @struct{
+                /// Opcode keyword.
+                op @AddKeyword
                 /// Source provenance for the item.
                 prov @Prov
                 /// Destination register.
@@ -380,6 +519,8 @@ repr @module{
 
             /// Jump to a symbolic label.
             Jmp @struct{
+                /// Opcode keyword.
+                op @JmpKeyword
                 /// Source provenance for the item.
                 prov @Prov
                 /// Jump target label.

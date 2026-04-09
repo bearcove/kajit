@@ -71,6 +71,7 @@ pub(crate) struct ReprSyntax {
     pub(crate) tokens: HashMap<String, TokenExpr>,
     pub(crate) rules: HashMap<String, RuleExpr>,
     pub(crate) canonical_print: HashMap<String, String>,
+    pub(crate) semantic_tokens: Option<HashMap<String, String>>,
 }
 
 #[derive(Facet, Debug, Clone)]
@@ -130,6 +131,7 @@ pub(crate) enum TypeUse {
 #[repr(u8)]
 pub(crate) enum SupportDecl {
     String,
+    Int,
     StringSeq,
     Unit,
     Enum(SupportVariants),
@@ -370,6 +372,23 @@ fn validate_repr_schema(schema: &PilotSchemaDocument, path: &Path) -> Result<Loa
         }
     }
 
+    if let Some(semantic_tokens) = &repr.syntax.semantic_tokens {
+        for (target, kind) in semantic_tokens {
+            if kind.trim().is_empty() {
+                return Err(format!(
+                    "expected {} semantic_tokens.{target} to be non-empty",
+                    path.display()
+                ));
+            }
+            if !semantic_token_target_exists(repr, target) {
+                return Err(format!(
+                    "expected {} semantic_tokens.{target} to target a declared literal, field, or variant",
+                    path.display()
+                ));
+            }
+        }
+    }
+
     Ok(LoadedRepr {
         doc: schema.repr.doc.clone(),
         body: ReprBody {
@@ -386,6 +405,7 @@ fn validate_repr_schema(schema: &PilotSchemaDocument, path: &Path) -> Result<Loa
                 tokens: repr.syntax.tokens.clone(),
                 rules: repr.syntax.rules.clone(),
                 canonical_print: repr.syntax.canonical_print.clone(),
+                semantic_tokens: repr.syntax.semantic_tokens.clone(),
             },
             common: repr.common.clone(),
             support: repr.support.clone(),
@@ -469,4 +489,69 @@ fn canonical_print_target_exists(repr: &ReprBody, target: &str) -> bool {
     }
 
     nodes.keys().any(|name| documented_name(name) == target)
+}
+
+fn semantic_token_target_exists(repr: &ReprBody, target: &str) -> bool {
+    let Some(nodes) = &repr.nodes else {
+        return false;
+    };
+
+    if let Some(literal_text) = target.strip_prefix("literal.") {
+        return !literal_text.is_empty();
+    }
+
+    if let Some(path) = target.strip_prefix("field.") {
+        let parts = path.split('.').collect::<Vec<_>>();
+        return match parts.as_slice() {
+            [type_name, field_name] => nodes.iter().any(|(name, decl)| {
+                documented_name(name) == *type_name
+                    && match decl {
+                        NodeDecl::Node(fields) | NodeDecl::Struct(fields) => fields
+                            .fields
+                            .keys()
+                            .any(|field| documented_name(field) == *field_name),
+                        NodeDecl::Enum(_) | NodeDecl::Other { .. } => false,
+                    }
+            }),
+            [type_name, variant_name, field_name] => nodes.iter().any(|(name, decl)| {
+                documented_name(name) == *type_name
+                    && match decl {
+                        NodeDecl::Enum(variants) => {
+                            variants.variants.iter().any(|(variant, decl)| {
+                                documented_name(variant) == *variant_name
+                                    && match decl {
+                                        NodeDecl::Node(fields) | NodeDecl::Struct(fields) => fields
+                                            .fields
+                                            .keys()
+                                            .any(|field| documented_name(field) == *field_name),
+                                        NodeDecl::Enum(_) | NodeDecl::Other { .. } => false,
+                                    }
+                            })
+                        }
+                        NodeDecl::Node(_) | NodeDecl::Struct(_) | NodeDecl::Other { .. } => false,
+                    }
+            }),
+            _ => false,
+        };
+    }
+
+    if let Some(path) = target.strip_prefix("variant.") {
+        let parts = path.split('.').collect::<Vec<_>>();
+        return match parts.as_slice() {
+            [type_name, variant_name] => nodes.iter().any(|(name, decl)| {
+                documented_name(name) == *type_name
+                    && matches!(
+                        decl,
+                        NodeDecl::Enum(variants)
+                            if variants
+                                .variants
+                                .keys()
+                                .any(|variant| documented_name(variant) == *variant_name)
+                    )
+            }),
+            _ => false,
+        };
+    }
+
+    false
 }

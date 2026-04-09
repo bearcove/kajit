@@ -10,14 +10,10 @@ fn ws<'src>() -> impl Parser<'src, &'src str, (), ParseExtra<'src>> + Clone {
         .ignored()
 }
 fn token_ident<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> + Clone {
-    text::ident::<_, ParseExtra<'src>>()
-        .map(str::to_owned)
-        .padded_by(ws())
+    text::ident::<_, ParseExtra<'src>>().map(str::to_owned)
 }
 fn token_int<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> + Clone {
-    text::int::<_, ParseExtra<'src>>(10)
-        .map(str::to_owned)
-        .padded_by(ws())
+    text::int::<_, ParseExtra<'src>>(10).map(str::to_owned)
 }
 fn token_symbol<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> + Clone {
     just('@')
@@ -36,7 +32,6 @@ fn token_symbol<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>
             }
             out
         })
-        .padded_by(ws())
 }
 fn prov_from_span(span: chumsky::span::SimpleSpan<usize>, file_id: Option<u32>) -> Prov {
     Prov {
@@ -54,8 +49,15 @@ pub fn parse_root_text_rich(
 ) -> Result<Module, Vec<Rich<'_, char>>> {
     let expr_parser = recursive(move |expr_parser| {
         choice((
-            (((((just("call").padded()).ignore_then(token_symbol().map(Symbol)))
-                .then_ignore(just("(").padded()))
+            (((((just("call").padded()).ignore_then(
+                token_symbol()
+                    .map_with(move |text, e| Symbol {
+                        prov: prov_from_span(e.span(), file_id),
+                        text,
+                    })
+                    .then_ignore(ws()),
+            ))
+            .then_ignore(just("(").padded()))
             .then(
                 (expr_parser.clone())
                     .separated_by(just(",").padded())
@@ -68,11 +70,29 @@ pub fn parse_root_text_rich(
                 callee: callee,
                 prov: prov_from_span(e.span(), file_id),
             }),
-            (token_ident().map(Symbol)).map_with(move |name, e| Expr::Local {
+            (token_ident()
+                .map_with(move |text, e| Symbol {
+                    prov: prov_from_span(e.span(), file_id),
+                    text,
+                })
+                .then_ignore(ws()))
+            .map_with(move |name, e| Expr::Local {
                 name: name,
                 prov: prov_from_span(e.span(), file_id),
             }),
-            (token_int().map(Literal)).map_with(move |value, e| Expr::Literal {
+            (token_int()
+                .try_map(move |text, span| match text.parse::<u64>() {
+                    Ok(value) => Ok(Literal {
+                        prov: prov_from_span(span, file_id),
+                        value,
+                    }),
+                    Err(err) => Err(Rich::custom(
+                        span,
+                        format!("invalid integer literal {text:?}: {err}"),
+                    )),
+                })
+                .then_ignore(ws()))
+            .map_with(move |value, e| Expr::Literal {
                 prov: prov_from_span(e.span(), file_id),
                 value: value,
             }),
@@ -99,16 +119,35 @@ pub fn parse_root_text_rich(
         statements: statements,
     })
     .boxed();
-    let param_parser = (((token_ident().map(Symbol)).then_ignore(just(":").padded()))
-        .then(token_ident().map(Type)))
+    let param_parser = (((token_ident()
+        .map_with(move |text, e| Symbol {
+            prov: prov_from_span(e.span(), file_id),
+            text,
+        })
+        .then_ignore(ws()))
+    .then_ignore(just(":").padded()))
+    .then(
+        token_ident()
+            .map_with(move |text, e| Type {
+                prov: prov_from_span(e.span(), file_id),
+                text,
+            })
+            .then_ignore(ws()),
+    ))
     .map_with(move |(name, ty), e| Param {
         name: name,
         prov: prov_from_span(e.span(), file_id),
         ty: ty,
     })
     .boxed();
-    let function_parser = ((((((((just("fn").padded())
-        .ignore_then(token_ident().map(Symbol)))
+    let function_parser = ((((((((just("fn").padded()).ignore_then(
+        token_ident()
+            .map_with(move |text, e| Symbol {
+                prov: prov_from_span(e.span(), file_id),
+                text,
+            })
+            .then_ignore(ws()),
+    ))
     .then_ignore(just("(").padded()))
     .then(
         (param_parser.clone())
@@ -118,7 +157,14 @@ pub fn parse_root_text_rich(
     ))
     .then_ignore(just(")").padded()))
     .then_ignore(just("->").padded()))
-    .then(token_ident().map(Type)))
+    .then(
+        token_ident()
+            .map_with(move |text, e| Type {
+                prov: prov_from_span(e.span(), file_id),
+                text,
+            })
+            .then_ignore(ws()),
+    ))
     .then((block_parser.clone()).map(Box::new)))
     .map_with(move |(((name, params), return_type), body), e| Function {
         body: body,
@@ -134,9 +180,10 @@ pub fn parse_root_text_rich(
         (just("{").padded()).ignore_then((function_parser.clone()).repeated().collect::<Vec<_>>()),
     ))
     .then_ignore(just("}").padded()))
-    .map_with(move |functions, _e| Module {
+    .map_with(move |functions, e| Module {
         docs: None,
         functions: functions,
+        prov: prov_from_span(e.span(), file_id),
         type_defs: Vec::new(),
     })
     .boxed();

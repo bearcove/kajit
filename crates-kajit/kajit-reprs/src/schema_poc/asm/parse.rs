@@ -10,14 +10,10 @@ fn ws<'src>() -> impl Parser<'src, &'src str, (), ParseExtra<'src>> + Clone {
         .ignored()
 }
 fn token_ident<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> + Clone {
-    text::ident::<_, ParseExtra<'src>>()
-        .map(str::to_owned)
-        .padded_by(ws())
+    text::ident::<_, ParseExtra<'src>>().map(str::to_owned)
 }
 fn token_int<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> + Clone {
-    text::int::<_, ParseExtra<'src>>(10)
-        .map(str::to_owned)
-        .padded_by(ws())
+    text::int::<_, ParseExtra<'src>>(10).map(str::to_owned)
 }
 fn prov_from_span(span: chumsky::span::SimpleSpan<usize>, file_id: Option<u32>) -> Prov {
     Prov {
@@ -34,137 +30,357 @@ pub fn parse_root_text_rich(
     file_id: Option<u32>,
 ) -> Result<Program, Vec<Rich<'_, char>>> {
     let a64_reg_parser = choice((
-        ((just("x0").padded()).to(())).map_with(move |(), _e| A64Reg::X0 {}),
-        ((just("x1").padded()).to(())).map_with(move |(), _e| A64Reg::X1 {}),
-        ((just("x2").padded()).to(())).map_with(move |(), _e| A64Reg::X2 {}),
-        ((just("x3").padded()).to(())).map_with(move |(), _e| A64Reg::X3 {}),
-        ((just("sp").padded()).to(())).map_with(move |(), _e| A64Reg::Sp {}),
+        (just("x0").to(()))
+            .map_with(move |(), e| {
+                A64Reg::X0(X0 {
+                    prov: prov_from_span(e.span(), file_id),
+                })
+            })
+            .then_ignore(ws()),
+        (just("x1").to(()))
+            .map_with(move |(), e| {
+                A64Reg::X1(X1 {
+                    prov: prov_from_span(e.span(), file_id),
+                })
+            })
+            .then_ignore(ws()),
+        (just("x2").to(()))
+            .map_with(move |(), e| {
+                A64Reg::X2(X2 {
+                    prov: prov_from_span(e.span(), file_id),
+                })
+            })
+            .then_ignore(ws()),
+        (just("x3").to(()))
+            .map_with(move |(), e| {
+                A64Reg::X3(X3 {
+                    prov: prov_from_span(e.span(), file_id),
+                })
+            })
+            .then_ignore(ws()),
+        (just("sp").to(()))
+            .map_with(move |(), e| {
+                A64Reg::Sp(Sp {
+                    prov: prov_from_span(e.span(), file_id),
+                })
+            })
+            .then_ignore(ws()),
     ))
     .boxed();
+    let add_keyword_parser = (just("add").to(()))
+        .map_with(move |(), e| AddKeyword {
+            prov: prov_from_span(e.span(), file_id),
+        })
+        .then_ignore(ws())
+        .boxed();
+    let b_keyword_parser = (just("b").to(()))
+        .map_with(move |(), e| BKeyword {
+            prov: prov_from_span(e.span(), file_id),
+        })
+        .then_ignore(ws())
+        .boxed();
+    let mov_keyword_parser = (just("mov").to(()))
+        .map_with(move |(), e| MovKeyword {
+            prov: prov_from_span(e.span(), file_id),
+        })
+        .then_ignore(ws())
+        .boxed();
+    let movz_keyword_parser = (just("movz").to(()))
+        .map_with(move |(), e| MovzKeyword {
+            prov: prov_from_span(e.span(), file_id),
+        })
+        .then_ignore(ws())
+        .boxed();
+    let nop_keyword_parser = (just("nop").to(()))
+        .map_with(move |(), e| NopKeyword {
+            prov: prov_from_span(e.span(), file_id),
+        })
+        .then_ignore(ws())
+        .boxed();
+    let ret_keyword_parser = (just("ret").to(()))
+        .map_with(move |(), e| RetKeyword {
+            prov: prov_from_span(e.span(), file_id),
+        })
+        .then_ignore(ws())
+        .boxed();
     let a64_item_parser = choice((
-        ((token_ident().map(LabelName)).then_ignore(just(":").padded())).map_with(
-            move |name, e| A64Item::Label {
-                name: name,
+        ((token_ident()
+            .map_with(move |text, e| LabelName {
                 prov: prov_from_span(e.span(), file_id),
-            },
-        ),
-        ((just("ret").padded()).to(())).map_with(move |(), e| A64Item::Ret {
+                text,
+            })
+            .then_ignore(ws()))
+        .then_ignore(just(":").padded()))
+        .map_with(move |name, e| A64Item::Label {
+            name: name,
             prov: prov_from_span(e.span(), file_id),
         }),
-        ((just("nop").padded()).to(())).map_with(move |(), e| A64Item::Nop {
+        ((ret_keyword_parser.clone()).map(Box::new)).map_with(move |op, e| A64Item::Ret {
+            op: op,
             prov: prov_from_span(e.span(), file_id),
         }),
-        ((((just("movz").padded()).ignore_then((a64_reg_parser.clone()).map(Box::new)))
-            .then_ignore(just(",").padded()))
-        .then(token_int().map(Imm)))
-        .map_with(move |(rd, imm), e| A64Item::Movz {
+        ((nop_keyword_parser.clone()).map(Box::new)).map_with(move |op, e| A64Item::Nop {
+            op: op,
+            prov: prov_from_span(e.span(), file_id),
+        }),
+        (((((movz_keyword_parser.clone()).map(Box::new))
+            .then((a64_reg_parser.clone()).map(Box::new)))
+        .then_ignore(just(",").padded()))
+        .then(
+            token_int()
+                .try_map(move |text, span| match text.parse::<u64>() {
+                    Ok(value) => Ok(Imm {
+                        prov: prov_from_span(span, file_id),
+                        value,
+                    }),
+                    Err(err) => Err(Rich::custom(
+                        span,
+                        format!("invalid integer literal {text:?}: {err}"),
+                    )),
+                })
+                .then_ignore(ws()),
+        ))
+        .map_with(move |((op, rd), imm), e| A64Item::Movz {
             imm: imm,
+            op: op,
             prov: prov_from_span(e.span(), file_id),
             rd: rd,
         }),
-        ((((just("mov").padded()).ignore_then((a64_reg_parser.clone()).map(Box::new)))
-            .then_ignore(just(",").padded()))
+        (((((mov_keyword_parser.clone()).map(Box::new))
+            .then((a64_reg_parser.clone()).map(Box::new)))
+        .then_ignore(just(",").padded()))
         .then((a64_reg_parser.clone()).map(Box::new)))
-        .map_with(move |(rd, rm), e| A64Item::Mov {
+        .map_with(move |((op, rd), rm), e| A64Item::Mov {
+            op: op,
             prov: prov_from_span(e.span(), file_id),
             rd: rd,
             rm: rm,
         }),
-        ((((((just("add").padded()).ignore_then((a64_reg_parser.clone()).map(Box::new)))
-            .then_ignore(just(",").padded()))
+        (((((((add_keyword_parser.clone()).map(Box::new))
+            .then((a64_reg_parser.clone()).map(Box::new)))
+        .then_ignore(just(",").padded()))
         .then((a64_reg_parser.clone()).map(Box::new)))
         .then_ignore(just(",").padded()))
-        .then(token_int().map(Imm)))
-        .map_with(move |((rd, rn), imm), e| A64Item::AddImm {
+        .then(
+            token_int()
+                .try_map(move |text, span| match text.parse::<u64>() {
+                    Ok(value) => Ok(Imm {
+                        prov: prov_from_span(span, file_id),
+                        value,
+                    }),
+                    Err(err) => Err(Rich::custom(
+                        span,
+                        format!("invalid integer literal {text:?}: {err}"),
+                    )),
+                })
+                .then_ignore(ws()),
+        ))
+        .map_with(move |(((op, rd), rn), imm), e| A64Item::AddImm {
             imm: imm,
+            op: op,
             prov: prov_from_span(e.span(), file_id),
             rd: rd,
             rn: rn,
         }),
-        ((just("b").padded()).ignore_then(token_ident().map(LabelName))).map_with(
-            move |target, e| A64Item::B {
-                prov: prov_from_span(e.span(), file_id),
-                target: target,
-            },
-        ),
+        (((b_keyword_parser.clone()).map(Box::new)).then(
+            token_ident()
+                .map_with(move |text, e| LabelName {
+                    prov: prov_from_span(e.span(), file_id),
+                    text,
+                })
+                .then_ignore(ws()),
+        ))
+        .map_with(move |(op, target), e| A64Item::B {
+            op: op,
+            prov: prov_from_span(e.span(), file_id),
+            target: target,
+        }),
     ))
     .boxed();
+    let a_arch64_dialect_keyword_parser = (just("aarch64").to(()))
+        .map_with(move |(), e| AArch64DialectKeyword {
+            prov: prov_from_span(e.span(), file_id),
+        })
+        .then_ignore(ws())
+        .boxed();
+    let asm_keyword_parser = (just("asm").to(()))
+        .map_with(move |(), e| AsmKeyword {
+            prov: prov_from_span(e.span(), file_id),
+        })
+        .then_ignore(ws())
+        .boxed();
+    let jmp_keyword_parser = (just("jmp").to(()))
+        .map_with(move |(), e| JmpKeyword {
+            prov: prov_from_span(e.span(), file_id),
+        })
+        .then_ignore(ws())
+        .boxed();
     let x64_reg_parser = choice((
-        ((just("rax").padded()).to(())).map_with(move |(), _e| X64Reg::Rax {}),
-        ((just("rbx").padded()).to(())).map_with(move |(), _e| X64Reg::Rbx {}),
-        ((just("rcx").padded()).to(())).map_with(move |(), _e| X64Reg::Rcx {}),
-        ((just("rdx").padded()).to(())).map_with(move |(), _e| X64Reg::Rdx {}),
-        ((just("rsp").padded()).to(())).map_with(move |(), _e| X64Reg::Rsp {}),
-        ((just("rbp").padded()).to(())).map_with(move |(), _e| X64Reg::Rbp {}),
+        (just("rax").to(()))
+            .map_with(move |(), e| {
+                X64Reg::Rax(Rax {
+                    prov: prov_from_span(e.span(), file_id),
+                })
+            })
+            .then_ignore(ws()),
+        (just("rbx").to(()))
+            .map_with(move |(), e| {
+                X64Reg::Rbx(Rbx {
+                    prov: prov_from_span(e.span(), file_id),
+                })
+            })
+            .then_ignore(ws()),
+        (just("rcx").to(()))
+            .map_with(move |(), e| {
+                X64Reg::Rcx(Rcx {
+                    prov: prov_from_span(e.span(), file_id),
+                })
+            })
+            .then_ignore(ws()),
+        (just("rdx").to(()))
+            .map_with(move |(), e| {
+                X64Reg::Rdx(Rdx {
+                    prov: prov_from_span(e.span(), file_id),
+                })
+            })
+            .then_ignore(ws()),
+        (just("rsp").to(()))
+            .map_with(move |(), e| {
+                X64Reg::Rsp(Rsp {
+                    prov: prov_from_span(e.span(), file_id),
+                })
+            })
+            .then_ignore(ws()),
+        (just("rbp").to(()))
+            .map_with(move |(), e| {
+                X64Reg::Rbp(Rbp {
+                    prov: prov_from_span(e.span(), file_id),
+                })
+            })
+            .then_ignore(ws()),
     ))
     .boxed();
     let x64_item_parser = choice((
-        ((token_ident().map(LabelName)).then_ignore(just(":").padded())).map_with(
-            move |name, e| X64Item::Label {
-                name: name,
+        ((token_ident()
+            .map_with(move |text, e| LabelName {
                 prov: prov_from_span(e.span(), file_id),
-            },
-        ),
-        ((just("ret").padded()).to(())).map_with(move |(), e| X64Item::Ret {
+                text,
+            })
+            .then_ignore(ws()))
+        .then_ignore(just(":").padded()))
+        .map_with(move |name, e| X64Item::Label {
+            name: name,
             prov: prov_from_span(e.span(), file_id),
         }),
-        ((just("nop").padded()).to(())).map_with(move |(), e| X64Item::Nop {
+        ((ret_keyword_parser.clone()).map(Box::new)).map_with(move |op, e| X64Item::Ret {
+            op: op,
             prov: prov_from_span(e.span(), file_id),
         }),
-        ((((just("mov").padded()).ignore_then((x64_reg_parser.clone()).map(Box::new)))
-            .then_ignore(just(",").padded()))
-        .then(token_int().map(Imm)))
-        .map_with(move |(rd, imm), e| X64Item::MovImm {
+        ((nop_keyword_parser.clone()).map(Box::new)).map_with(move |op, e| X64Item::Nop {
+            op: op,
+            prov: prov_from_span(e.span(), file_id),
+        }),
+        (((((mov_keyword_parser.clone()).map(Box::new))
+            .then((x64_reg_parser.clone()).map(Box::new)))
+        .then_ignore(just(",").padded()))
+        .then(
+            token_int()
+                .try_map(move |text, span| match text.parse::<u64>() {
+                    Ok(value) => Ok(Imm {
+                        prov: prov_from_span(span, file_id),
+                        value,
+                    }),
+                    Err(err) => Err(Rich::custom(
+                        span,
+                        format!("invalid integer literal {text:?}: {err}"),
+                    )),
+                })
+                .then_ignore(ws()),
+        ))
+        .map_with(move |((op, rd), imm), e| X64Item::MovImm {
             imm: imm,
+            op: op,
             prov: prov_from_span(e.span(), file_id),
             rd: rd,
         }),
-        ((((just("mov").padded()).ignore_then((x64_reg_parser.clone()).map(Box::new)))
-            .then_ignore(just(",").padded()))
+        (((((mov_keyword_parser.clone()).map(Box::new))
+            .then((x64_reg_parser.clone()).map(Box::new)))
+        .then_ignore(just(",").padded()))
         .then((x64_reg_parser.clone()).map(Box::new)))
-        .map_with(move |(rd, rm), e| X64Item::MovReg {
+        .map_with(move |((op, rd), rm), e| X64Item::MovReg {
+            op: op,
             prov: prov_from_span(e.span(), file_id),
             rd: rd,
             rm: rm,
         }),
-        ((((just("add").padded()).ignore_then((x64_reg_parser.clone()).map(Box::new)))
-            .then_ignore(just(",").padded()))
-        .then(token_int().map(Imm)))
-        .map_with(move |(rd, imm), e| X64Item::AddImm {
+        (((((add_keyword_parser.clone()).map(Box::new))
+            .then((x64_reg_parser.clone()).map(Box::new)))
+        .then_ignore(just(",").padded()))
+        .then(
+            token_int()
+                .try_map(move |text, span| match text.parse::<u64>() {
+                    Ok(value) => Ok(Imm {
+                        prov: prov_from_span(span, file_id),
+                        value,
+                    }),
+                    Err(err) => Err(Rich::custom(
+                        span,
+                        format!("invalid integer literal {text:?}: {err}"),
+                    )),
+                })
+                .then_ignore(ws()),
+        ))
+        .map_with(move |((op, rd), imm), e| X64Item::AddImm {
             imm: imm,
+            op: op,
             prov: prov_from_span(e.span(), file_id),
             rd: rd,
         }),
-        ((just("jmp").padded()).ignore_then(token_ident().map(LabelName))).map_with(
-            move |target, e| X64Item::Jmp {
-                prov: prov_from_span(e.span(), file_id),
-                target: target,
-            },
-        ),
+        (((jmp_keyword_parser.clone()).map(Box::new)).then(
+            token_ident()
+                .map_with(move |text, e| LabelName {
+                    prov: prov_from_span(e.span(), file_id),
+                    text,
+                })
+                .then_ignore(ws()),
+        ))
+        .map_with(move |(op, target), e| X64Item::Jmp {
+            op: op,
+            prov: prov_from_span(e.span(), file_id),
+            target: target,
+        }),
     ))
     .boxed();
+    let x86_64_dialect_keyword_parser = (just("x86_64").to(()))
+        .map_with(move |(), e| X86_64DialectKeyword {
+            prov: prov_from_span(e.span(), file_id),
+        })
+        .then_ignore(ws())
+        .boxed();
     let program_parser = choice((
-        (((just("asm").padded()).ignore_then(
-            (just("aarch64").padded()).ignore_then(
-                (just("{").padded())
-                    .ignore_then((a64_item_parser.clone()).repeated().collect::<Vec<_>>()),
-            ),
-        ))
+        ((((((asm_keyword_parser.clone()).map(Box::new))
+            .then((a_arch64_dialect_keyword_parser.clone()).map(Box::new)))
+        .then_ignore(just("{").padded()))
+        .then((a64_item_parser.clone()).repeated().collect::<Vec<_>>()))
         .then_ignore(just("}").padded()))
-        .map_with(move |items, _e| Program::AArch64 {
+        .map_with(move |((keyword, dialect), items), e| Program::AArch64 {
+            dialect: dialect,
             docs: None,
             items: items,
+            keyword: keyword,
+            prov: prov_from_span(e.span(), file_id),
         }),
-        (((just("asm").padded()).ignore_then(
-            (just("x86_64").padded()).ignore_then(
-                (just("{").padded())
-                    .ignore_then((x64_item_parser.clone()).repeated().collect::<Vec<_>>()),
-            ),
-        ))
+        ((((((asm_keyword_parser.clone()).map(Box::new))
+            .then((x86_64_dialect_keyword_parser.clone()).map(Box::new)))
+        .then_ignore(just("{").padded()))
+        .then((x64_item_parser.clone()).repeated().collect::<Vec<_>>()))
         .then_ignore(just("}").padded()))
-        .map_with(move |items, _e| Program::X86_64 {
+        .map_with(move |((keyword, dialect), items), e| Program::X86_64 {
+            dialect: dialect,
             docs: None,
             items: items,
+            keyword: keyword,
+            prov: prov_from_span(e.span(), file_id),
         }),
     ))
     .boxed();

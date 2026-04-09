@@ -2,9 +2,11 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::normalize::{
     DocumentedValue, NormalizedNodeDecl, NormalizedRepr, NormalizedTokenKind, SyntaxRule,
-    SyntaxTypeUse, is_string_scalar_type, render_default_value,
+    SyntaxTypeUse, is_int_scalar_type, is_string_scalar_type, render_default_value,
 };
-use crate::render_helpers::{rust_ident, snake_case};
+use crate::render_helpers::{
+    is_prov_only_struct, leaf_variant_wrapper_name, rust_ident, snake_case,
+};
 
 enum SeqItem {
     Ignore(String),
@@ -15,17 +17,20 @@ fn token_parser_fn_name(token_name: &str) -> String {
     format!("token_{}", snake_case(token_name))
 }
 
-fn render_wrapped_string_parser(
+fn render_wrapped_scalar_parser(
     repr: &NormalizedRepr,
     ty: &SyntaxTypeUse,
     parser_fn_name: &str,
 ) -> Result<String, String> {
     match ty {
-        SyntaxTypeUse::Ref { name } if is_string_scalar_type(repr, name) => {
-            Ok(format!("{parser_fn_name}().map({name})"))
-        }
+        SyntaxTypeUse::Ref { name } if is_string_scalar_type(repr, name) => Ok(format!(
+            "{parser_fn_name}().map_with(move |text, e| {name} {{ prov: prov_from_span(e.span(), file_id), text }}).then_ignore(ws())"
+        )),
+        SyntaxTypeUse::Ref { name } if is_int_scalar_type(repr, name) => Ok(format!(
+            "{parser_fn_name}().try_map(move |text, span| {{\n            match text.parse::<u64>() {{\n                Ok(value) => Ok({name} {{ prov: prov_from_span(span, file_id), value }}),\n                Err(err) => Err(Rich::custom(span, format!(\"invalid integer literal {{text:?}}: {{err}}\"))),\n            }}\n        }}).then_ignore(ws())"
+        )),
         SyntaxTypeUse::Ref { name } => Err(format!(
-            "token parser cannot construct non-string scalar type {name:?}"
+            "token parser cannot construct non-scalar support type {name:?}"
         )),
         _ => Err(format!(
             "token parser requires a scalar reference type, got {:?}",
@@ -40,7 +45,7 @@ fn render_token_value_parser(
     ty: &SyntaxTypeUse,
 ) -> Result<String, String> {
     let parser_fn_name = token_parser_fn_name(token_name);
-    render_wrapped_string_parser(repr, ty, &parser_fn_name)
+    render_wrapped_scalar_parser(repr, ty, &parser_fn_name)
 }
 
 fn render_ref_value_parser(
@@ -221,6 +226,14 @@ fn render_struct_parser_expr(
     node_names: &[String],
     provenance_tag: &str,
 ) -> Result<String, String> {
+    if is_prov_only_struct(fields, provenance_tag) {
+        if let Some(text) = extract_single_literal(rule) {
+            return Ok(format!(
+                "(just({text:?}).to(())).map_with(move |(), e| {type_name} {{ prov: prov_from_span(e.span(), file_id) }}).then_ignore(ws()).boxed()"
+            ));
+        }
+    }
+
     let items = flatten_struct_rule_items(repr, rule, fields, rule_names, node_names)?;
     let (chain, bound_names) = render_binding_chain(&items)?;
     let bound_set = bound_names.iter().cloned().collect::<BTreeSet<_>>();
@@ -328,7 +341,19 @@ fn render_enum_parser_expr(
         } else {
             "_e"
         };
-        let parser = if bound_names.is_empty() {
+        let parser = if is_prov_only_struct(fields, provenance_tag) {
+            if let Some(text) = extract_single_literal(named.inner.as_ref()) {
+                let wrapper_name = leaf_variant_wrapper_name(enum_name, variant_name);
+                format!(
+                    "(just({text:?}).to(())).map_with(move |(), {span_ident}| {enum_name}::{variant_name}({wrapper_name} {{ {field_rows} }})).then_ignore(ws())"
+                )
+            } else {
+                let wrapper_name = leaf_variant_wrapper_name(enum_name, variant_name);
+                format!(
+                    "({chain}).map_with(move |(), {span_ident}| {enum_name}::{variant_name}({wrapper_name} {{ {field_rows} }}))"
+                )
+            }
+        } else if bound_names.is_empty() {
             format!(
                 "({chain}).map_with(move |(), {span_ident}| {enum_name}::{variant_name} {{ {field_rows} }})"
             )
@@ -344,6 +369,10 @@ fn render_enum_parser_expr(
             )
         };
         variant_parsers.push(parser);
+    }
+
+    if variant_parsers.len() == 1 {
+        return Ok(format!("({}).boxed()", variant_parsers[0]));
     }
 
     Ok(format!("choice(({})).boxed()", variant_parsers.join(", ")))
@@ -469,20 +498,24 @@ fn rule_is_self_recursive(name: &str, rule: &SyntaxRule) -> bool {
 fn render_token_parser_fn(token_name: &str, kind: NormalizedTokenKind) -> String {
     let fn_name = token_parser_fn_name(token_name);
     let body = match kind {
-        NormalizedTokenKind::Ident => {
-            "text::ident::<_, ParseExtra<'src>>().map(str::to_owned).padded_by(ws())"
-        }
+        NormalizedTokenKind::Ident => "text::ident::<_, ParseExtra<'src>>().map(str::to_owned)",
         NormalizedTokenKind::Symbol => {
-            "just('@')\n        .then(text::ident::<_, ParseExtra<'src>>().map(str::to_owned))\n        .then(\n            just('.')\n                .ignore_then(text::ident::<_, ParseExtra<'src>>().map(str::to_owned))\n                .repeated()\n                .collect::<Vec<_>>()\n        )\n        .map(|((_, head), tail)| {\n            let mut out = format!(\"@{head}\");\n            for part in tail {\n                out.push('.');\n                out.push_str(&part);\n            }\n            out\n        })\n        .padded_by(ws())"
+            "just('@')\n        .then(text::ident::<_, ParseExtra<'src>>().map(str::to_owned))\n        .then(\n            just('.')\n                .ignore_then(text::ident::<_, ParseExtra<'src>>().map(str::to_owned))\n                .repeated()\n                .collect::<Vec<_>>()\n        )\n        .map(|((_, head), tail)| {\n            let mut out = format!(\"@{head}\");\n            for part in tail {\n                out.push('.');\n                out.push_str(&part);\n            }\n            out\n        })"
         }
-        NormalizedTokenKind::Int => {
-            "text::int::<_, ParseExtra<'src>>(10).map(str::to_owned).padded_by(ws())"
-        }
+        NormalizedTokenKind::Int => "text::int::<_, ParseExtra<'src>>(10).map(str::to_owned)",
     };
 
     format!(
         "fn {fn_name}<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> + Clone {{\n    {body}\n}}"
     )
+}
+
+fn extract_single_literal(rule: &SyntaxRule) -> Option<&str> {
+    match rule {
+        SyntaxRule::Literal(text) => Some(text.as_str()),
+        SyntaxRule::Seq(items) if items.len() == 1 => extract_single_literal(&items[0]),
+        _ => None,
+    }
 }
 
 pub(crate) fn render_parser_block(

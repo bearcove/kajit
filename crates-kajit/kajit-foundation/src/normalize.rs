@@ -54,6 +54,7 @@ pub(crate) struct NormalizedSyntax {
     pub(crate) token_kinds: HashMap<String, NormalizedTokenKind>,
     pub(crate) rules: HashMap<String, SyntaxRule>,
     pub(crate) canonical_print: HashMap<String, String>,
+    pub(crate) semantic_tokens: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +73,7 @@ pub(crate) struct DocumentedValue<T> {
 #[derive(Debug, Clone)]
 pub(crate) enum NormalizedSupportDecl {
     String,
+    Int,
     StringSeq,
     Unit,
     Enum(Vec<DocumentedValue<String>>),
@@ -81,6 +83,7 @@ pub(crate) enum NormalizedSupportDecl {
 pub(crate) enum NormalizedRefKind {
     Provenance,
     StringScalar,
+    IntScalar,
     StringSeq,
     Unit,
     Enum,
@@ -109,6 +112,7 @@ pub(crate) struct NormalizedRepr {
 fn normalize_support_decl(decl: &SupportDecl) -> Result<NormalizedSupportDecl, String> {
     match decl {
         SupportDecl::String => Ok(NormalizedSupportDecl::String),
+        SupportDecl::Int => Ok(NormalizedSupportDecl::Int),
         SupportDecl::StringSeq => Ok(NormalizedSupportDecl::StringSeq),
         SupportDecl::Unit => Ok(NormalizedSupportDecl::Unit),
         SupportDecl::Enum(variants) if !variants.variants.is_empty() => {
@@ -333,6 +337,7 @@ pub(crate) fn normalize_repr(repr: &ReprBody) -> Result<NormalizedRepr, String> 
             token_kinds,
             rules,
             canonical_print: repr.syntax.canonical_print.clone(),
+            semantic_tokens: repr.syntax.semantic_tokens.clone().unwrap_or_default(),
         },
         common,
         support,
@@ -381,6 +386,7 @@ pub(crate) fn classify_ref_type(repr: &NormalizedRepr, name: &str) -> Normalized
 
     match repr.support.get(name).map(|decl| &decl.value) {
         Some(NormalizedSupportDecl::String) => NormalizedRefKind::StringScalar,
+        Some(NormalizedSupportDecl::Int) => NormalizedRefKind::IntScalar,
         Some(NormalizedSupportDecl::StringSeq) => NormalizedRefKind::StringSeq,
         Some(NormalizedSupportDecl::Unit) => NormalizedRefKind::Unit,
         Some(NormalizedSupportDecl::Enum(_)) => NormalizedRefKind::Enum,
@@ -390,4 +396,8 @@ pub(crate) fn classify_ref_type(repr: &NormalizedRepr, name: &str) -> Normalized
 
 pub(crate) fn is_string_scalar_type(repr: &NormalizedRepr, name: &str) -> bool {
     classify_ref_type(repr, name) == NormalizedRefKind::StringScalar
+}
+
+pub(crate) fn is_int_scalar_type(repr: &NormalizedRepr, name: &str) -> bool {
+    classify_ref_type(repr, name) == NormalizedRefKind::IntScalar
 }

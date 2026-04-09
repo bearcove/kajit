@@ -9,11 +9,25 @@ pub use kajit_types::{Prov, Span};
 
 /// A decimal immediate value in canonical ASM text.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Imm(pub String);
+pub struct Imm {
+    pub prov: Prov,
+
+    pub value: u64,
+}
 
 /// A symbolic label name.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct LabelName(pub String);
+pub struct LabelName {
+    pub prov: Prov,
+
+    pub text: String,
+}
+
+impl LabelName {
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+}
 
 /// AArch64 labels and instructions.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +36,9 @@ pub enum A64Item {
     AddImm {
         /// Immediate value.
         imm: Imm,
+
+        /// Opcode keyword.
+        op: Box<AddKeyword>,
 
         /// Source provenance for the item.
         prov: Prov,
@@ -35,6 +52,9 @@ pub enum A64Item {
 
     /// Branch to a symbolic label.
     B {
+        /// Opcode keyword.
+        op: Box<BKeyword>,
+
         /// Source provenance for the item.
         prov: Prov,
 
@@ -53,6 +73,9 @@ pub enum A64Item {
 
     /// Move a register into another register.
     Mov {
+        /// Opcode keyword.
+        op: Box<MovKeyword>,
+
         /// Source provenance for the item.
         prov: Prov,
 
@@ -68,6 +91,9 @@ pub enum A64Item {
         /// Immediate value.
         imm: Imm,
 
+        /// Opcode keyword.
+        op: Box<MovzKeyword>,
+
         /// Source provenance for the item.
         prov: Prov,
 
@@ -77,29 +103,118 @@ pub enum A64Item {
 
     /// A no-op instruction.
     Nop {
+        /// Opcode keyword.
+        op: Box<NopKeyword>,
+
         /// Source provenance for the item.
         prov: Prov,
     },
 
     /// A return instruction.
     Ret {
+        /// Opcode keyword.
+        op: Box<RetKeyword>,
+
         /// Source provenance for the item.
         prov: Prov,
     },
 }
 
 /// The AArch64 register subset supported by the pilot.
+/// Stack pointer register.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sp {
+    pub prov: Prov,
+}
+
+/// General-purpose register x0.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct X0 {
+    pub prov: Prov,
+}
+
+/// General-purpose register x1.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct X1 {
+    pub prov: Prov,
+}
+
+/// General-purpose register x2.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct X2 {
+    pub prov: Prov,
+}
+
+/// General-purpose register x3.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct X3 {
+    pub prov: Prov,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum A64Reg {
-    Sp {},
+    /// Stack pointer register.
+    Sp(Sp),
 
-    X0 {},
+    /// General-purpose register x0.
+    X0(X0),
 
-    X1 {},
+    /// General-purpose register x1.
+    X1(X1),
 
-    X2 {},
+    /// General-purpose register x2.
+    X2(X2),
 
-    X3 {},
+    /// General-purpose register x3.
+    X3(X3),
+}
+
+/// The AArch64 dialect tag in the header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AArch64DialectKeyword {
+    pub prov: Prov,
+}
+
+/// Add an operand to a destination register.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddKeyword {
+    pub prov: Prov,
+}
+
+/// The fixed leading keyword in an ASM document header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AsmKeyword {
+    pub prov: Prov,
+}
+
+/// Branch to a label in AArch64.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BKeyword {
+    pub prov: Prov,
+}
+
+/// Jump to a label in x86-64.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JmpKeyword {
+    pub prov: Prov,
+}
+
+/// Move data between registers or operands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MovKeyword {
+    pub prov: Prov,
+}
+
+/// Move a zero-extended immediate into a register.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MovzKeyword {
+    pub prov: Prov,
+}
+
+/// Perform no operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NopKeyword {
+    pub prov: Prov,
 }
 
 /// The root ASM program, with an explicit in-file dialect.
@@ -107,21 +222,45 @@ pub enum A64Reg {
 pub enum Program {
     /// An AArch64 assembly unit.
     AArch64 {
+        /// Dialect tag from the header.
+        dialect: Box<AArch64DialectKeyword>,
+
         /// Optional program-level docs.
         docs: Option<DocBlock>,
 
         /// Ordered labels and instructions.
         items: Vec<A64Item>,
+
+        /// Leading `asm` keyword.
+        keyword: Box<AsmKeyword>,
+
+        /// Source provenance for the program.
+        prov: Prov,
     },
 
     /// An x86-64 assembly unit.
     X86_64 {
+        /// Dialect tag from the header.
+        dialect: Box<X86_64DialectKeyword>,
+
         /// Optional program-level docs.
         docs: Option<DocBlock>,
 
         /// Ordered labels and instructions.
         items: Vec<X64Item>,
+
+        /// Leading `asm` keyword.
+        keyword: Box<AsmKeyword>,
+
+        /// Source provenance for the program.
+        prov: Prov,
     },
+}
+
+/// Return from the current function.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetKeyword {
+    pub prov: Prov,
 }
 
 /// x86-64 labels and instructions.
@@ -132,6 +271,9 @@ pub enum X64Item {
         /// Immediate value.
         imm: Imm,
 
+        /// Opcode keyword.
+        op: Box<AddKeyword>,
+
         /// Source provenance for the item.
         prov: Prov,
 
@@ -141,6 +283,9 @@ pub enum X64Item {
 
     /// Jump to a symbolic label.
     Jmp {
+        /// Opcode keyword.
+        op: Box<JmpKeyword>,
+
         /// Source provenance for the item.
         prov: Prov,
 
@@ -162,6 +307,9 @@ pub enum X64Item {
         /// Immediate value.
         imm: Imm,
 
+        /// Opcode keyword.
+        op: Box<MovKeyword>,
+
         /// Source provenance for the item.
         prov: Prov,
 
@@ -171,6 +319,9 @@ pub enum X64Item {
 
     /// Move a register into another register.
     MovReg {
+        /// Opcode keyword.
+        op: Box<MovKeyword>,
+
         /// Source provenance for the item.
         prov: Prov,
 
@@ -183,29 +334,83 @@ pub enum X64Item {
 
     /// A no-op instruction.
     Nop {
+        /// Opcode keyword.
+        op: Box<NopKeyword>,
+
         /// Source provenance for the item.
         prov: Prov,
     },
 
     /// A return instruction.
     Ret {
+        /// Opcode keyword.
+        op: Box<RetKeyword>,
+
         /// Source provenance for the item.
         prov: Prov,
     },
 }
 
 /// The x86-64 register subset supported by the pilot.
+/// Return-value and accumulator register.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rax {
+    pub prov: Prov,
+}
+
+/// Base/frame pointer register.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rbp {
+    pub prov: Prov,
+}
+
+/// Callee-saved general-purpose register.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rbx {
+    pub prov: Prov,
+}
+
+/// Count register.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rcx {
+    pub prov: Prov,
+}
+
+/// Data register.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rdx {
+    pub prov: Prov,
+}
+
+/// Stack pointer register.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rsp {
+    pub prov: Prov,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum X64Reg {
-    Rax {},
+    /// Return-value and accumulator register.
+    Rax(Rax),
 
-    Rbp {},
+    /// Base/frame pointer register.
+    Rbp(Rbp),
 
-    Rbx {},
+    /// Callee-saved general-purpose register.
+    Rbx(Rbx),
 
-    Rcx {},
+    /// Count register.
+    Rcx(Rcx),
 
-    Rdx {},
+    /// Data register.
+    Rdx(Rdx),
 
-    Rsp {},
+    /// Stack pointer register.
+    Rsp(Rsp),
+}
+
+/// The x86-64 dialect tag in the header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct X86_64DialectKeyword {
+    pub prov: Prov,
 }

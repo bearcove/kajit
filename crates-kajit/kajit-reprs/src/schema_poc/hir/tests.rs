@@ -5,8 +5,8 @@ use super::*;
 fn parse_module_smoke() {
     let module = parse_root_text("module { fn main() -> Value { return } }").unwrap();
     assert_eq!(module.functions.len(), 1);
-    assert_eq!(module.functions[0].name, Symbol("main".to_owned()));
-    assert_eq!(module.functions[0].return_type, Type("Value".to_owned()));
+    assert_eq!(module.functions[0].name.text, "main");
+    assert_eq!(module.functions[0].return_type.text, "Value");
     assert!(matches!(
         module.functions[0].body.statements.as_slice(),
         [Stmt::Return { value: None, .. }]

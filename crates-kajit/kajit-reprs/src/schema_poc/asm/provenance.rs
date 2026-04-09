@@ -20,6 +20,81 @@ impl HasProvenance for A64Item {
     }
 }
 
+impl HasProvenance for A64Reg {
+    fn provenance(&self) -> Option<&Prov> {
+        match self {
+            Self::Sp(value) => Some(&value.prov),
+            Self::X0(value) => Some(&value.prov),
+            Self::X1(value) => Some(&value.prov),
+            Self::X2(value) => Some(&value.prov),
+            Self::X3(value) => Some(&value.prov),
+        }
+    }
+}
+
+impl HasProvenance for AArch64DialectKeyword {
+    fn provenance(&self) -> Option<&Prov> {
+        Some(&self.prov)
+    }
+}
+
+impl HasProvenance for AddKeyword {
+    fn provenance(&self) -> Option<&Prov> {
+        Some(&self.prov)
+    }
+}
+
+impl HasProvenance for AsmKeyword {
+    fn provenance(&self) -> Option<&Prov> {
+        Some(&self.prov)
+    }
+}
+
+impl HasProvenance for BKeyword {
+    fn provenance(&self) -> Option<&Prov> {
+        Some(&self.prov)
+    }
+}
+
+impl HasProvenance for JmpKeyword {
+    fn provenance(&self) -> Option<&Prov> {
+        Some(&self.prov)
+    }
+}
+
+impl HasProvenance for MovKeyword {
+    fn provenance(&self) -> Option<&Prov> {
+        Some(&self.prov)
+    }
+}
+
+impl HasProvenance for MovzKeyword {
+    fn provenance(&self) -> Option<&Prov> {
+        Some(&self.prov)
+    }
+}
+
+impl HasProvenance for NopKeyword {
+    fn provenance(&self) -> Option<&Prov> {
+        Some(&self.prov)
+    }
+}
+
+impl HasProvenance for Program {
+    fn provenance(&self) -> Option<&Prov> {
+        match self {
+            Self::AArch64 { prov, .. } => Some(prov),
+            Self::X86_64 { prov, .. } => Some(prov),
+        }
+    }
+}
+
+impl HasProvenance for RetKeyword {
+    fn provenance(&self) -> Option<&Prov> {
+        Some(&self.prov)
+    }
+}
+
 impl HasProvenance for X64Item {
     fn provenance(&self) -> Option<&Prov> {
         match self {
@@ -31,5 +106,24 @@ impl HasProvenance for X64Item {
             Self::Nop { prov, .. } => Some(prov),
             Self::Ret { prov, .. } => Some(prov),
         }
+    }
+}
+
+impl HasProvenance for X64Reg {
+    fn provenance(&self) -> Option<&Prov> {
+        match self {
+            Self::Rax(value) => Some(&value.prov),
+            Self::Rbp(value) => Some(&value.prov),
+            Self::Rbx(value) => Some(&value.prov),
+            Self::Rcx(value) => Some(&value.prov),
+            Self::Rdx(value) => Some(&value.prov),
+            Self::Rsp(value) => Some(&value.prov),
+        }
+    }
+}
+
+impl HasProvenance for X86_64DialectKeyword {
+    fn provenance(&self) -> Option<&Prov> {
+        Some(&self.prov)
     }
 }

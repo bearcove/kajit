@@ -1,10 +1,12 @@
 use crate::formatter_codegen::render_formatter_block;
+use crate::hover_codegen::render_hover_block;
 use crate::normalize::{NormalizedNodeDecl, NormalizedRepr};
 use crate::parser_codegen::render_parser_block;
 use crate::render_helpers::{
     collect_syntax_type_tags, render_common_placeholder, render_node_decl, render_provenance_impl,
     render_support_decl, render_walk_fn, snake_case,
 };
+use crate::semantic_codegen::render_semantic_block;
 
 pub(crate) struct GeneratedModuleFile {
     pub(crate) relative_path: String,
@@ -50,6 +52,14 @@ pub(crate) fn render_repr_poc_files(reprs: &[NormalizedRepr]) -> Vec<GeneratedMo
                 relative_path: format!("{module_dir}/format.rs"),
                 contents: format_generated_file(render_format_file(&parts)),
             },
+            GeneratedModuleFile {
+                relative_path: format!("{module_dir}/semantic.rs"),
+                contents: format_generated_file(render_semantic_file(&parts)),
+            },
+            GeneratedModuleFile {
+                relative_path: format!("{module_dir}/hover.rs"),
+                contents: format_generated_file(render_hover_file(&parts)),
+            },
         ]);
         if repr.name == "HIR" {
             files.push(GeneratedModuleFile {
@@ -87,6 +97,8 @@ struct RenderParts {
     walk_mut_rows: String,
     parser_rows: String,
     formatter_rows: String,
+    semantic_rows: String,
+    hover_rows: String,
 }
 
 fn render_parts(repr: &NormalizedRepr) -> RenderParts {
@@ -247,7 +259,13 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         .iter()
         .map(|name| {
             let decl = repr.nodes.get(name).unwrap();
-            render_node_decl(name, &decl.value, &node_names, decl.doc.as_deref())
+            render_node_decl(
+                name,
+                &decl.value,
+                &node_names,
+                decl.doc.as_deref(),
+                &provenance_tag,
+            )
         })
         .collect::<Vec<_>>()
         .join("\n\n");
@@ -290,6 +308,7 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
                 &repr.nodes.get(name).unwrap().value,
                 &node_names,
                 false,
+                &provenance_tag,
             )
         })
         .collect::<Vec<_>>()
@@ -303,6 +322,7 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
                 &repr.nodes.get(name).unwrap().value,
                 &node_names,
                 true,
+                &provenance_tag,
             )
         })
         .collect::<Vec<_>>()
@@ -321,6 +341,9 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         .expect("parser block should render");
     let formatter_rows =
         render_formatter_block(repr, &node_names).expect("formatter block should render");
+    let semantic_rows =
+        render_semantic_block(repr, &node_names).expect("semantic block should render");
+    let hover_rows = render_hover_block(repr, &node_names).expect("hover block should render");
 
     RenderParts {
         module_doc_rows,
@@ -347,6 +370,8 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         walk_mut_rows,
         parser_rows,
         formatter_rows,
+        semantic_rows,
+        hover_rows,
     }
 }
 
@@ -375,6 +400,14 @@ fn format_{module_name}(source: &str) -> Result<String, String> {{
     let root = {module_name}::parse_root_text(source)?;
     Ok({module_name}::format_root_text(&root))
 }}
+
+fn semantic_tokens_{module_name}(source: &str) -> Vec<SemanticToken> {{
+    {module_name}::semantic_tokens(source)
+}}
+
+fn hover_entries_{module_name}(source: &str) -> Vec<HoverEntry> {{
+    {module_name}::hover_entries(source)
+}}
 "#
             )
         })
@@ -390,6 +423,8 @@ fn format_{module_name}(source: &str) -> Result<String, String> {{
         file_ext: {module_name}::REPR_FILE_EXT,
         validate: validate_{module_name},
         format: format_{module_name},
+        semantic_tokens: semantic_tokens_{module_name},
+        hover_entries: hover_entries_{module_name},
     }}"#
             )
         })
@@ -406,6 +441,23 @@ pub struct ReprSpec {{
     pub file_ext: &'static str,
     pub validate: fn(&str) -> Result<(), String>,
     pub format: fn(&str) -> Result<String, String>,
+    pub semantic_tokens: fn(&str) -> Vec<SemanticToken>,
+    pub hover_entries: fn(&str) -> Vec<HoverEntry>,
+}}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticToken {{
+    pub start: u32,
+    pub end: u32,
+    pub kind: &'static str,
+}}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HoverEntry {{
+    pub start: u32,
+    pub end: u32,
+    pub markdown: String,
+    pub priority: u8,
 }}
 
 {helper_rows}
@@ -427,16 +479,20 @@ fn render_repr_mod_file(include_tests: bool) -> String {
         r#"
 pub mod ast;
 pub mod format;
+pub mod hover;
 pub mod meta;
 pub mod parse;
 pub mod provenance;
+pub mod semantic;
 pub mod visit;
 
 pub use ast::*;
 pub use format::*;
+pub use hover::*;
 pub use meta::*;
 pub use parse::*;
 pub use provenance::*;
+pub use semantic::*;
 pub use visit::*;
 {tests_row}"#
     ))
@@ -542,6 +598,8 @@ fn render_ast_file(parts: &RenderParts) -> String {
 fn render_visit_file(parts: &RenderParts) -> String {
     format!(
         r#"
+#![allow(unused_variables)]
+
 use super::*;
 
 pub trait Visit {{
@@ -595,13 +653,47 @@ pub trait HasProvenance {{
 fn render_format_file(parts: &RenderParts) -> String {
     format!(
         r#"
-#![allow(dead_code)]
+#![allow(dead_code, unused_variables)]
 
 use super::*;
 
 {formatter_rows}
 "#,
         formatter_rows = parts.formatter_rows,
+    )
+}
+
+fn render_semantic_file(parts: &RenderParts) -> String {
+    format!(
+        r#"
+#![allow(dead_code, unused_variables)]
+
+use kajit_types::Prov;
+
+use super::*;
+use crate::schema_poc::SemanticToken;
+use super::provenance::HasProvenance;
+
+{semantic_rows}
+"#,
+        semantic_rows = parts.semantic_rows,
+    )
+}
+
+fn render_hover_file(parts: &RenderParts) -> String {
+    format!(
+        r#"
+#![allow(dead_code, unused_variables)]
+
+use kajit_types::Prov;
+
+use super::*;
+use crate::schema_poc::HoverEntry;
+use super::provenance::HasProvenance;
+
+{hover_rows}
+"#,
+        hover_rows = parts.hover_rows,
     )
 }
 
@@ -613,8 +705,8 @@ use super::*;
 fn parse_module_smoke() {
     let module = parse_root_text("module { fn main() -> Value { return } }").unwrap();
     assert_eq!(module.functions.len(), 1);
-    assert_eq!(module.functions[0].name, Symbol("main".to_owned()));
-    assert_eq!(module.functions[0].return_type, Type("Value".to_owned()));
+    assert_eq!(module.functions[0].name.text, "main");
+    assert_eq!(module.functions[0].return_type.text, "Value");
     assert!(matches!(
         module.functions[0].body.statements.as_slice(),
         [Stmt::Return { value: None, .. }]

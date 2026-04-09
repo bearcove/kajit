@@ -70,8 +70,44 @@ pub static RULES: &[RuleSpec] = &[
         kind: "choice",
     },
     RuleSpec {
+        name: "AArch64DialectKeyword",
+        kind: "seq",
+    },
+    RuleSpec {
+        name: "AddKeyword",
+        kind: "seq",
+    },
+    RuleSpec {
+        name: "AsmKeyword",
+        kind: "seq",
+    },
+    RuleSpec {
+        name: "BKeyword",
+        kind: "seq",
+    },
+    RuleSpec {
+        name: "JmpKeyword",
+        kind: "seq",
+    },
+    RuleSpec {
+        name: "MovKeyword",
+        kind: "seq",
+    },
+    RuleSpec {
+        name: "MovzKeyword",
+        kind: "seq",
+    },
+    RuleSpec {
+        name: "NopKeyword",
+        kind: "seq",
+    },
+    RuleSpec {
         name: "Program",
         kind: "choice",
+    },
+    RuleSpec {
+        name: "RetKeyword",
+        kind: "seq",
     },
     RuleSpec {
         name: "X64Item",
@@ -80,6 +116,10 @@ pub static RULES: &[RuleSpec] = &[
     RuleSpec {
         name: "X64Reg",
         kind: "choice",
+    },
+    RuleSpec {
+        name: "X86_64DialectKeyword",
+        kind: "seq",
     },
 ];
 
@@ -104,8 +144,44 @@ pub static NODES: &[NodeSpec] = &[
         kind: "enum",
     },
     NodeSpec {
+        name: "AArch64DialectKeyword",
+        kind: "struct",
+    },
+    NodeSpec {
+        name: "AddKeyword",
+        kind: "struct",
+    },
+    NodeSpec {
+        name: "AsmKeyword",
+        kind: "struct",
+    },
+    NodeSpec {
+        name: "BKeyword",
+        kind: "struct",
+    },
+    NodeSpec {
+        name: "JmpKeyword",
+        kind: "struct",
+    },
+    NodeSpec {
+        name: "MovKeyword",
+        kind: "struct",
+    },
+    NodeSpec {
+        name: "MovzKeyword",
+        kind: "struct",
+    },
+    NodeSpec {
+        name: "NopKeyword",
+        kind: "struct",
+    },
+    NodeSpec {
         name: "Program",
         kind: "enum",
+    },
+    NodeSpec {
+        name: "RetKeyword",
+        kind: "struct",
     },
     NodeSpec {
         name: "X64Item",
@@ -115,16 +191,20 @@ pub static NODES: &[NodeSpec] = &[
         name: "X64Reg",
         kind: "enum",
     },
+    NodeSpec {
+        name: "X86_64DialectKeyword",
+        kind: "struct",
+    },
 ];
 
 pub static CANONICAL_PRINT: &[PrintSpec] = &[
     PrintSpec {
         name: "A64Item.AddImm",
-        template: "add {rd}, {rn}, {imm}",
+        template: "{op} {rd}, {rn}, {imm}",
     },
     PrintSpec {
         name: "A64Item.B",
-        template: "b {target}",
+        template: "{op} {target}",
     },
     PrintSpec {
         name: "A64Item.Label",
@@ -132,19 +212,19 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
     },
     PrintSpec {
         name: "A64Item.Mov",
-        template: "mov {rd}, {rm}",
+        template: "{op} {rd}, {rm}",
     },
     PrintSpec {
         name: "A64Item.Movz",
-        template: "movz {rd}, {imm}",
+        template: "{op} {rd}, {imm}",
     },
     PrintSpec {
         name: "A64Item.Nop",
-        template: "nop",
+        template: "{op}",
     },
     PrintSpec {
         name: "A64Item.Ret",
-        template: "ret",
+        template: "{op}",
     },
     PrintSpec {
         name: "A64Reg.Sp",
@@ -167,20 +247,56 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
         template: "x3",
     },
     PrintSpec {
+        name: "AArch64DialectKeyword",
+        template: "aarch64",
+    },
+    PrintSpec {
+        name: "AddKeyword",
+        template: "add",
+    },
+    PrintSpec {
+        name: "AsmKeyword",
+        template: "asm",
+    },
+    PrintSpec {
+        name: "BKeyword",
+        template: "b",
+    },
+    PrintSpec {
+        name: "JmpKeyword",
+        template: "jmp",
+    },
+    PrintSpec {
+        name: "MovKeyword",
+        template: "mov",
+    },
+    PrintSpec {
+        name: "MovzKeyword",
+        template: "movz",
+    },
+    PrintSpec {
+        name: "NopKeyword",
+        template: "nop",
+    },
+    PrintSpec {
         name: "Program.AArch64",
-        template: "asm aarch64 {\n{items}\n}",
+        template: "{keyword} {dialect} {\n{items}\n}",
     },
     PrintSpec {
         name: "Program.X86_64",
-        template: "asm x86_64 {\n{items}\n}",
+        template: "{keyword} {dialect} {\n{items}\n}",
+    },
+    PrintSpec {
+        name: "RetKeyword",
+        template: "ret",
     },
     PrintSpec {
         name: "X64Item.AddImm",
-        template: "add {rd}, {imm}",
+        template: "{op} {rd}, {imm}",
     },
     PrintSpec {
         name: "X64Item.Jmp",
-        template: "jmp {target}",
+        template: "{op} {target}",
     },
     PrintSpec {
         name: "X64Item.Label",
@@ -188,19 +304,19 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
     },
     PrintSpec {
         name: "X64Item.MovImm",
-        template: "mov {rd}, {imm}",
+        template: "{op} {rd}, {imm}",
     },
     PrintSpec {
         name: "X64Item.MovReg",
-        template: "mov {rd}, {rm}",
+        template: "{op} {rd}, {rm}",
     },
     PrintSpec {
         name: "X64Item.Nop",
-        template: "nop",
+        template: "{op}",
     },
     PrintSpec {
         name: "X64Item.Ret",
-        template: "ret",
+        template: "{op}",
     },
     PrintSpec {
         name: "X64Reg.Rax",
@@ -225,5 +341,9 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
     PrintSpec {
         name: "X64Reg.Rsp",
         template: "rsp",
+    },
+    PrintSpec {
+        name: "X86_64DialectKeyword",
+        template: "x86_64",
     },
 ];

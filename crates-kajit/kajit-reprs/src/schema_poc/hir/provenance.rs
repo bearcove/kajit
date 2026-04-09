@@ -36,6 +36,12 @@ impl HasProvenance for Local {
     }
 }
 
+impl HasProvenance for Module {
+    fn provenance(&self) -> Option<&Prov> {
+        Some(&self.prov)
+    }
+}
+
 impl HasProvenance for Param {
     fn provenance(&self) -> Option<&Prov> {
         Some(&self.prov)

@@ -128,6 +128,24 @@ repr @module{
             /// Canonical call expression layout.
             Expr.Call "call {callee}({args:, })"
         }
+
+        semantic_tokens {
+            literal.module keyword
+            literal.fn keyword
+            literal.return keyword
+            literal.call keyword
+
+            field.Function.name function
+            field.Function.return_type type
+            field.Param.name parameter
+            field.Param.ty type
+            field.Local.name variable
+            field.Local.ty type
+            field.TypeDef.name type
+            field.Expr.Call.callee function
+            field.Expr.Local.name variable
+            field.Expr.Literal.value number
+        }
     }
 
     /// Shared scalar-ish building blocks reused by multiple nodes.
@@ -146,7 +164,7 @@ repr @module{
         /// A named type reference in HIR.
         Type @string
         /// A literal value in canonical HIR text.
-        Literal @string
+        Literal @int
         /// A binary operator.
         BinaryOp @enum{
             /// Integer addition.
@@ -178,6 +196,8 @@ repr @module{
     nodes {
         /// The root HIR module.
         Module @node{
+            /// Source provenance for the module.
+            prov @Prov
             /// Optional module-level docs collected from leading `///`
             /// comments before the `module` declaration.
             docs @optional(@DocBlock)

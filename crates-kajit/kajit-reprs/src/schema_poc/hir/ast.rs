@@ -8,26 +8,50 @@ pub struct DocBlock(pub Vec<String>);
 pub use kajit_types::{Prov, Span};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Symbol(pub String);
+pub struct Symbol {
+    pub prov: Prov,
+
+    pub text: String,
+}
+
+impl Symbol {
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+}
 
 /// A binary operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BinaryOp {
-    /// Integer addition.
-    #[default]
-    Add,
-
     /// Integer subtraction.
+    #[default]
     Sub,
+
+    /// Integer addition.
+    Add,
 }
 
 /// A generic parameter name.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct GenericParam(pub String);
+pub struct GenericParam {
+    pub prov: Prov,
+
+    pub text: String,
+}
+
+impl GenericParam {
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+}
 
 /// A literal value in canonical HIR text.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Literal(pub String);
+pub struct Literal {
+    pub prov: Prov,
+
+    pub value: u64,
+}
 
 /// The kind of local binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -42,7 +66,17 @@ pub enum LocalKind {
 
 /// A named type reference in HIR.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Type(pub String);
+pub struct Type {
+    pub prov: Prov,
+
+    pub text: String,
+}
+
+impl Type {
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+}
 
 /// The kind of type definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -179,6 +213,9 @@ pub struct Module {
 
     /// Top-level functions declared in the module.
     pub functions: Vec<Function>,
+
+    /// Source provenance for the module.
+    pub prov: Prov,
 
     /// Type definitions declared in the module.
     pub type_defs: Vec<TypeDef>,
