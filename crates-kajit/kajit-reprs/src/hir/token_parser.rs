@@ -1194,7 +1194,7 @@ pub fn parse_hir_v2(text: &str) -> Result<kajit_hir::Module, String> {
     use chumsky::input::Input as _;
 
     // Phase 1: Lex
-    let (tokens, lex_errs) = crate::lexer::lexer().parse(text).into_output_errors();
+    let (tokens, lex_errs) = crate::hir::lexer::lexer().parse(text).into_output_errors();
 
     if !lex_errs.is_empty() {
         return Err(crate::format_rich_errors(text, lex_errs));

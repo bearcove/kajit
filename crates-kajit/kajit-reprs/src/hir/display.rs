@@ -1,9 +1,9 @@
 use std::fmt;
 
 use crate::hir::{
-    AllocationDomain, BinaryOp, Block, CallExpr, Expr, Function, GenericArg, GenericParam,
-    Literal, LocalId, LocalKind, MatchArm, Module, Parameter, Pattern, PatternField, Place,
-    Scope, Stmt, StmtKind, Type, TypeDef, TypeDefKind, UnaryOp, VariantDef,
+    AllocationDomain, BinaryOp, Block, CallExpr, Expr, Function, GenericArg, GenericParam, Literal,
+    LocalId, LocalKind, MatchArm, MemoryWidth, Module, Parameter, Pattern, PatternField, Place,
+    Scope, Signedness, Stmt, StmtKind, Type, TypeDef, TypeDefKind, UnaryOp, VariantDef,
 };
 
 impl fmt::Display for Module {
@@ -427,16 +427,16 @@ struct TypeDisplay<'a> {
 }
 
 struct MemoryWidthDisplay {
-    width: crate::MemoryWidth,
+    width: MemoryWidth,
 }
 
 impl fmt::Display for MemoryWidthDisplay {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.width {
-            crate::MemoryWidth::W1 => write!(f, "w1"),
-            crate::MemoryWidth::W2 => write!(f, "w2"),
-            crate::MemoryWidth::W4 => write!(f, "w4"),
-            crate::MemoryWidth::W8 => write!(f, "w8"),
+            MemoryWidth::W1 => write!(f, "w1"),
+            MemoryWidth::W2 => write!(f, "w2"),
+            MemoryWidth::W4 => write!(f, "w4"),
+            MemoryWidth::W8 => write!(f, "w8"),
         }
     }
 }
@@ -447,8 +447,8 @@ impl fmt::Display for TypeDisplay<'_> {
             Type::Unit => write!(f, "unit"),
             Type::Bool => write!(f, "bool"),
             Type::Integer(int) => match int.signedness {
-                crate::Signedness::Signed => write!(f, "i{}", int.bits),
-                crate::Signedness::Unsigned => write!(f, "u{}", int.bits),
+                Signedness::Signed => write!(f, "i{}", int.bits),
+                Signedness::Unsigned => write!(f, "u{}", int.bits),
             },
             Type::Ref { mutable, pointee } => {
                 if *mutable {
@@ -792,16 +792,4 @@ impl fmt::Display for PatternDisplay<'_> {
             }
         }
     }
-}
-
-fn fmt_type_list(module: &Module, types: &[Type]) -> String {
-    let mut out = String::from("[");
-    for (index, ty) in types.iter().enumerate() {
-        if index > 0 {
-            out.push_str(", ");
-        }
-        out.push_str(&TypeDisplay { module, ty }.to_string());
-    }
-    out.push(']');
-    out
 }

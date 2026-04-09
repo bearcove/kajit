@@ -1,6 +1,8 @@
 use facet::Facet;
 use figue as args;
 
+mod lsp;
+
 /// kajit — JIT deserializer toolkit
 #[derive(Facet, Debug)]
 struct Args {
@@ -23,7 +25,8 @@ enum Command {
     },
 }
 
-fn main() {
+#[tokio::main(flavor = "multi_thread")]
+async fn main() {
     let args: Args = figue::from_std_args().unwrap();
 
     tracing_subscriber::fmt()
@@ -32,16 +35,6 @@ fn main() {
         .init();
 
     match args.command {
-        Command::Lsp { stdio } => cmd_lsp(stdio),
+        Command::Lsp { stdio } => lsp::cmd_lsp(stdio).await,
     }
-}
-
-fn cmd_lsp(stdio: bool) {
-    if !stdio {
-        eprintln!("error: kajit lsp currently only supports --stdio");
-        std::process::exit(2);
-    }
-
-    eprintln!("error: kajit lsp is not implemented yet");
-    std::process::exit(1);
 }

@@ -1,6 +1,7 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use chumsky::prelude::Rich;
 
+pub mod hir;
 pub mod schema_poc;
 
 /// Format chumsky `Rich` parse errors with ariadne for readable diagnostics.

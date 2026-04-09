@@ -16,7 +16,11 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 default = []
 
 [dependencies]
+chumsky = "1.0.0-alpha.8"
 facet = "0.44"
 figue = "2"
+kajit-reprs = { path = "../kajit-reprs" }
+tokio = { version = "1", features = ["io-std", "macros", "rt-multi-thread", "sync"] }
+tower-lsp = "0.20.0"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
