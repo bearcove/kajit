@@ -1,96 +1,902 @@
 meta {
+    /// Stable identifier for this pilot schema document.
     id kajit:repr-schema/mir-pilot
+    /// Schema revision for the pilot format itself.
     version 1
+    /// Human summary of the pilot's purpose.
     description "Pilot representation schema for Kajit CFG-MIR"
 }
 
+/// Pilot schema for the CFG-MIR representation family.
 repr @module{
+    /// Human-facing representation name.
     name MIR
-    file_ext .vixen-mir
+    /// Canonical text file extension for MIR documents.
+    file_ext .k-mir
 
+    /// High-level stage contract for CFG-MIR.
     contract {
+        /// What this stage is for in the pipeline.
         purpose "Canonical executable CFG IR"
-        canonical_identities (function-name block-id vreg-id)
+        /// Names/identities that remain canonical in printed MIR.
+        canonical_identities (function-id block-id inst-id term-id edge-id vreg-id)
+        /// Required round-trip guarantee for the stage text format.
         round_trip canonical-print
+        /// Provenance expectation for nodes at this stage.
         provenance required
     }
 
-    derive {
-        rust_ast yes
-        visitor yes
-        parser yes
-        formatter yes
-        roundtrip_tests yes
+    /// Text-format description for the canonical CFG-MIR subset.
+    ///
+    /// This draft stays close to the current line-oriented printer/parser:
+    /// a `cfg_program` root, one or more `cfg_func` bodies, explicit blocks,
+    /// explicit instructions, explicit terminators, and explicit CFG edges.
+    syntax {
+        /// Root rule and root AST node for parsed MIR documents.
+        root Program
+
+        /// Token classes used by the pilot parser.
+        tokens {
+            /// A bare identifier used for symbolic names in op payloads.
+            ident @regex("[A-Za-z_][A-Za-z0-9_]*")
+            /// A decimal integer literal token.
+            int @regex("[0-9]+")
+        }
+
+        /// Grammar rules for the currently supported pilot subset.
+        rules {
+            /// A whole CFG-MIR document.
+            Program @seq(
+                "cfg_program"
+                "vregs="
+                @field(vreg_count @token(int))
+                "slots="
+                @field(slot_count @token(int))
+                "{"
+                @field(functions @repeat(@ref(Function)))
+                "}"
+            )
+
+            /// A lowered function body with explicit CFG structure.
+            Function @seq(
+                "cfg_func"
+                "@"
+                @field(lambda_id @token(int))
+                "f"
+                @field(function_id @token(int))
+                "entry="
+                "b"
+                @field(entry @token(int))
+                "{"
+                @field(data_args @ref(DataArgsLine))
+                @field(data_results @ref(DataResultsLine))
+                @field(blocks @repeat(@ref(Block)))
+                @field(insts @repeat(@ref(Inst)))
+                @field(terms @repeat(@ref(Terminator)))
+                @field(edges @repeat(@ref(Edge)))
+                "}"
+            )
+
+            /// The `data_args` header line.
+            DataArgsLine @seq(
+                "data_args:"
+                "["
+                @field(args @repeat(@ref(VReg) {sep ","}))
+                "]"
+            )
+
+            /// The `data_results` header line.
+            DataResultsLine @seq(
+                "data_results:"
+                "["
+                @field(results @repeat(@ref(VReg) {sep ","}))
+                "]"
+            )
+
+            /// A live basic block.
+            ///
+            /// Tombstoned blocks are an internal rewrite detail and are not
+            /// part of the canonical text form.
+            Block @seq(
+                "block"
+                "b"
+                @field(id @ref(BlockId))
+                "params="
+                "["
+                @field(params @repeat(@ref(VReg) {sep ","}))
+                "]"
+                "insts="
+                "["
+                @field(insts @repeat(@ref(InstId) {sep ","}))
+                "]"
+                "term=t"
+                @field(term @ref(TermId))
+                "preds="
+                "["
+                @field(preds @repeat(@ref(EdgeId) {sep ","}))
+                "]"
+                "succs="
+                "["
+                @field(succs @repeat(@ref(EdgeId) {sep ","}))
+                "]"
+            )
+
+            /// A block-parameter binding carried on a CFG edge.
+            EdgeArg @choice(
+                /// Identity mapping: the same vreg flows through unchanged.
+                @variant(Identity @field(vreg @ref(VReg)))
+                /// Explicit source-to-target mapping for a successor parameter.
+                @variant(Mapped @seq(
+                    @field(target @ref(VReg))
+                    "=>"
+                    @field(source @ref(VReg))
+                ))
+            )
+
+            /// A control-flow edge between two blocks.
+            Edge @seq(
+                "edge"
+                "e"
+                @field(id @ref(EdgeId))
+                ":"
+                "b"
+                @field(from @ref(BlockId))
+                "->"
+                "b"
+                @field(to @ref(BlockId))
+                "["
+                @field(args @repeat(@ref(EdgeArg) {sep ","}))
+                "]"
+            )
+
+            /// A single instruction in CFG-MIR.
+            ///
+            /// The first draft keeps the current line shape:
+            /// optional defs, an opcode, optional uses, and optional clobbers.
+            Inst @seq(
+                "inst"
+                "i"
+                @field(id @ref(InstId))
+                ":"
+                @optional(@seq(
+                    @field(defs @repeat(@ref(Operand) {sep ","}))
+                    "="
+                ))
+                @field(op @ref(InstOp))
+                @optional(@field(uses @repeat(@ref(Operand) {sep ","})))
+                @optional(@seq(
+                    "!"
+                    @field(clobbers @ref(ClobberKind))
+                ))
+            )
+
+            /// A single terminator in CFG-MIR.
+            Terminator @choice(
+                /// Return from the current function.
+                @variant(Return @seq(
+                    "return"
+                ))
+                /// Unconditional branch to a single edge.
+                @variant(Branch @seq(
+                    "branch"
+                    "e"
+                    @field(edge @ref(EdgeId))
+                ))
+                /// Branch if the condition is nonzero.
+                @variant(BranchIf @seq(
+                    "branch_if"
+                    @field(cond @ref(VReg))
+                    "->"
+                    "e"
+                    @field(taken @ref(EdgeId))
+                    ","
+                    "fallthrough"
+                    "e"
+                    @field(fallthrough @ref(EdgeId))
+                ))
+                /// Branch if the condition is zero.
+                @variant(BranchIfZero @seq(
+                    "branch_if_zero"
+                    @field(cond @ref(VReg))
+                    "->"
+                    "e"
+                    @field(taken @ref(EdgeId))
+                    ","
+                    "fallthrough"
+                    "e"
+                    @field(fallthrough @ref(EdgeId))
+                ))
+                /// Jump through a table of edge targets.
+                @variant(JumpTable @seq(
+                    "jump_table"
+                    @field(predicate @ref(VReg))
+                    "["
+                    @field(targets @repeat(@ref(EdgeId) {sep ","}))
+                    "]"
+                    ","
+                    "default"
+                    "e"
+                    @field(default @ref(EdgeId))
+                ))
+            )
+        }
+
+        /// Canonical printer templates for the pilot subset.
+        canonical_print {
+            /// Canonical `cfg_program` layout.
+            Program "cfg_program vregs={vreg_count} slots={slot_count} {\n{functions}\n}"
+
+            /// Canonical `cfg_func` layout.
+            Function "cfg_func @{lambda_id} f{function_id} entry=b{entry} {\n{data_args}\n{data_results}\n{blocks}\n{insts}\n{terms}\n{edges}\n}"
+
+            /// Canonical `data_args` line.
+            DataArgsLine "data_args: [{args:, }]"
+
+            /// Canonical `data_results` line.
+            DataResultsLine "data_results: [{results:, }]"
+
+            /// Canonical block layout.
+            Block "block b{id} params=[{params:, }] insts=[{insts:, }] term=t{term} preds=[{preds:, }] succs=[{succs:, }]"
+
+            /// Canonical edge layout.
+            Edge "edge e{id}: b{from} -> b{to} [{args:, }]"
+
+            /// Canonical instruction layout.
+            Inst "inst i{id}:{defs? : {defs:, } =}{op}{uses? : {uses:, }}{clobbers? : !{clobbers}}"
+
+            /// Canonical return terminator layout.
+            Terminator.Return "return"
+            /// Canonical branch terminator layout.
+            Terminator.Branch "branch e{edge}"
+            /// Canonical conditional branch layout.
+            Terminator.BranchIf "branch_if {cond} -> e{taken}, fallthrough e{fallthrough}"
+            /// Canonical zero-test branch layout.
+            Terminator.BranchIfZero "branch_if_zero {cond} -> e{taken}, fallthrough e{fallthrough}"
+            /// Canonical jump-table layout.
+            Terminator.JumpTable "jump_table {predicate} [{targets:, }], default e{default}"
+
+            /// Canonical `EdgeArg` layout.
+            EdgeArg.Identity "{vreg}"
+            /// Canonical mapped `EdgeArg` layout.
+            EdgeArg.Mapped "{target}=>{source}"
+
+            /// Canonical `InstOp` layouts.
+            InstOp.Const " const({value})"
+            InstOp.DataAddr " data_addr({blob_id})"
+            InstOp.ExternAddr " extern_addr({symbol})"
+            InstOp.BinOp " {op}"
+            InstOp.UnaryOp " {op}"
+            InstOp.Copy " copy"
+            InstOp.StackAlloc " stack_alloc({id})"
+            InstOp.StoreToAddr " store_addr([{width}])"
+            InstOp.LoadFromAddr " load_addr([{width}])"
+            InstOp.WriteToSlot " write_slot({slot})"
+            InstOp.ReadFromSlot " read_slot({slot})"
+            InstOp.CallIntrinsic " call_intrinsic({func})"
+            InstOp.CallPure " call_pure({func})"
+            InstOp.CallEffect " call_effect({func})"
+            InstOp.CallLambda " call_lambda(@{target})"
+
+            /// Canonical `Operand` layout.
+            Operand "v{vreg}:{class}{fixed? : /{fixed}}"
+
+            /// Canonical unary-op layout.
+            UnaryOp.SignExtend "SignExtend {from_width: {from_width}}"
+
+            /// Canonical `FixedReg` layout.
+            FixedReg.AbiArg "arg{index}"
+            FixedReg.AbiRet "ret{index}"
+            FixedReg.HwReg "hw{index}"
+
+            /// Canonical `ConstRef` layout.
+            ConstRef.Named "@{name}"
+            ConstRef.Value "{value}"
+
+            /// Canonical `IntrinsicRef` layout.
+            IntrinsicRef.Named "@{name}"
+            IntrinsicRef.Address "{value}"
+        }
+
+        /// Semantic highlighting hints for the pilot subset.
+        semantic_tokens {
+            literal.cfg_program keyword
+            literal.cfg_func keyword
+            literal.block keyword
+            literal.inst keyword
+            literal.term keyword
+            literal.edge keyword
+            literal.return keyword
+            literal.branch keyword
+            literal.branch_if keyword
+            literal.branch_if_zero keyword
+            literal.jump_table keyword
+            literal.data_args keyword
+            literal.data_results keyword
+            literal.const keyword
+            literal.data_addr keyword
+            literal.extern_addr keyword
+            literal.copy keyword
+            literal.stack_alloc keyword
+            literal.store_addr keyword
+            literal.load_addr keyword
+            literal.write_slot keyword
+            literal.read_slot keyword
+            literal.call_intrinsic keyword
+            literal.call_pure keyword
+            literal.call_effect keyword
+            literal.call_lambda keyword
+
+            field.Program.vreg_count number
+            field.Program.slot_count number
+            field.Function.lambda_id number
+            field.Function.function_id number
+            field.Function.entry label
+            field.DataArgsLine.args variable
+            field.DataResultsLine.results variable
+            field.Block.id label
+            field.Block.term label
+            field.Edge.id label
+            field.Edge.from label
+            field.Edge.to label
+            field.Inst.id label
+            field.InstOp.Const.value number
+            field.InstOp.DataAddr.blob_id number
+            field.InstOp.CallLambda.target number
+            field.Terminator.Branch.edge label
+            field.Terminator.BranchIf.taken label
+            field.Terminator.BranchIf.fallthrough label
+            field.Terminator.BranchIfZero.taken label
+            field.Terminator.BranchIfZero.fallthrough label
+            field.Terminator.JumpTable.targets label
+            field.Terminator.JumpTable.default label
+            field.EdgeArg.Identity.vreg variable
+            field.EdgeArg.Mapped.target variable
+            field.EdgeArg.Mapped.source variable
+            field.ConstRef.Value.value number
+            field.IntrinsicRef.Address.value number
+            field.Operand.vreg variable
+        }
     }
 
+    /// Shared scalar-ish building blocks reused by multiple nodes.
     common {
+        /// Node provenance payload.
         provenance @Prov
-        symbol @Symbol
+        /// Free-form doc block payload collected from leading `///`
+        /// comments.
+        docs @DocBlock
     }
 
+    /// Semantic support types that are not themselves structural nodes.
+    support {
+        /// A virtual register index.
+        VReg @id
+        /// A function identifier in the current CFG-MIR container.
+        FunctionId @id
+        /// A lowered lambda identifier from upstream IR.
+        LambdaId @id
+        /// A basic block identifier.
+        BlockId @id
+        /// A control-flow edge identifier.
+        EdgeId @id
+        /// A non-terminator instruction identifier.
+        InstId @id
+        /// A terminator identifier.
+        TermId @id
+        /// A stack slot identifier.
+        SlotId @id
+        /// An abstract stack-allocation identifier.
+        StackAllocId @id
+        /// An embedded data blob identifier.
+        BlobId @id
+        /// A scalar width used by loads, stores, and sign extension.
+        Width @enum{
+            /// One byte.
+            W1 @unit
+            /// Two bytes.
+            W2 @unit
+            /// Four bytes.
+            W4 @unit
+            /// Eight bytes.
+            W8 @unit
+        }
+        /// Required register class for an operand.
+        RegClass @enum{
+            /// General-purpose registers.
+            Gpr @unit
+            /// SIMD/vector registers.
+            Simd @unit
+        }
+        /// Named clobber groups printed after `!`.
+        ClobberKind @enum{
+            /// Caller-saved GPRs are clobbered.
+            Gpr @unit
+            /// Caller-saved SIMD registers are clobbered.
+            Simd @unit
+            /// Both caller-saved GPR and SIMD registers are clobbered.
+            Both @unit
+        }
+        /// The binary-op family used by the pilot text format.
+        BinOpKind @enum{
+            /// Integer addition.
+            Add @unit
+            /// Integer subtraction.
+            Sub @unit
+            /// Integer multiplication.
+            Mul @unit
+            /// Bitwise AND.
+            And @unit
+            /// Bitwise OR.
+            Or @unit
+            /// Arithmetic right shift.
+            Sar @unit
+            /// Logical right shift.
+            Shr @unit
+            /// Logical left shift.
+            Shl @unit
+            /// Bitwise XOR.
+            Xor @unit
+            /// Equality comparison.
+            CmpEq @unit
+            /// Inequality comparison.
+            CmpNe @unit
+            /// Less-than comparison.
+            CmpLt @unit
+            /// Less-than-or-equal comparison.
+            CmpLe @unit
+            /// Greater-than comparison.
+            CmpGt @unit
+            /// Greater-than-or-equal comparison.
+            CmpGe @unit
+        }
+    }
+
+    /// Structural AST nodes for the CFG-MIR surface.
     nodes {
+        /// The root CFG-MIR program.
         Program @node{
+            /// Source provenance for the program.
+            prov @Prov
+            /// Optional program-level docs.
+            docs @optional(@DocBlock)
+            /// Total number of vregs available in this program.
+            vreg_count @token(int)
+            /// Total number of stack slots available in this program.
+            slot_count @token(int)
+            /// Lowered functions in the program.
             functions @seq(@Function)
         }
 
-        Function @node{
+        /// A lowered lambda/function in canonical CFG-MIR form.
+        Function @entity{
+            /// Source provenance for the function header.
             prov @Prov
-            name @Symbol
-            params @seq(@VReg)
+            /// Optional docs attached to the function.
+            docs @optional(@DocBlock)
+            /// Lowered lambda identifier.
+            lambda_id @LambdaId
+            /// Stable function identifier used in the text format.
+            function_id @FunctionId
+            /// Entry block for the function.
+            entry @BlockId
+            /// Data arguments available at the function entry.
+            data_args @seq(@VReg)
+            /// Data results returned from the function.
+            data_results @seq(@VReg)
+            /// Live blocks in canonical order.
             blocks @seq(@Block)
-        }
-
-        Block @node{
-            prov @Prov
-            id @BlockId
-            params @seq(@VReg)
+            /// Non-terminator instructions in arena order.
             insts @seq(@Inst)
-            term @Terminator
+            /// Terminators in arena order.
+            terms @seq(@Terminator)
+            /// Control-flow edges in arena order.
+            edges @seq(@Edge)
         }
 
-        Inst @enum{
-            Const @struct{
-                prov @Prov
-                dst @VReg
-                value @Literal
-            }
-
-            Call @struct{
-                prov @Prov
-                dsts @seq(@VReg)
-                callee @Symbol
-                args @seq(@Operand)
-            }
-
-            Binary @struct{
-                prov @Prov
-                dst @VReg
-                op @BinaryOp
-                lhs @Operand
-                rhs @Operand
-            }
+        /// The `data_args` header line.
+        DataArgsLine @slot{
+            /// Source provenance for the line.
+            prov @Prov
+            /// Optional docs attached to the line.
+            docs @optional(@DocBlock)
+            /// Data arguments available at the function entry.
+            args @seq(@VReg)
         }
 
-        Terminator @enum{
-            Jump @struct{
-                prov @Prov
-                target @BlockRef
-                args @seq(@Operand)
-            }
-
-            Branch @struct{
-                prov @Prov
-                cond @Operand
-                then @BlockRef
-                then_args @seq(@Operand)
-                else @BlockRef
-                else_args @seq(@Operand)
-            }
-
-            Return @struct{
-                prov @Prov
-                values @seq(@Operand)
-            }
+        /// The `data_results` header line.
+        DataResultsLine @slot{
+            /// Source provenance for the line.
+            prov @Prov
+            /// Optional docs attached to the line.
+            docs @optional(@DocBlock)
+            /// Data results returned from the function.
+            results @seq(@VReg)
         }
+
+        /// A live basic block.
+        ///
+        /// Tombstoned blocks are an internal rewrite detail and are not part
+        /// of the canonical text form.
+        Block @entity{
+            /// Source provenance for the block.
+            prov @Prov
+            /// Optional docs attached to the block.
+            docs @optional(@DocBlock)
+            /// Stable block ID.
+            id @BlockId
+            /// SSA block parameters filled from incoming edge arguments.
+            params @seq(@VReg)
+            /// Instruction IDs executed before the terminator.
+            insts @seq(@InstId)
+            /// Block terminator.
+            term @TermId
+            /// Incoming edges, rebuildable from the edge list.
+            preds @seq(@EdgeId)
+            /// Outgoing edges, rebuildable from the edge list.
+            succs @seq(@EdgeId)
+        }
+
+        /// A single edge-argument binding.
+        EdgeArg @choice(
+            /// Identity mapping: the same vreg flows through unchanged.
+            @variant(Identity @seq(
+                @field(vreg @VReg)
+            ))
+            /// Explicit source-to-target mapping for a successor parameter.
+            @variant(Mapped @seq(
+                @field(target @VReg)
+                @field(source @VReg)
+            ))
+        )
+
+        /// A control-flow edge between two blocks.
+        Edge @entity{
+            /// Source provenance for the edge.
+            prov @Prov
+            /// Optional docs attached to the edge.
+            docs @optional(@DocBlock)
+            /// Stable edge ID.
+            id @EdgeId
+            /// Source block.
+            from @BlockId
+            /// Destination block.
+            to @BlockId
+            /// Arguments passed along the edge.
+            args @seq(@EdgeArg)
+        }
+
+        /// A single edge-argument binding.
+        EdgeArg @choice(
+            /// Identity mapping: the same vreg flows through unchanged.
+            @variant(Identity @seq(
+                @field(vreg @ref(VReg))
+            ))
+            /// Explicit source-to-target mapping for a successor parameter.
+            @variant(Mapped @seq(
+                @field(target @ref(VReg))
+                @field(source @ref(VReg))
+            ))
+        )
+
+        /// A register operand used by an instruction.
+        Operand @slot{
+            /// Source provenance for the operand.
+            prov @Prov
+            /// The referenced vreg.
+            vreg @VReg
+            /// The required register class.
+            class @RegClass
+            /// Optional fixed-register constraint.
+            fixed @optional(@FixedReg)
+        }
+
+        /// A fixed-register constraint attached to an operand.
+        FixedReg @choice(
+            /// An ABI argument register.
+            @variant(AbiArg @seq(
+                "arg"
+                @field(index @token(int))
+            ))
+            /// An ABI return register.
+            @variant(AbiRet @seq(
+                "ret"
+                @field(index @token(int))
+            ))
+            /// A hardware register encoding.
+            @variant(HwReg @seq(
+                "hw"
+                @field(index @token(int))
+            ))
+        )
+
+        /// A symbolic constant reference used by `const(...)`.
+        ConstRef @choice(
+            /// A named constant.
+            @variant(Named @seq(
+                "@"
+                @field(name @token(ident))
+            ))
+            /// A raw integer constant.
+            @variant(Value @field(value @token(int)))
+        )
+
+        /// A named or raw function-pointer reference used by call forms.
+        IntrinsicRef @choice(
+            /// A named intrinsic reference.
+            @variant(Named @seq(
+                "@"
+                @field(name @token(ident))
+            ))
+            /// A raw address reference.
+            @variant(Address @field(value @token(int)))
+        )
+
+        /// An instruction opcode as a semantic node.
+        InstOp @choice(
+            /// Materialize an immediate constant.
+            @variant(Const @seq(
+                "const("
+                @field(value @ref(ConstRef))
+                ")"
+            ))
+            /// Load the runtime address of an embedded data blob.
+            @variant(DataAddr @seq(
+                "data_addr("
+                @field(blob_id @ref(BlobId))
+                ")"
+            ))
+            /// Load the address of an external symbol.
+            @variant(ExternAddr @seq(
+                "extern_addr("
+                @field(symbol @ref(IntrinsicRef))
+                ")"
+            ))
+            /// Execute a binary arithmetic or comparison op.
+            @variant(BinOp @seq(
+                @field(op @ref(BinOpKind))
+            ))
+            /// Execute a unary op.
+            @variant(UnaryOp @seq(
+                @field(op @ref(UnaryOp))
+            ))
+            /// Copy a value between virtual registers.
+            @variant(Copy @seq(
+                "copy"
+            ))
+            /// Produce the address of an abstract stack allocation.
+            @variant(StackAlloc @seq(
+                "stack_alloc("
+                @field(id @ref(StackAllocId))
+                ")"
+            ))
+            /// Store a scalar value to memory.
+            @variant(StoreToAddr @seq(
+                "store_addr(["
+                @field(width @ref(Width))
+                "])"
+            ))
+            /// Load a scalar value from memory.
+            @variant(LoadFromAddr @seq(
+                "load_addr(["
+                @field(width @ref(Width))
+                "])"
+            ))
+            /// Write a value to a stack slot.
+            @variant(WriteToSlot @seq(
+                "write_slot("
+                @field(slot @ref(SlotId))
+                ")"
+            ))
+            /// Read a value from a stack slot.
+            @variant(ReadFromSlot @seq(
+                "read_slot("
+                @field(slot @ref(SlotId))
+                ")"
+            ))
+            /// Call an external/raw intrinsic by reference.
+            @variant(CallIntrinsic @seq(
+                "call_intrinsic("
+                @field(func @ref(IntrinsicRef))
+                ")"
+            ))
+            /// Call a pure intrinsic by reference.
+            @variant(CallPure @seq(
+                "call_pure("
+                @field(func @ref(IntrinsicRef))
+                ")"
+            ))
+            /// Call an effectful intrinsic by reference.
+            @variant(CallEffect @seq(
+                "call_effect("
+                @field(func @ref(IntrinsicRef))
+                ")"
+            ))
+            /// Call another lowered lambda by ID.
+            @variant(CallLambda @seq(
+                "call_lambda(@"
+                @field(target @ref(LambdaId))
+                ")"
+            ))
+        )
+
+        /// Unary-op payloads used by the pilot text format.
+        UnaryOp @choice(
+            /// Sign-extend from a source width to 64 bits.
+            @variant(SignExtend @seq(
+                "SignExtend"
+                "{"
+                "from_width:"
+                @field(from_width @ref(Width))
+                "}"
+            ))
+        )
+
+        /// A single non-terminator instruction in CFG-MIR.
+        Inst @entity{
+            /// Source provenance for the instruction.
+            prov @Prov
+            /// Optional docs attached to the instruction.
+            docs @optional(@DocBlock)
+            /// Stable instruction ID.
+            id @InstId
+            /// Destination operands printed before `=`.
+            defs @seq(@Operand)
+            /// The opcode and its payload.
+            op @InstOp
+            /// Source operands printed after the opcode.
+            uses @seq(@Operand)
+            /// Optional caller-saved clobber marker.
+            clobbers @optional(@ClobberKind)
+        }
+
+        /// Instruction opcodes as canonical textual forms.
+        InstOp @choice(
+            /// Materialize an immediate constant.
+            @variant(Const @seq(
+                "const("
+                @field(value @ref(ConstRef))
+                ")"
+            ))
+            /// Load the runtime address of an embedded data blob.
+            @variant(DataAddr @seq(
+                "data_addr("
+                @field(blob_id @ref(BlobId))
+                ")"
+            ))
+            /// Load the address of an external symbol.
+            @variant(ExternAddr @seq(
+                "extern_addr("
+                @field(symbol @ref(IntrinsicRef))
+                ")"
+            ))
+            /// Execute a binary arithmetic or comparison op.
+            @variant(BinOp @seq(
+                @field(op @ref(BinOpKind))
+            ))
+            /// Execute a unary op.
+            @variant(UnaryOp @seq(
+                @field(op @ref(UnaryOp))
+            ))
+            /// Copy a value between virtual registers.
+            @variant(Copy @seq(
+                "copy"
+            ))
+            /// Produce the address of an abstract stack allocation.
+            @variant(StackAlloc @seq(
+                "stack_alloc("
+                @field(id @ref(StackAllocId))
+                ")"
+            ))
+            /// Store a scalar value to memory.
+            @variant(StoreToAddr @seq(
+                "store_addr(["
+                @field(width @ref(Width))
+                "])"
+            ))
+            /// Load a scalar value from memory.
+            @variant(LoadFromAddr @seq(
+                "load_addr(["
+                @field(width @ref(Width))
+                "])"
+            ))
+            /// Write a value to a stack slot.
+            @variant(WriteToSlot @seq(
+                "write_slot("
+                @field(slot @ref(SlotId))
+                ")"
+            ))
+            /// Read a value from a stack slot.
+            @variant(ReadFromSlot @seq(
+                "read_slot("
+                @field(slot @ref(SlotId))
+                ")"
+            ))
+            /// Call an external/raw intrinsic by reference.
+            @variant(CallIntrinsic @seq(
+                "call_intrinsic("
+                @field(func @ref(IntrinsicRef))
+                ")"
+            ))
+            /// Call a pure intrinsic by reference.
+            @variant(CallPure @seq(
+                "call_pure("
+                @field(func @ref(IntrinsicRef))
+                ")"
+            ))
+            /// Call an effectful intrinsic by reference.
+            @variant(CallEffect @seq(
+                "call_effect("
+                @field(func @ref(IntrinsicRef))
+                ")"
+            ))
+            /// Call another lowered lambda by ID.
+            @variant(CallLambda @seq(
+                "call_lambda(@"
+                @field(target @ref(LambdaId))
+                ")"
+            ))
+        )
+
+        /// Unary-op payloads used by the pilot text format.
+        UnaryOp @choice(
+            /// Sign-extend from a source width to 64 bits.
+            @variant(SignExtend @seq(
+                "SignExtend"
+                "{"
+                "from_width:"
+                @field(from_width @ref(Width))
+                "}"
+            ))
+        )
+
+        /// A block terminator.
+        Terminator @choice(
+            /// Return from the current function.
+            @variant(Return @seq(
+                "return"
+            ))
+            /// Unconditional branch to a single edge.
+            @variant(Branch @seq(
+                "branch"
+                "e"
+                @field(edge @ref(EdgeId))
+            ))
+            /// Branch if the condition is nonzero.
+            @variant(BranchIf @seq(
+                "branch_if"
+                @field(cond @ref(VReg))
+                "->"
+                "e"
+                @field(taken @ref(EdgeId))
+                ","
+                "fallthrough"
+                "e"
+                @field(fallthrough @ref(EdgeId))
+            ))
+            /// Branch if the condition is zero.
+            @variant(BranchIfZero @seq(
+                "branch_if_zero"
+                @field(cond @ref(VReg))
+                "->"
+                "e"
+                @field(taken @ref(EdgeId))
+                ","
+                "fallthrough"
+                "e"
+                @field(fallthrough @ref(EdgeId))
+            ))
+            /// Jump through a table of edge targets.
+            @variant(JumpTable @seq(
+                "jump_table"
+                @field(predicate @ref(VReg))
+                "["
+                @field(targets @repeat(@ref(EdgeId) {sep ","}))
+                "]"
+                ","
+                "default"
+                "e"
+                @field(default @ref(EdgeId))
+            ))
+        )
     }
 }
