@@ -1,0 +1,8 @@
+asm x86_64 {
+    entry:
+    mov rax, 42
+    mov rbx, rax
+    add rbx, 1
+    jmp entry
+    ret
+}

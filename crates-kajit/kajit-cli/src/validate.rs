@@ -47,6 +47,18 @@ mod tests {
     }
 
     #[test]
+    fn validates_pilot_asm_text() {
+        let path = Path::new("/tmp/example.k-asm");
+        let source = "asm aarch64 { start: movz x0, 42 ret }";
+        let result = schema_poc::REPRS
+            .iter()
+            .find(|repr| path_matches_ext(path, repr.file_ext))
+            .map(|repr| (repr.validate)(source))
+            .expect("expected .k-asm validation handler");
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn rejects_unknown_extensions() {
         let err = cmd_validate(Path::new("/tmp/example.txt")).unwrap_err();
         assert!(err.contains("unsupported file extension"));

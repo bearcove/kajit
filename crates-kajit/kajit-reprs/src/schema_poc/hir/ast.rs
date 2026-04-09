@@ -32,12 +32,12 @@ pub struct Literal(pub String);
 /// The kind of local binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LocalKind {
-    /// A compiler-introduced temporary.
-    #[default]
-    Temp,
-
     /// A named source-level local.
+    #[default]
     Local,
+
+    /// A compiler-introduced temporary.
+    Temp,
 }
 
 /// A named type reference in HIR.
@@ -47,15 +47,15 @@ pub struct Type(pub String);
 /// The kind of type definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TypeDefKind {
-    /// A type alias definition.
+    /// A struct type definition.
     #[default]
+    Struct,
+
+    /// A type alias definition.
     Alias,
 
     /// An enum type definition.
     Enum,
-
-    /// A struct type definition.
-    Struct,
 }
 
 /// A sequence of statements with shared provenance.

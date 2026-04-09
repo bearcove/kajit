@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use crate::normalize::{DocumentedValue, NormalizedNodeDecl, NormalizedRepr, SyntaxTypeUse};
+use crate::normalize::{
+    DocumentedValue, NormalizedNodeDecl, NormalizedRepr, SyntaxTypeUse, is_string_scalar_type,
+};
 use crate::render_helpers::{rust_ident, snake_case};
 
 #[derive(Debug, Clone)]
@@ -113,7 +115,7 @@ fn render_node_formatter(
         NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
             if let Some(template) = repr.syntax.canonical_print.get(node_name) {
                 let parts = parse_template(template)?;
-                let body = render_template_lines(&parts, "node", fields, None, node_names)?;
+                let body = render_template_lines(&parts, "node", fields, None, repr, node_names)?;
                 Ok(format!(
                     "pub fn {fn_name}(node: &{node_name}) -> String {{\n    let mut w = Writer::new();\n    {write_name}(&mut w, node);\n    w.finish()\n}}\n\nfn {write_name}(w: &mut Writer, node: &{node_name}) {{\n{body}\n}}"
                 ))
@@ -177,6 +179,7 @@ fn render_node_formatter(
                         "node",
                         fields,
                         Some(&overrides),
+                        repr,
                         node_names,
                     )?;
                     arms.push(format!(
@@ -201,6 +204,7 @@ fn render_template_lines(
     node_expr: &str,
     fields: &HashMap<String, DocumentedValue<SyntaxTypeUse>>,
     overrides: Option<&HashMap<String, (String, SyntaxTypeUse)>>,
+    repr: &NormalizedRepr,
     node_names: &[String],
 ) -> Result<String, String> {
     let mut lines = Vec::new();
@@ -214,6 +218,7 @@ fn render_template_lines(
             TemplatePart::Field { name, joiner } => {
                 let (expr, ty) = lookup_field(name, node_expr, fields, overrides)?;
                 lines.extend(render_value_write_lines(
+                    repr,
                     "w",
                     &expr,
                     &ty,
@@ -235,6 +240,7 @@ fn render_template_lines(
                     node_expr,
                     fields,
                     Some(&nested_overrides),
+                    repr,
                     node_names,
                 )?;
                 lines.push(format!("    if let Some(value) = {expr}.as_ref() {{"));
@@ -268,6 +274,7 @@ fn lookup_field(
 }
 
 fn render_value_write_lines(
+    repr: &NormalizedRepr,
     writer_name: &str,
     expr: &str,
     ty: &SyntaxTypeUse,
@@ -292,16 +299,32 @@ fn render_value_write_lines(
                     "        {writer_name}.with_indent(|{writer_name}| {{"
                 ));
                 lines.extend(
-                    render_value_write_lines(writer_name, "value", inner, None, node_names, false)?
-                        .into_iter()
-                        .map(|line| format!("    {line}")),
+                    render_value_write_lines(
+                        repr,
+                        writer_name,
+                        "value",
+                        inner,
+                        None,
+                        node_names,
+                        false,
+                    )?
+                    .into_iter()
+                    .map(|line| format!("    {line}")),
                 );
                 lines.push("        });".to_owned());
             } else {
                 lines.extend(
-                    render_value_write_lines(writer_name, "value", inner, None, node_names, false)?
-                        .into_iter()
-                        .map(|line| format!("    {line}")),
+                    render_value_write_lines(
+                        repr,
+                        writer_name,
+                        "value",
+                        inner,
+                        None,
+                        node_names,
+                        false,
+                    )?
+                    .into_iter()
+                    .map(|line| format!("    {line}")),
                 );
             }
             lines.push("    }".to_owned());
@@ -317,8 +340,8 @@ fn render_value_write_lines(
                 Ok(vec![format!("    {write_name}({writer_name}, &{expr});")])
             }
         }
-        SyntaxTypeUse::Ref { name } => Ok(vec![match name.as_str() {
-            "Symbol" | "Type" | "Literal" => {
+        SyntaxTypeUse::Ref { name } => Ok(vec![match () {
+            _ if is_string_scalar_type(repr, name) => {
                 format!("    {writer_name}.text(&{expr}.0);")
             }
             _ => format!("    {writer_name}.text(&format!(\"{{:?}}\", {expr}));"),

@@ -77,6 +77,16 @@ pub(crate) enum NormalizedSupportDecl {
     Enum(Vec<DocumentedValue<String>>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NormalizedRefKind {
+    Provenance,
+    StringScalar,
+    StringSeq,
+    Unit,
+    Enum,
+    Unknown,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum NormalizedNodeDecl {
     Node(HashMap<String, DocumentedValue<SyntaxTypeUse>>),
@@ -349,10 +359,35 @@ pub(crate) fn render_default_value(ty: &SyntaxTypeUse, provenance_tag: &str) -> 
     }
 }
 
+fn common_alias_target<'a>(repr: &'a NormalizedRepr, role: &str) -> Option<&'a str> {
+    match repr.common.get(role) {
+        Some(SyntaxTypeUse::Ref { name }) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+pub(crate) fn classify_ref_type(repr: &NormalizedRepr, name: &str) -> NormalizedRefKind {
+    if common_alias_target(repr, "provenance") == Some(name) {
+        return NormalizedRefKind::Provenance;
+    }
+
+    if common_alias_target(repr, "symbol") == Some(name) {
+        return NormalizedRefKind::StringScalar;
+    }
+
+    if common_alias_target(repr, "docs") == Some(name) {
+        return NormalizedRefKind::StringSeq;
+    }
+
+    match repr.support.get(name).map(|decl| &decl.value) {
+        Some(NormalizedSupportDecl::String) => NormalizedRefKind::StringScalar,
+        Some(NormalizedSupportDecl::StringSeq) => NormalizedRefKind::StringSeq,
+        Some(NormalizedSupportDecl::Unit) => NormalizedRefKind::Unit,
+        Some(NormalizedSupportDecl::Enum(_)) => NormalizedRefKind::Enum,
+        None => NormalizedRefKind::Unknown,
+    }
+}
+
 pub(crate) fn is_string_scalar_type(repr: &NormalizedRepr, name: &str) -> bool {
-    name == "Symbol"
-        || repr
-            .support
-            .get(name)
-            .is_some_and(|decl| matches!(decl.value, NormalizedSupportDecl::String))
+    classify_ref_type(repr, name) == NormalizedRefKind::StringScalar
 }

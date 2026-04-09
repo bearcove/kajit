@@ -9,10 +9,19 @@ mod render_module;
 mod schema;
 
 pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> {
-    let schema_path = workspace_root.join("notes/unified-ast/pilot/hir.repr.styx");
-    let loaded = schema::load_hir_pilot_schema(&schema_path)?;
-    let repr = normalize::normalize_repr(&loaded.body)?;
-    let repr = normalize::with_module_doc(repr, loaded.doc);
+    let schema_paths = [
+        workspace_root.join("notes/unified-ast/pilot/hir.repr.styx"),
+        workspace_root.join("notes/unified-ast/pilot/asm.repr.styx"),
+    ];
+    let mut reprs = Vec::new();
+    for schema_path in schema_paths {
+        if !schema_path.exists() {
+            continue;
+        }
+        let loaded = schema::load_pilot_schema(&schema_path)?;
+        let repr = normalize::normalize_repr(&loaded.body)?;
+        reprs.push(normalize::with_module_doc(repr, loaded.doc));
+    }
 
     let out_dir = workspace_root.join("crates-kajit/kajit-reprs/src/schema_poc");
     fs::create_dir_all(&out_dir)
@@ -25,7 +34,7 @@ pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> 
     }
 
     let mut written = Vec::new();
-    for generated in render_module::render_hir_poc_files(&repr) {
+    for generated in render_module::render_repr_poc_files(&reprs) {
         let path = out_dir.join(&generated.relative_path);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)

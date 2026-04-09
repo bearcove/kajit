@@ -34,9 +34,14 @@ pub(crate) fn pascal_case(name: &str) -> String {
 
 pub(crate) fn snake_case(name: &str) -> String {
     let mut out = String::new();
-    for (i, ch) in name.chars().enumerate() {
+    let chars = name.chars().collect::<Vec<_>>();
+    for (i, ch) in chars.iter().copied().enumerate() {
+        let prev = i.checked_sub(1).and_then(|idx| chars.get(idx)).copied();
+        let next = chars.get(i + 1).copied();
         if ch.is_ascii_uppercase() {
-            if i != 0 {
+            let word_boundary = matches!(prev, Some(p) if p.is_ascii_lowercase() || p.is_ascii_digit())
+                || matches!((prev, next), (Some(p), Some(n)) if p.is_ascii_uppercase() && n.is_ascii_lowercase());
+            if i != 0 && word_boundary {
                 out.push('_');
             }
             out.push(ch.to_ascii_lowercase());

@@ -46,4 +46,20 @@ mod tests {
             "module {\n    fn main() -> Value {\n        return 42\n    }\n}"
         );
     }
+
+    #[test]
+    fn formats_pilot_asm_text() {
+        let path = Path::new("/tmp/example.k-asm");
+        let source = "asm x86_64 { entry: mov rax, 42 ret }";
+        let result = schema_poc::REPRS
+            .iter()
+            .find(|repr| path_matches_ext(path, repr.file_ext))
+            .map(|repr| (repr.format)(source))
+            .expect("expected .k-asm formatter handler");
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            "asm x86_64 {\n    entry:\n    mov rax, 42\n    ret\n}"
+        );
+    }
 }

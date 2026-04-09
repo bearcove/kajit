@@ -181,7 +181,7 @@ pub(crate) struct NodeVariants {
     pub(crate) variants: HashMap<Documented<String>, NodeDecl>,
 }
 
-pub(crate) fn load_hir_pilot_schema(schema_path: &Path) -> Result<LoadedRepr, String> {
+pub(crate) fn load_pilot_schema(schema_path: &Path) -> Result<LoadedRepr, String> {
     let schema_source = fs::read_to_string(schema_path)
         .map_err(|e| format!("failed to read {}: {e}", schema_path.display()))?;
     let schema: PilotSchemaDocument = facet_styx::from_str(&schema_source).map_err(|e| {

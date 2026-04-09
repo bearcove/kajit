@@ -11,47 +11,55 @@ pub(crate) struct GeneratedModuleFile {
     pub(crate) contents: String,
 }
 
-pub(crate) fn render_hir_poc_files(repr: &NormalizedRepr) -> Vec<GeneratedModuleFile> {
-    let parts = render_parts(repr);
+pub(crate) fn render_repr_poc_files(reprs: &[NormalizedRepr]) -> Vec<GeneratedModuleFile> {
+    let mut files = Vec::new();
+    files.push(GeneratedModuleFile {
+        relative_path: "mod.rs".to_owned(),
+        contents: render_root_mod_file(reprs),
+    });
 
-    vec![
-        GeneratedModuleFile {
-            relative_path: "mod.rs".to_owned(),
-            contents: render_root_mod_file(),
-        },
-        GeneratedModuleFile {
-            relative_path: "hir/mod.rs".to_owned(),
-            contents: render_hir_mod_file(),
-        },
-        GeneratedModuleFile {
-            relative_path: "hir/meta.rs".to_owned(),
-            contents: format_generated_file(render_meta_file(&parts)),
-        },
-        GeneratedModuleFile {
-            relative_path: "hir/ast.rs".to_owned(),
-            contents: format_generated_file(render_ast_file(&parts)),
-        },
-        GeneratedModuleFile {
-            relative_path: "hir/visit.rs".to_owned(),
-            contents: format_generated_file(render_visit_file(&parts)),
-        },
-        GeneratedModuleFile {
-            relative_path: "hir/provenance.rs".to_owned(),
-            contents: format_generated_file(render_provenance_file(&parts)),
-        },
-        GeneratedModuleFile {
-            relative_path: "hir/parse.rs".to_owned(),
-            contents: format_generated_file(render_parse_file(&parts)),
-        },
-        GeneratedModuleFile {
-            relative_path: "hir/format.rs".to_owned(),
-            contents: format_generated_file(render_format_file(&parts)),
-        },
-        GeneratedModuleFile {
-            relative_path: "hir/tests.rs".to_owned(),
-            contents: format_generated_file(render_tests_file()),
-        },
-    ]
+    for repr in reprs {
+        let parts = render_parts(repr);
+        let module_dir = snake_case(&repr.name);
+        files.extend([
+            GeneratedModuleFile {
+                relative_path: format!("{module_dir}/mod.rs"),
+                contents: render_repr_mod_file(repr.name == "HIR"),
+            },
+            GeneratedModuleFile {
+                relative_path: format!("{module_dir}/meta.rs"),
+                contents: format_generated_file(render_meta_file(&parts)),
+            },
+            GeneratedModuleFile {
+                relative_path: format!("{module_dir}/ast.rs"),
+                contents: format_generated_file(render_ast_file(&parts)),
+            },
+            GeneratedModuleFile {
+                relative_path: format!("{module_dir}/visit.rs"),
+                contents: format_generated_file(render_visit_file(&parts)),
+            },
+            GeneratedModuleFile {
+                relative_path: format!("{module_dir}/provenance.rs"),
+                contents: format_generated_file(render_provenance_file(&parts)),
+            },
+            GeneratedModuleFile {
+                relative_path: format!("{module_dir}/parse.rs"),
+                contents: format_generated_file(render_parse_file(&parts)),
+            },
+            GeneratedModuleFile {
+                relative_path: format!("{module_dir}/format.rs"),
+                contents: format_generated_file(render_format_file(&parts)),
+            },
+        ]);
+        if repr.name == "HIR" {
+            files.push(GeneratedModuleFile {
+                relative_path: format!("{module_dir}/tests.rs"),
+                contents: format_generated_file(render_tests_file()),
+            });
+        }
+    }
+
+    files
 }
 
 struct RenderParts {
@@ -342,41 +350,80 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
     }
 }
 
-fn render_root_mod_file() -> String {
-    format_generated_file(
+fn render_root_mod_file(reprs: &[NormalizedRepr]) -> String {
+    let mut module_names = reprs
+        .iter()
+        .map(|repr| snake_case(&repr.name))
+        .collect::<Vec<_>>();
+    module_names.sort();
+    let mod_rows = module_names
+        .iter()
+        .map(|name| format!("pub mod {name};"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let helper_rows = reprs
+        .iter()
+        .map(|repr| {
+            let module_name = snake_case(&repr.name);
+            format!(
+                r#"
+fn validate_{module_name}(source: &str) -> Result<(), String> {{
+    {module_name}::parse_root_text(source).map(|_| ())
+}}
+
+fn format_{module_name}(source: &str) -> Result<String, String> {{
+    let root = {module_name}::parse_root_text(source)?;
+    Ok({module_name}::format_root_text(&root))
+}}
+"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let repr_rows = reprs
+        .iter()
+        .map(|repr| {
+            let module_name = snake_case(&repr.name);
+            format!(
+                r#"    ReprSpec {{
+        name: {module_name}::REPR_NAME,
+        file_ext: {module_name}::REPR_FILE_EXT,
+        validate: validate_{module_name},
+        format: format_{module_name},
+    }}"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
+
+    format_generated_file(format!(
         r#"
-pub mod hir;
+{mod_rows}
 
 #[derive(Clone, Copy)]
-pub struct ReprSpec {
+pub struct ReprSpec {{
     pub name: &'static str,
     pub file_ext: &'static str,
     pub validate: fn(&str) -> Result<(), String>,
     pub format: fn(&str) -> Result<String, String>,
-}
+}}
 
-fn validate_hir(source: &str) -> Result<(), String> {
-    hir::parse_root_text(source).map(|_| ())
-}
+{helper_rows}
 
-fn format_hir(source: &str) -> Result<String, String> {
-    let root = hir::parse_root_text(source)?;
-    Ok(hir::format_root_text(&root))
-}
-
-pub static REPRS: &[ReprSpec] = &[ReprSpec {
-    name: hir::REPR_NAME,
-    file_ext: hir::REPR_FILE_EXT,
-    validate: validate_hir,
-    format: format_hir,
-}];
+pub static REPRS: &[ReprSpec] = &[
+{repr_rows}
+];
 "#
-        .to_owned(),
-    )
+    ))
 }
 
-fn render_hir_mod_file() -> String {
-    format_generated_file(
+fn render_repr_mod_file(include_tests: bool) -> String {
+    let tests_row = if include_tests {
+        "\n#[cfg(test)]\nmod tests;\n"
+    } else {
+        "\n"
+    };
+    format_generated_file(format!(
         r#"
 pub mod ast;
 pub mod format;
@@ -391,12 +438,8 @@ pub use meta::*;
 pub use parse::*;
 pub use provenance::*;
 pub use visit::*;
-
-#[cfg(test)]
-mod tests;
-"#
-        .to_owned(),
-    )
+{tests_row}"#
+    ))
 }
 
 fn render_meta_file(parts: &RenderParts) -> String {

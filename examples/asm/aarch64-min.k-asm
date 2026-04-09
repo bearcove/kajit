@@ -1,0 +1,8 @@
+asm aarch64 {
+    start:
+    movz x0, 42
+    mov x1, x0
+    add x1, x1, 1
+    b start
+    ret
+}
