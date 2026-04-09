@@ -637,7 +637,7 @@ repr @module{
             /// Total number of stack slots available in this program.
             slot_count @Nat
             /// Lowered functions in the program.
-            functions @pool(@Function)
+            functions @pool(@Function @key(@FunctionId))
         }
 
         /// A lowered lambda/function in canonical CFG-MIR form.
@@ -651,19 +651,19 @@ repr @module{
             /// Stable function identifier used in the text format.
             function_id @FunctionId
             /// Entry block for the function.
-            entry @BlockId
+            entry @ref_to(@BlockId @Block)
             /// Printed `data_args` header line for the function.
             data_args @DataArgsLine
             /// Printed `data_results` header line for the function.
             data_results @DataResultsLine
             /// Live blocks in canonical order.
-            blocks @pool(@Block)
+            blocks @pool(@Block @key(@BlockId))
             /// Non-terminator instructions in arena order.
-            insts @pool(@Inst)
+            insts @pool(@Inst @key(@InstId))
             /// Terminators in arena order.
-            terms @pool(@Terminator)
+            terms @pool(@Terminator @key(@TermId))
             /// Control-flow edges in arena order.
-            edges @pool(@Edge)
+            edges @pool(@Edge @key(@EdgeId))
         }
 
         /// The `data_args` header line.
@@ -700,13 +700,13 @@ repr @module{
             /// SSA block parameters filled from incoming edge arguments.
             params @order(@VReg)
             /// Instruction IDs executed before the terminator.
-            insts @order(@InstId)
+            insts @order(@ref_to(@InstId @Inst))
             /// Block terminator.
-            term @TermId
+            term @ref_to(@TermId @Terminator)
             /// Incoming edges, rebuildable from the edge list.
-            preds @order(@EdgeId)
+            preds @order(@ref_to(@EdgeId @Edge))
             /// Outgoing edges, rebuildable from the edge list.
-            succs @order(@EdgeId)
+            succs @order(@ref_to(@EdgeId @Edge))
         }
 
         /// A single edge-argument binding.
@@ -733,9 +733,9 @@ repr @module{
             /// Stable edge ID.
             id @EdgeId
             /// Source block.
-            from @BlockId
+            from @ref_to(@BlockId @Block)
             /// Destination block.
-            to @BlockId
+            to @ref_to(@BlockId @Block)
             /// Arguments passed along the edge.
             args @order(@EdgeArg)
         }
@@ -913,28 +913,28 @@ repr @module{
             /// Unconditional branch to a single edge.
             Branch @struct{
                 prov @Prov
-                edge @EdgeId
+                edge @ref_to(@EdgeId @Edge)
             }
             /// Branch if the condition is nonzero.
             BranchIf @struct{
                 prov @Prov
                 cond @VReg
-                taken @EdgeId
-                fallthrough @EdgeId
+                taken @ref_to(@EdgeId @Edge)
+                fallthrough @ref_to(@EdgeId @Edge)
             }
             /// Branch if the condition is zero.
             BranchIfZero @struct{
                 prov @Prov
                 cond @VReg
-                taken @EdgeId
-                fallthrough @EdgeId
+                taken @ref_to(@EdgeId @Edge)
+                fallthrough @ref_to(@EdgeId @Edge)
             }
             /// Jump through a table of edge targets.
             JumpTable @struct{
                 prov @Prov
                 predicate @VReg
-                targets @order(@EdgeId)
-                default @EdgeId
+                targets @order(@ref_to(@EdgeId @Edge))
+                default @ref_to(@EdgeId @Edge)
             }
         }
     }

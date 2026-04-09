@@ -276,12 +276,12 @@ repr @module{
     nodes {
         Program @node{
             prov @Prov
-            blocks @pool(@Block)
+            blocks @pool(@Block @key(@BlockId))
         }
         Block @entity{
             prov @Prov
             id @BlockId
-            succs @order(@BlockId)
+            succs @order(@ref_to(@BlockId @Block))
         }
     }
 }
@@ -311,10 +311,18 @@ repr @module{
     assert!(ast.contains("pub succs: super::super::Order<BlockId>,"));
     assert!(meta.contains("owner: \"Program\""));
     assert!(meta.contains("field: \"blocks\""));
-    assert!(meta.contains("kind: \"pool<Block>\""));
+    assert!(meta.contains("kind: \"pool<Block key=BlockId>\""));
     assert!(meta.contains("owner: \"Block\""));
     assert!(meta.contains("field: \"succs\""));
-    assert!(meta.contains("kind: \"order<BlockId>\""));
+    assert!(meta.contains("kind: \"order<ref<BlockId -> Block>>\""));
+    assert!(meta.contains("pub static POOLS: &[PoolSpec] = &["));
+    assert!(meta.contains("field: \"blocks\""));
+    assert!(meta.contains("item: \"Block\""));
+    assert!(meta.contains("key: \"BlockId\""));
+    assert!(meta.contains("pub static REFS: &[RefSpec] = &["));
+    assert!(meta.contains("field: \"succs\""));
+    assert!(meta.contains("id: \"BlockId\""));
+    assert!(meta.contains("target: \"Block\""));
 }
 
 #[test]

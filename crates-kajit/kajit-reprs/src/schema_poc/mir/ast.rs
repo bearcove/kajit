@@ -14,51 +14,51 @@ pub use kajit_types::{Prov, Span};
 /// The binary-op family used by the pilot text format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BinOpKind {
-    /// Arithmetic right shift.
+    /// Integer multiplication.
     #[default]
-    Sar,
-
-    /// Less-than comparison.
-    CmpLt,
-
-    /// Greater-than-or-equal comparison.
-    CmpGe,
-
-    /// Bitwise OR.
-    Or,
-
-    /// Bitwise AND.
-    And,
-
-    /// Bitwise XOR.
-    Xor,
-
-    /// Logical right shift.
-    Shr,
-
-    /// Inequality comparison.
-    CmpNe,
-
-    /// Integer subtraction.
-    Sub,
-
-    /// Logical left shift.
-    Shl,
-
-    /// Greater-than comparison.
-    CmpGt,
-
-    /// Equality comparison.
-    CmpEq,
+    Mul,
 
     /// Less-than-or-equal comparison.
     CmpLe,
 
+    /// Integer subtraction.
+    Sub,
+
     /// Integer addition.
     Add,
 
-    /// Integer multiplication.
-    Mul,
+    /// Arithmetic right shift.
+    Sar,
+
+    /// Greater-than comparison.
+    CmpGt,
+
+    /// Logical left shift.
+    Shl,
+
+    /// Bitwise XOR.
+    Xor,
+
+    /// Less-than comparison.
+    CmpLt,
+
+    /// Bitwise OR.
+    Or,
+
+    /// Greater-than-or-equal comparison.
+    CmpGe,
+
+    /// Logical right shift.
+    Shr,
+
+    /// Bitwise AND.
+    And,
+
+    /// Inequality comparison.
+    CmpNe,
+
+    /// Equality comparison.
+    CmpEq,
 }
 
 /// An embedded data blob identifier.
@@ -90,15 +90,15 @@ impl BlockId {
 /// Named clobber groups printed after `!`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ClobberKind {
-    /// Both caller-saved GPR and SIMD registers are clobbered.
+    /// Caller-saved GPRs are clobbered.
     #[default]
-    Both,
+    Gpr,
 
     /// Caller-saved SIMD registers are clobbered.
     Simd,
 
-    /// Caller-saved GPRs are clobbered.
-    Gpr,
+    /// Both caller-saved GPR and SIMD registers are clobbered.
+    Both,
 }
 
 /// A control-flow edge identifier.
@@ -241,18 +241,18 @@ impl VReg {
 /// A scalar width used by loads, stores, and sign extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Width {
-    /// Eight bytes.
-    #[default]
-    W8,
-
-    /// Four bytes.
-    W4,
-
     /// Two bytes.
+    #[default]
     W2,
+
+    /// Eight bytes.
+    W8,
 
     /// One byte.
     W1,
+
+    /// Four bytes.
+    W4,
 }
 
 /// A live basic block.

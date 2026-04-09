@@ -48,7 +48,7 @@ fn recurse_calls_for_type(
                 )]
             }
         }
-        SyntaxTypeUse::Seq(inner) | SyntaxTypeUse::Pool(inner) | SyntaxTypeUse::Order(inner) => {
+        SyntaxTypeUse::Seq(inner) | SyntaxTypeUse::Order(inner) => {
             let inner_calls = recurse_calls_for_type(inner, "value", node_names, true);
             if inner_calls.is_empty() {
                 Vec::new()
@@ -68,6 +68,27 @@ fn recurse_calls_for_type(
                 )]
             }
         }
+        SyntaxTypeUse::Pool { item: inner, .. } => {
+            let inner_calls = recurse_calls_for_type(inner, "value", node_names, true);
+            if inner_calls.is_empty() {
+                Vec::new()
+            } else {
+                let iter_expr = if borrowed {
+                    expr.to_owned()
+                } else {
+                    format!("&{expr}")
+                };
+                vec![format!(
+                    "for value in {iter_expr} {{\n{}\n}}",
+                    inner_calls
+                        .into_iter()
+                        .map(|line| format!("    {line}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )]
+            }
+        }
+        SyntaxTypeUse::RefTo { id, .. } => recurse_calls_for_type(id, expr, node_names, borrowed),
         SyntaxTypeUse::Ref { name } if node_names.iter().any(|node| node == name) => {
             let expr = if borrowed {
                 expr.to_owned()
@@ -91,8 +112,11 @@ fn render_hover_line(
     match ty {
         SyntaxTypeUse::Optional(_)
         | SyntaxTypeUse::Seq(_)
-        | SyntaxTypeUse::Pool(_)
-        | SyntaxTypeUse::Order(_) => None,
+        | SyntaxTypeUse::Order(_)
+        | SyntaxTypeUse::Pool { .. } => None,
+        SyntaxTypeUse::RefTo { id, .. } => {
+            render_hover_line(repr, id, expr, markdown, priority, node_names)
+        }
         SyntaxTypeUse::Ref { name }
             if is_string_scalar_type(repr, name) || is_int_scalar_type(repr, name) =>
         {

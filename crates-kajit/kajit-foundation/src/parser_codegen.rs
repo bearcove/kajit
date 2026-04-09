@@ -2,8 +2,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::normalize::{
     DocumentedValue, NormalizedNodeDecl, NormalizedRepr, NormalizedSupportDecl,
-    NormalizedTokenSpec, SyntaxRule, SyntaxTypeUse, is_docs_type, is_id_type, is_int_scalar_type,
-    is_string_scalar_type, render_default_value,
+    NormalizedTokenSpec, SyntaxRule, SyntaxTypeUse, direct_ref_name, is_docs_type, is_id_type,
+    is_int_scalar_type, is_string_scalar_type, render_default_value,
 };
 use crate::render_helpers::{
     is_prov_only_struct, leaf_variant_wrapper_name, rust_ident, snake_case,
@@ -28,6 +28,9 @@ fn render_wrapped_scalar_parser(
     ty: &SyntaxTypeUse,
     parser_fn_name: &str,
 ) -> Result<String, String> {
+    if let SyntaxTypeUse::RefTo { id, .. } = ty {
+        return render_wrapped_scalar_parser(repr, id, parser_fn_name);
+    }
     match ty {
         SyntaxTypeUse::Ref { name } if is_string_scalar_type(repr, name) => Ok(format!(
             "{parser_fn_name}().map_with(move |text, e| {name} {{ prov: prov_from_span(e.span(), file_id), text }}).then_ignore(ws())"
@@ -65,6 +68,9 @@ fn render_ref_value_parser(
     node_names: &[String],
     box_node_refs: bool,
 ) -> Result<String, String> {
+    if let SyntaxTypeUse::RefTo { id, .. } = ty {
+        return render_ref_value_parser(repr, ref_name, id, rule_names, node_names, box_node_refs);
+    }
     if !rule_names.contains(ref_name) {
         return Err(format!("unsupported reference parser target {ref_name:?}"));
     }
@@ -103,6 +109,10 @@ fn render_value_parser(
         return render_value_parser(repr, rule, inner_ty, rule_names, node_names, box_node_refs);
     }
 
+    if let SyntaxTypeUse::RefTo { id, .. } = ty {
+        return render_value_parser(repr, rule, id, rule_names, node_names, box_node_refs);
+    }
+
     match rule {
         SyntaxRule::Token { name } => render_token_value_parser(repr, name, ty),
         SyntaxRule::Ref { name } => {
@@ -117,9 +127,8 @@ fn render_value_parser(
         }
         SyntaxRule::Repeat { item, sep } => {
             let inner_ty = match ty {
-                SyntaxTypeUse::Seq(inner_ty)
-                | SyntaxTypeUse::Pool(inner_ty)
-                | SyntaxTypeUse::Order(inner_ty) => inner_ty,
+                SyntaxTypeUse::Seq(inner_ty) | SyntaxTypeUse::Order(inner_ty) => inner_ty,
+                SyntaxTypeUse::Pool { item: inner_ty, .. } => inner_ty,
                 _ => return Err("repeat rule without repeated type".to_owned()),
             };
             let inner = render_value_parser(repr, item, inner_ty, rule_names, node_names, false)?;
@@ -132,7 +141,9 @@ fn render_value_parser(
             };
             Ok(match ty {
                 SyntaxTypeUse::Seq(_) => collected,
-                SyntaxTypeUse::Pool(_) => format!("({collected}).map(super::super::Pool::from)"),
+                SyntaxTypeUse::Pool { .. } => {
+                    format!("({collected}).map(super::super::Pool::from)")
+                }
                 SyntaxTypeUse::Order(_) => {
                     format!("({collected}).map(super::super::Order::from)")
                 }
@@ -365,12 +376,12 @@ fn render_implicit_docs_parser(
 
     match ty {
         SyntaxTypeUse::Optional(inner) => match inner.as_ref() {
-            SyntaxTypeUse::Ref { name } if is_docs_type(repr, name) => {
+            ty if direct_ref_name(ty).is_some_and(|name| is_docs_type(repr, name)) => {
                 Some("doc_block()".to_owned())
             }
             _ => None,
         },
-        SyntaxTypeUse::Ref { name } if is_docs_type(repr, name) => {
+        ty if direct_ref_name(ty).is_some_and(|name| is_docs_type(repr, name)) => {
             Some("doc_block().map(|docs| docs.unwrap_or_default())".to_owned())
         }
         _ => None,

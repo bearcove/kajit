@@ -31,6 +31,28 @@ pub struct FieldSpec {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoolSpec {
+    pub owner: &'static str,
+
+    pub field: &'static str,
+
+    pub item: &'static str,
+
+    pub key: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RefSpec {
+    pub owner: &'static str,
+
+    pub field: &'static str,
+
+    pub id: &'static str,
+
+    pub target: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeSpec {
     pub name: &'static str,
 
@@ -293,7 +315,7 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     FieldSpec {
         owner: "Block",
         field: "insts",
-        kind: "order<InstId>",
+        kind: "order<ref<InstId -> Inst>>",
     },
     FieldSpec {
         owner: "Block",
@@ -303,7 +325,7 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     FieldSpec {
         owner: "Block",
         field: "preds",
-        kind: "order<EdgeId>",
+        kind: "order<ref<EdgeId -> Edge>>",
     },
     FieldSpec {
         owner: "Block",
@@ -313,12 +335,12 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     FieldSpec {
         owner: "Block",
         field: "succs",
-        kind: "order<EdgeId>",
+        kind: "order<ref<EdgeId -> Edge>>",
     },
     FieldSpec {
         owner: "Block",
         field: "term",
-        kind: "TermId",
+        kind: "ref<TermId -> Terminator>",
     },
     FieldSpec {
         owner: "ConstRef.Named",
@@ -383,7 +405,7 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     FieldSpec {
         owner: "Edge",
         field: "from",
-        kind: "BlockId",
+        kind: "ref<BlockId -> Block>",
     },
     FieldSpec {
         owner: "Edge",
@@ -398,7 +420,7 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     FieldSpec {
         owner: "Edge",
         field: "to",
-        kind: "BlockId",
+        kind: "ref<BlockId -> Block>",
     },
     FieldSpec {
         owner: "EdgeArg.Identity",
@@ -458,7 +480,7 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     FieldSpec {
         owner: "Function",
         field: "blocks",
-        kind: "pool<Block>",
+        kind: "pool<Block key=BlockId>",
     },
     FieldSpec {
         owner: "Function",
@@ -478,12 +500,12 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     FieldSpec {
         owner: "Function",
         field: "edges",
-        kind: "pool<Edge>",
+        kind: "pool<Edge key=EdgeId>",
     },
     FieldSpec {
         owner: "Function",
         field: "entry",
-        kind: "BlockId",
+        kind: "ref<BlockId -> Block>",
     },
     FieldSpec {
         owner: "Function",
@@ -493,7 +515,7 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     FieldSpec {
         owner: "Function",
         field: "insts",
-        kind: "pool<Inst>",
+        kind: "pool<Inst key=InstId>",
     },
     FieldSpec {
         owner: "Function",
@@ -508,7 +530,7 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     FieldSpec {
         owner: "Function",
         field: "terms",
-        kind: "pool<Terminator>",
+        kind: "pool<Terminator key=TermId>",
     },
     FieldSpec {
         owner: "Inst",
@@ -738,7 +760,7 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     FieldSpec {
         owner: "Program",
         field: "functions",
-        kind: "pool<Function>",
+        kind: "pool<Function key=FunctionId>",
     },
     FieldSpec {
         owner: "Program",
@@ -758,7 +780,7 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     FieldSpec {
         owner: "Terminator.Branch",
         field: "edge",
-        kind: "EdgeId",
+        kind: "ref<EdgeId -> Edge>",
     },
     FieldSpec {
         owner: "Terminator.Branch",
@@ -773,7 +795,7 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     FieldSpec {
         owner: "Terminator.BranchIf",
         field: "fallthrough",
-        kind: "EdgeId",
+        kind: "ref<EdgeId -> Edge>",
     },
     FieldSpec {
         owner: "Terminator.BranchIf",
@@ -783,7 +805,7 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     FieldSpec {
         owner: "Terminator.BranchIf",
         field: "taken",
-        kind: "EdgeId",
+        kind: "ref<EdgeId -> Edge>",
     },
     FieldSpec {
         owner: "Terminator.BranchIfZero",
@@ -793,7 +815,7 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     FieldSpec {
         owner: "Terminator.BranchIfZero",
         field: "fallthrough",
-        kind: "EdgeId",
+        kind: "ref<EdgeId -> Edge>",
     },
     FieldSpec {
         owner: "Terminator.BranchIfZero",
@@ -803,12 +825,12 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     FieldSpec {
         owner: "Terminator.BranchIfZero",
         field: "taken",
-        kind: "EdgeId",
+        kind: "ref<EdgeId -> Edge>",
     },
     FieldSpec {
         owner: "Terminator.JumpTable",
         field: "default",
-        kind: "EdgeId",
+        kind: "ref<EdgeId -> Edge>",
     },
     FieldSpec {
         owner: "Terminator.JumpTable",
@@ -823,7 +845,7 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     FieldSpec {
         owner: "Terminator.JumpTable",
         field: "targets",
-        kind: "order<EdgeId>",
+        kind: "order<ref<EdgeId -> Edge>>",
     },
     FieldSpec {
         owner: "Terminator.Return",
@@ -839,6 +861,126 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
         owner: "UnaryOp.SignExtend",
         field: "prov",
         kind: "Prov",
+    },
+];
+
+pub static POOLS: &[PoolSpec] = &[
+    PoolSpec {
+        owner: "Function",
+        field: "blocks",
+        item: "Block",
+        key: "BlockId",
+    },
+    PoolSpec {
+        owner: "Function",
+        field: "edges",
+        item: "Edge",
+        key: "EdgeId",
+    },
+    PoolSpec {
+        owner: "Function",
+        field: "insts",
+        item: "Inst",
+        key: "InstId",
+    },
+    PoolSpec {
+        owner: "Function",
+        field: "terms",
+        item: "Terminator",
+        key: "TermId",
+    },
+    PoolSpec {
+        owner: "Program",
+        field: "functions",
+        item: "Function",
+        key: "FunctionId",
+    },
+];
+
+pub static REFS: &[RefSpec] = &[
+    RefSpec {
+        owner: "Block",
+        field: "insts",
+        id: "InstId",
+        target: "Inst",
+    },
+    RefSpec {
+        owner: "Block",
+        field: "preds",
+        id: "EdgeId",
+        target: "Edge",
+    },
+    RefSpec {
+        owner: "Block",
+        field: "succs",
+        id: "EdgeId",
+        target: "Edge",
+    },
+    RefSpec {
+        owner: "Block",
+        field: "term",
+        id: "TermId",
+        target: "Terminator",
+    },
+    RefSpec {
+        owner: "Edge",
+        field: "from",
+        id: "BlockId",
+        target: "Block",
+    },
+    RefSpec {
+        owner: "Edge",
+        field: "to",
+        id: "BlockId",
+        target: "Block",
+    },
+    RefSpec {
+        owner: "Function",
+        field: "entry",
+        id: "BlockId",
+        target: "Block",
+    },
+    RefSpec {
+        owner: "Terminator.Branch",
+        field: "edge",
+        id: "EdgeId",
+        target: "Edge",
+    },
+    RefSpec {
+        owner: "Terminator.BranchIf",
+        field: "fallthrough",
+        id: "EdgeId",
+        target: "Edge",
+    },
+    RefSpec {
+        owner: "Terminator.BranchIf",
+        field: "taken",
+        id: "EdgeId",
+        target: "Edge",
+    },
+    RefSpec {
+        owner: "Terminator.BranchIfZero",
+        field: "fallthrough",
+        id: "EdgeId",
+        target: "Edge",
+    },
+    RefSpec {
+        owner: "Terminator.BranchIfZero",
+        field: "taken",
+        id: "EdgeId",
+        target: "Edge",
+    },
+    RefSpec {
+        owner: "Terminator.JumpTable",
+        field: "default",
+        id: "EdgeId",
+        target: "Edge",
+    },
+    RefSpec {
+        owner: "Terminator.JumpTable",
+        field: "targets",
+        id: "EdgeId",
+        target: "Edge",
     },
 ];
 

@@ -59,9 +59,18 @@ pub(crate) fn collect_syntax_type_tags(ty: &SyntaxTypeUse, out: &mut Vec<String>
         SyntaxTypeUse::Ref { name } => out.push(name.clone()),
         SyntaxTypeUse::Optional(inner)
         | SyntaxTypeUse::Seq(inner)
-        | SyntaxTypeUse::Pool(inner)
         | SyntaxTypeUse::Order(inner) => {
             collect_syntax_type_tags(inner, out);
+        }
+        SyntaxTypeUse::Pool { item: inner, key } => {
+            collect_syntax_type_tags(inner, out);
+            if let Some(key) = key {
+                out.push(key.clone());
+            }
+        }
+        SyntaxTypeUse::RefTo { id, target } => {
+            collect_syntax_type_tags(id, out);
+            out.push(target.clone());
         }
     }
 }
@@ -81,7 +90,7 @@ pub(crate) fn render_syntax_type_use(
         SyntaxTypeUse::Seq(inner) => {
             format!("Vec<{}>", render_syntax_type_use(inner, node_names, false))
         }
-        SyntaxTypeUse::Pool(inner) => {
+        SyntaxTypeUse::Pool { item: inner, .. } => {
             format!(
                 "super::super::Pool<{}>",
                 render_syntax_type_use(inner, node_names, false)
@@ -93,6 +102,7 @@ pub(crate) fn render_syntax_type_use(
                 render_syntax_type_use(inner, node_names, false)
             )
         }
+        SyntaxTypeUse::RefTo { id, .. } => render_syntax_type_use(id, node_names, box_node_refs),
         SyntaxTypeUse::Ref { name } => {
             if box_node_refs && node_names.iter().any(|node| node == name) {
                 format!("Box<{name}>")
@@ -171,8 +181,14 @@ pub(crate) fn render_type_use_kind(ty: &SyntaxTypeUse) -> String {
     match ty {
         SyntaxTypeUse::Optional(inner) => format!("optional<{}>", render_type_use_kind(inner)),
         SyntaxTypeUse::Seq(inner) => format!("seq<{}>", render_type_use_kind(inner)),
-        SyntaxTypeUse::Pool(inner) => format!("pool<{}>", render_type_use_kind(inner)),
+        SyntaxTypeUse::Pool { item: inner, key } => match key {
+            Some(key) => format!("pool<{} key={key}>", render_type_use_kind(inner)),
+            None => format!("pool<{}>", render_type_use_kind(inner)),
+        },
         SyntaxTypeUse::Order(inner) => format!("order<{}>", render_type_use_kind(inner)),
+        SyntaxTypeUse::RefTo { id, target } => {
+            format!("ref<{} -> {target}>", render_type_use_kind(id))
+        }
         SyntaxTypeUse::Ref { name } => name.clone(),
     }
 }
@@ -303,7 +319,7 @@ pub(crate) fn render_visit_calls(
                 )]
             }
         }
-        SyntaxTypeUse::Seq(inner) | SyntaxTypeUse::Pool(inner) | SyntaxTypeUse::Order(inner) => {
+        SyntaxTypeUse::Seq(inner) | SyntaxTypeUse::Order(inner) => {
             let inner = render_visit_calls(inner, "value", node_names, mutable, true);
             if inner.is_empty() {
                 Vec::new()
@@ -318,6 +334,25 @@ pub(crate) fn render_visit_calls(
                         .join("\n")
                 )]
             }
+        }
+        SyntaxTypeUse::Pool { item: inner, .. } => {
+            let inner = render_visit_calls(inner, "value", node_names, mutable, true);
+            if inner.is_empty() {
+                Vec::new()
+            } else {
+                let iter = if mutable { "iter_mut()" } else { "iter()" };
+                vec![format!(
+                    "for value in {expr}.{iter} {{\n{}\n}}",
+                    inner
+                        .into_iter()
+                        .map(|line| format!("    {line}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )]
+            }
+        }
+        SyntaxTypeUse::RefTo { id, .. } => {
+            render_visit_calls(id, expr, node_names, mutable, borrowed)
         }
         SyntaxTypeUse::Ref { name } if node_names.iter().any(|node| node == name) => {
             let method = snake_case(name);

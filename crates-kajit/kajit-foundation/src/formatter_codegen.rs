@@ -384,7 +384,7 @@ fn render_value_write_lines(
         SyntaxTypeUse::Optional(_) => {
             Err("optional formatting must be handled by TemplatePart::Optional".to_owned())
         }
-        SyntaxTypeUse::Seq(inner) | SyntaxTypeUse::Pool(inner) | SyntaxTypeUse::Order(inner) => {
+        SyntaxTypeUse::Seq(inner) | SyntaxTypeUse::Order(inner) => {
             let sep = joiner.unwrap_or("\n");
             let mut lines = vec![format!(
                 "    for (idx, value) in {expr}.iter().enumerate() {{"
@@ -428,6 +428,59 @@ fn render_value_write_lines(
             lines.push("    }".to_owned());
             Ok(lines)
         }
+        SyntaxTypeUse::Pool { item: inner, .. } => {
+            let sep = joiner.unwrap_or("\n");
+            let mut lines = vec![format!(
+                "    for (idx, value) in {expr}.iter().enumerate() {{"
+            )];
+            lines.push("        if idx != 0 {".to_owned());
+            lines.push(format!("            {writer_name}.text({sep:?});"));
+            lines.push("        }".to_owned());
+            if should_indent_value(inner, node_names) && at_line_start {
+                lines.push(format!(
+                    "        {writer_name}.with_indent(|{writer_name}| {{"
+                ));
+                lines.extend(
+                    render_value_write_lines(
+                        repr,
+                        writer_name,
+                        "value",
+                        inner,
+                        None,
+                        node_names,
+                        false,
+                    )?
+                    .into_iter()
+                    .map(|line| format!("    {line}")),
+                );
+                lines.push("        });".to_owned());
+            } else {
+                lines.extend(
+                    render_value_write_lines(
+                        repr,
+                        writer_name,
+                        "value",
+                        inner,
+                        None,
+                        node_names,
+                        false,
+                    )?
+                    .into_iter()
+                    .map(|line| format!("    {line}")),
+                );
+            }
+            lines.push("    }".to_owned());
+            Ok(lines)
+        }
+        SyntaxTypeUse::RefTo { id, .. } => render_value_write_lines(
+            repr,
+            writer_name,
+            expr,
+            id,
+            joiner,
+            node_names,
+            at_line_start,
+        ),
         SyntaxTypeUse::Ref { name } if node_names.iter().any(|node| node == name) => {
             let write_name = format!("write_{}", snake_case(name));
             if at_line_start {
@@ -464,9 +517,10 @@ fn should_indent_value(ty: &SyntaxTypeUse, node_names: &[String]) -> bool {
     match ty {
         SyntaxTypeUse::Ref { name } => node_names.iter().any(|node| node == name),
         SyntaxTypeUse::Seq(inner)
-        | SyntaxTypeUse::Pool(inner)
         | SyntaxTypeUse::Order(inner)
         | SyntaxTypeUse::Optional(inner) => should_indent_value(inner, node_names),
+        SyntaxTypeUse::Pool { item: inner, .. } => should_indent_value(inner, node_names),
+        SyntaxTypeUse::RefTo { id, .. } => should_indent_value(id, node_names),
     }
 }
 

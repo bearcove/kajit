@@ -37,9 +37,18 @@ pub(crate) enum SyntaxRule {
 pub(crate) enum SyntaxTypeUse {
     Optional(Box<SyntaxTypeUse>),
     Seq(Box<SyntaxTypeUse>),
-    Pool(Box<SyntaxTypeUse>),
+    Pool {
+        item: Box<SyntaxTypeUse>,
+        key: Option<String>,
+    },
     Order(Box<SyntaxTypeUse>),
-    Ref { name: String },
+    RefTo {
+        id: Box<SyntaxTypeUse>,
+        target: String,
+    },
+    Ref {
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -158,18 +167,40 @@ pub(crate) fn normalize_type_use(ty: &TypeUse) -> Result<SyntaxTypeUse, String> 
         TypeUse::Seq(items) if items.len() == 1 => {
             Ok(SyntaxTypeUse::Seq(Box::new(normalize_type_use(&items[0])?)))
         }
-        TypeUse::Pool(items) if items.len() == 1 => Ok(SyntaxTypeUse::Pool(Box::new(
-            normalize_type_use(&items[0])?,
-        ))),
+        TypeUse::Pool(items) if (1..=2).contains(&items.len()) => {
+            let item = Box::new(normalize_type_use(&items[0])?);
+            let key = match items.get(1) {
+                None => None,
+                Some(TypeUse::Key(key_items)) if key_items.len() == 1 => match &key_items[0] {
+                    TypeUse::Ref { name: Some(name) } => Some(name.clone()),
+                    _ => return Err("pool key must reference a declared id type".to_owned()),
+                },
+                Some(TypeUse::Key(_)) => {
+                    return Err("pool key must have exactly one item".to_owned());
+                }
+                Some(_) => return Err("pool metadata must be @key(...)".to_owned()),
+            };
+            Ok(SyntaxTypeUse::Pool { item, key })
+        }
         TypeUse::Order(items) if items.len() == 1 => Ok(SyntaxTypeUse::Order(Box::new(
             normalize_type_use(&items[0])?,
         ))),
+        TypeUse::RefTo(items) if items.len() == 2 => {
+            let id = Box::new(normalize_type_use(&items[0])?);
+            let target = match &items[1] {
+                TypeUse::Ref { name: Some(name) } => name.clone(),
+                _ => return Err("ref_to target must name a declared node type".to_owned()),
+            };
+            Ok(SyntaxTypeUse::RefTo { id, target })
+        }
         TypeUse::Ref { name: Some(name) } => Ok(SyntaxTypeUse::Ref { name: name.clone() }),
         TypeUse::Ref { name: None } => Err("type reference missing tag name".to_owned()),
         TypeUse::Optional(_) => Err("optional type must have exactly one item".to_owned()),
         TypeUse::Seq(_) => Err("seq type must have exactly one item".to_owned()),
-        TypeUse::Pool(_) => Err("pool type must have exactly one item".to_owned()),
+        TypeUse::Pool(_) => Err("pool type must have one item and optional @key(...)".to_owned()),
         TypeUse::Order(_) => Err("order type must have exactly one item".to_owned()),
+        TypeUse::Key(_) => Err("@key(...) is only valid inside @pool(...)".to_owned()),
+        TypeUse::RefTo(_) => Err("@ref_to(...) must have id type and target entity".to_owned()),
     }
 }
 
@@ -390,12 +421,21 @@ pub(crate) fn render_default_value(ty: &SyntaxTypeUse, provenance_tag: &str) -> 
     match ty {
         SyntaxTypeUse::Optional(_) => Some("None".to_owned()),
         SyntaxTypeUse::Seq(_) => Some("Vec::new()".to_owned()),
-        SyntaxTypeUse::Pool(_) => Some("super::super::Pool::default()".to_owned()),
+        SyntaxTypeUse::Pool { .. } => Some("super::super::Pool::default()".to_owned()),
         SyntaxTypeUse::Order(_) => Some("super::super::Order::default()".to_owned()),
+        SyntaxTypeUse::RefTo { .. } => None,
         SyntaxTypeUse::Ref { name } if name == provenance_tag => {
             Some(format!("{provenance_tag}::default()"))
         }
         SyntaxTypeUse::Ref { .. } => None,
+    }
+}
+
+pub(crate) fn direct_ref_name(ty: &SyntaxTypeUse) -> Option<&str> {
+    match ty {
+        SyntaxTypeUse::Ref { name } => Some(name.as_str()),
+        SyntaxTypeUse::RefTo { id, .. } => direct_ref_name(id),
+        _ => None,
     }
 }
 

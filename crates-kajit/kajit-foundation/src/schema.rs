@@ -113,13 +113,15 @@ pub(crate) struct RuleNamed(pub(crate) (String, Box<RuleExpr>));
 
 #[derive(Facet, Debug, Clone)]
 #[allow(dead_code)]
-#[facet(rename_all = "lowercase")]
+#[facet(rename_all = "snake_case")]
 #[repr(u8)]
 pub(crate) enum TypeUse {
     Optional(Vec<TypeUse>),
     Seq(Vec<TypeUse>),
     Pool(Vec<TypeUse>),
     Order(Vec<TypeUse>),
+    Key(Vec<TypeUse>),
+    RefTo(Vec<TypeUse>),
     #[facet(other)]
     Ref {
         #[facet(tag)]

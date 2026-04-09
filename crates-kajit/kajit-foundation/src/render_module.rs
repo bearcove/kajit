@@ -89,6 +89,8 @@ struct RenderParts {
     node_rows: String,
     support_field_rows: String,
     node_field_rows: String,
+    pool_rows: String,
+    ref_rows: String,
     print_rows: String,
     placeholder_rows: String,
     ast_rows: String,
@@ -101,6 +103,43 @@ struct RenderParts {
     formatter_rows: String,
     semantic_rows: String,
     hover_rows: String,
+}
+
+fn collect_pool_specs(
+    owner: &str,
+    field: &str,
+    ty: &crate::normalize::SyntaxTypeUse,
+) -> Vec<String> {
+    match ty {
+        crate::normalize::SyntaxTypeUse::Pool {
+            item,
+            key: Some(key),
+        } => {
+            vec![format!(
+                "    PoolSpec {{ owner: {owner:?}, field: {field:?}, item: {:?}, key: {key:?} }},",
+                render_type_use_kind(item)
+            )]
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn collect_ref_specs(
+    owner: &str,
+    field: &str,
+    ty: &crate::normalize::SyntaxTypeUse,
+) -> Vec<String> {
+    match ty {
+        crate::normalize::SyntaxTypeUse::Optional(inner)
+        | crate::normalize::SyntaxTypeUse::Seq(inner)
+        | crate::normalize::SyntaxTypeUse::Order(inner) => collect_ref_specs(owner, field, inner),
+        crate::normalize::SyntaxTypeUse::Pool { item, .. } => collect_ref_specs(owner, field, item),
+        crate::normalize::SyntaxTypeUse::RefTo { id, target } => vec![format!(
+            "    RefSpec {{ owner: {owner:?}, field: {field:?}, id: {:?}, target: {target:?} }},",
+            render_type_use_kind(id)
+        )],
+        _ => Vec::new(),
+    }
 }
 
 fn render_parts(repr: &NormalizedRepr) -> RenderParts {
@@ -289,6 +328,96 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         .collect::<Vec<_>>()
         .join("\n");
 
+    let pool_rows = node_names
+        .iter()
+        .flat_map(|name| {
+            let decl = repr.nodes.get(name).unwrap();
+            match &decl.value {
+                NormalizedNodeDecl::Record { fields, .. } => {
+                    let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
+                    field_names.sort();
+                    field_names
+                        .into_iter()
+                        .flat_map(|field_name| {
+                            collect_pool_specs(name, &field_name, &fields[&field_name].value)
+                        })
+                        .collect::<Vec<_>>()
+                }
+                NormalizedNodeDecl::Enum(variants) => {
+                    let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
+                    variant_names.sort();
+                    variant_names
+                        .into_iter()
+                        .flat_map(|variant_name| match &variants[&variant_name].value {
+                            NormalizedNodeDecl::Record { fields, .. } => {
+                                let owner = format!("{name}.{variant_name}");
+                                let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
+                                field_names.sort();
+                                field_names
+                                    .into_iter()
+                                    .flat_map(|field_name| {
+                                        collect_pool_specs(
+                                            &owner,
+                                            &field_name,
+                                            &fields[&field_name].value,
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                            }
+                            NormalizedNodeDecl::Enum(_) => Vec::new(),
+                        })
+                        .collect::<Vec<_>>()
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let ref_rows = node_names
+        .iter()
+        .flat_map(|name| {
+            let decl = repr.nodes.get(name).unwrap();
+            match &decl.value {
+                NormalizedNodeDecl::Record { fields, .. } => {
+                    let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
+                    field_names.sort();
+                    field_names
+                        .into_iter()
+                        .flat_map(|field_name| {
+                            collect_ref_specs(name, &field_name, &fields[&field_name].value)
+                        })
+                        .collect::<Vec<_>>()
+                }
+                NormalizedNodeDecl::Enum(variants) => {
+                    let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
+                    variant_names.sort();
+                    variant_names
+                        .into_iter()
+                        .flat_map(|variant_name| match &variants[&variant_name].value {
+                            NormalizedNodeDecl::Record { fields, .. } => {
+                                let owner = format!("{name}.{variant_name}");
+                                let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
+                                field_names.sort();
+                                field_names
+                                    .into_iter()
+                                    .flat_map(|field_name| {
+                                        collect_ref_specs(
+                                            &owner,
+                                            &field_name,
+                                            &fields[&field_name].value,
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                            }
+                            NormalizedNodeDecl::Enum(_) => Vec::new(),
+                        })
+                        .collect::<Vec<_>>()
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
     let mut placeholder_names = Vec::new();
     for ty in repr.common.values() {
         collect_syntax_type_tags(ty, &mut placeholder_names);
@@ -439,6 +568,8 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         node_rows,
         support_field_rows,
         node_field_rows,
+        pool_rows,
+        ref_rows,
         print_rows,
         placeholder_rows,
         ast_rows,
@@ -763,6 +894,22 @@ pub struct FieldSpec {{
 }}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoolSpec {{
+    pub owner: &'static str,
+    pub field: &'static str,
+    pub item: &'static str,
+    pub key: &'static str,
+}}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RefSpec {{
+    pub owner: &'static str,
+    pub field: &'static str,
+    pub id: &'static str,
+    pub target: &'static str,
+}}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeSpec {{
     pub name: &'static str,
     pub kind: &'static str,
@@ -809,6 +956,14 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
 {node_field_rows}
 ];
 
+pub static POOLS: &[PoolSpec] = &[
+{pool_rows}
+];
+
+pub static REFS: &[RefSpec] = &[
+{ref_rows}
+];
+
 pub static CANONICAL_PRINT: &[PrintSpec] = &[
 {print_rows}
 ];
@@ -826,6 +981,8 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
         support_field_rows = parts.support_field_rows,
         node_rows = parts.node_rows,
         node_field_rows = parts.node_field_rows,
+        pool_rows = parts.pool_rows,
+        ref_rows = parts.ref_rows,
         print_rows = parts.print_rows,
     )
 }

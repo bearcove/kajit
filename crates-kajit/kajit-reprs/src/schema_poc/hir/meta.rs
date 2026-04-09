@@ -31,6 +31,28 @@ pub struct FieldSpec {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PoolSpec {
+    pub owner: &'static str,
+
+    pub field: &'static str,
+
+    pub item: &'static str,
+
+    pub key: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RefSpec {
+    pub owner: &'static str,
+
+    pub field: &'static str,
+
+    pub id: &'static str,
+
+    pub target: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeSpec {
     pub name: &'static str,
 
@@ -449,6 +471,10 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
         kind: "Prov",
     },
 ];
+
+pub static POOLS: &[PoolSpec] = &[];
+
+pub static REFS: &[RefSpec] = &[];
 
 pub static CANONICAL_PRINT: &[PrintSpec] = &[
     PrintSpec {
