@@ -16,13 +16,23 @@ pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> 
     fs::create_dir_all(&out_dir)
         .map_err(|e| format!("failed to create {}: {e}", out_dir.display()))?;
 
-    let mod_path = out_dir.join("mod.rs");
-    fs::write(&mod_path, "pub mod hir;\n")
-        .map_err(|e| format!("failed to write {}: {e}", mod_path.display()))?;
+    let old_hir_path = out_dir.join("hir.rs");
+    if old_hir_path.exists() {
+        fs::remove_file(&old_hir_path)
+            .map_err(|e| format!("failed to remove {}: {e}", old_hir_path.display()))?;
+    }
 
-    let hir_path = out_dir.join("hir.rs");
-    fs::write(&hir_path, render_module::render_hir_poc_module(&repr))
-        .map_err(|e| format!("failed to write {}: {e}", hir_path.display()))?;
+    let mut written = Vec::new();
+    for generated in render_module::render_hir_poc_files(&repr) {
+        let path = out_dir.join(&generated.relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
+        }
+        fs::write(&path, generated.contents)
+            .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+        written.push(path);
+    }
 
-    Ok(vec![mod_path, hir_path])
+    Ok(written)
 }
