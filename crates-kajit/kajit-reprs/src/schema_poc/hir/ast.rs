@@ -4,15 +4,7 @@ pub trait HasProvenance {
     fn provenance(&self) -> Option<&Prov>;
 }
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct BinaryOp;
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DocBlock(pub Vec<String>);
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct GenericParam;
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Literal(pub String);
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct LocalKind;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Span {
     pub start: u32,
@@ -25,10 +17,31 @@ pub struct Prov {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Symbol(pub String);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BinaryOp {
+    #[default]
+    Add,
+    Sub,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GenericParam(pub String);
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Literal(pub String);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LocalKind {
+    #[default]
+    Local,
+    Temp,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Type(pub String);
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct TypeDefKind;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TypeDefKind {
+    #[default]
+    Struct,
+    Enum,
+    Alias,
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
     pub prov: Prov,

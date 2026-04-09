@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use crate::schema::{
-    NodeDecl, NodeFields, ReprBody, RuleExpr, TypeUse, rule_literal_text, rule_named_parts,
+    NodeDecl, NodeFields, ReprBody, RuleExpr, SupportDecl, TypeUse, rule_literal_text,
+    rule_named_parts,
 };
 
 #[derive(Debug, Clone)]
@@ -55,6 +56,14 @@ pub(crate) struct NormalizedSyntax {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) enum NormalizedSupportDecl {
+    String,
+    StringSeq,
+    Unit,
+    Enum(Vec<String>),
+}
+
+#[derive(Debug, Clone)]
 pub(crate) enum NormalizedNodeDecl {
     Node(HashMap<String, SyntaxTypeUse>),
     Enum(HashMap<String, NormalizedNodeDecl>),
@@ -68,7 +77,20 @@ pub(crate) struct NormalizedRepr {
     pub(crate) contract: NormalizedContract,
     pub(crate) syntax: NormalizedSyntax,
     pub(crate) common: HashMap<String, SyntaxTypeUse>,
+    pub(crate) support: HashMap<String, NormalizedSupportDecl>,
     pub(crate) nodes: HashMap<String, NormalizedNodeDecl>,
+}
+
+fn normalize_support_decl(decl: &SupportDecl) -> Result<NormalizedSupportDecl, String> {
+    match decl {
+        SupportDecl::String => Ok(NormalizedSupportDecl::String),
+        SupportDecl::StringSeq => Ok(NormalizedSupportDecl::StringSeq),
+        SupportDecl::Unit => Ok(NormalizedSupportDecl::Unit),
+        SupportDecl::Enum(variants) if !variants.is_empty() => {
+            Ok(NormalizedSupportDecl::Enum(variants.clone()))
+        }
+        SupportDecl::Enum(_) => Err("support enum must have at least one variant".to_owned()),
+    }
 }
 
 pub(crate) fn normalize_type_use(ty: &TypeUse) -> Result<SyntaxTypeUse, String> {
@@ -188,6 +210,14 @@ pub(crate) fn normalize_repr(repr: &ReprBody) -> Result<NormalizedRepr, String> 
         .map(|(name, decl)| Ok((name.clone(), normalize_node_decl(decl)?)))
         .collect::<Result<HashMap<_, _>, String>>()?;
 
+    let support = repr
+        .support
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(name, decl)| Ok((name, normalize_support_decl(&decl)?)))
+        .collect::<Result<HashMap<_, _>, String>>()?;
+
     let rules = repr
         .syntax
         .rules
@@ -225,6 +255,7 @@ pub(crate) fn normalize_repr(repr: &ReprBody) -> Result<NormalizedRepr, String> 
             canonical_print: repr.syntax.canonical_print.clone(),
         },
         common,
+        support,
         nodes,
     })
 }

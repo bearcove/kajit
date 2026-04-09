@@ -36,6 +36,7 @@ pub(crate) struct ReprBody {
     pub(crate) contract: ReprContract,
     pub(crate) syntax: ReprSyntax,
     pub(crate) common: Option<HashMap<String, TypeUse>>,
+    pub(crate) support: Option<HashMap<String, SupportDecl>>,
     pub(crate) nodes: Option<HashMap<String, NodeDecl>>,
 }
 
@@ -105,6 +106,17 @@ pub(crate) enum TypeUse {
         #[facet(tag)]
         name: Option<String>,
     },
+}
+
+#[derive(Facet, Debug, Clone)]
+#[allow(dead_code)]
+#[facet(rename_all = "lowercase")]
+#[repr(u8)]
+pub(crate) enum SupportDecl {
+    String,
+    StringSeq,
+    Unit,
+    Enum(Vec<String>),
 }
 
 #[derive(Facet, Debug, Clone)]
@@ -313,6 +325,7 @@ fn validate_hir_pilot_schema(
             canonical_print: repr.syntax.canonical_print.clone(),
         },
         common: repr.common.clone(),
+        support: repr.support.clone(),
         nodes: repr.nodes.clone(),
     })
 }

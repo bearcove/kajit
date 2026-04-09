@@ -95,6 +95,15 @@ repr @module{
         docs @DocBlock
     }
 
+    support {
+        Type @string
+        Literal @string
+        BinaryOp @enum(Add Sub)
+        GenericParam @string
+        LocalKind @enum(Local Temp)
+        TypeDefKind @enum(Struct Enum Alias)
+    }
+
     nodes {
         Module @node{
             docs @optional(@DocBlock)

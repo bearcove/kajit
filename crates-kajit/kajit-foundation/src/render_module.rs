@@ -3,7 +3,7 @@ use crate::normalize::{NormalizedNodeDecl, NormalizedRepr};
 use crate::parser_codegen::render_parser_block;
 use crate::render_helpers::{
     collect_syntax_type_tags, node_fields_have_prov, render_common_placeholder, render_node_decl,
-    render_walk_fn, snake_case,
+    render_support_decl, render_walk_fn, snake_case,
 };
 
 pub(crate) struct GeneratedModuleFile {
@@ -61,6 +61,7 @@ struct RenderParts {
     token_rows: String,
     rule_rows: String,
     common_rows: String,
+    support_rows: String,
     node_rows: String,
     print_rows: String,
     placeholder_rows: String,
@@ -168,6 +169,15 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         .collect::<Vec<_>>()
         .join("\n");
 
+    let mut support_names = repr.support.keys().cloned().collect::<Vec<_>>();
+    support_names.sort();
+
+    let support_rows = support_names
+        .iter()
+        .map(|name| render_support_decl(name, repr.support.get(name).unwrap()))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
     let mut placeholder_names = Vec::new();
     for ty in repr.common.values() {
         collect_syntax_type_tags(ty, &mut placeholder_names);
@@ -194,8 +204,11 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
     }
     placeholder_names.sort();
     placeholder_names.dedup();
-    placeholder_names
-        .retain(|name| !matches!(name.as_str(), "optional" | "seq") && !node_names.contains(name));
+    placeholder_names.retain(|name| {
+        !matches!(name.as_str(), "optional" | "seq")
+            && !node_names.contains(name)
+            && !support_names.contains(name)
+    });
 
     let placeholder_rows = placeholder_names
         .iter()
@@ -293,6 +306,7 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         token_rows,
         rule_rows,
         common_rows,
+        support_rows,
         node_rows,
         print_rows,
         placeholder_rows,
@@ -420,12 +434,15 @@ pub trait HasProvenance {{
 
 {placeholder_rows}
 
+{support_rows}
+
 {ast_rows}
 
 {prov_impl_rows}
 "#,
         provenance_tag = parts.provenance_tag,
         placeholder_rows = parts.placeholder_rows,
+        support_rows = parts.support_rows,
         ast_rows = parts.ast_rows,
         prov_impl_rows = parts.prov_impl_rows,
     )

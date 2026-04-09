@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::normalize::{NormalizedNodeDecl, SyntaxTypeUse};
+use crate::normalize::{NormalizedNodeDecl, NormalizedSupportDecl, SyntaxTypeUse};
 
 pub(crate) fn rust_ident(name: &str) -> String {
     match name {
@@ -133,6 +133,37 @@ pub(crate) fn render_common_placeholder(
             )
         }
         _ => format!("#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct {tag};"),
+    }
+}
+
+pub(crate) fn render_support_decl(name: &str, decl: &NormalizedSupportDecl) -> String {
+    match decl {
+        NormalizedSupportDecl::String => format!(
+            "#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct {name}(pub String);"
+        ),
+        NormalizedSupportDecl::StringSeq => format!(
+            "#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct {name}(pub Vec<String>);"
+        ),
+        NormalizedSupportDecl::Unit => {
+            format!("#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct {name};")
+        }
+        NormalizedSupportDecl::Enum(variants) => {
+            let rows = variants
+                .iter()
+                .enumerate()
+                .map(|(idx, variant)| {
+                    if idx == 0 {
+                        format!("    #[default]\n    {variant},")
+                    } else {
+                        format!("    {variant},")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]\npub enum {name} {{\n{rows}\n}}"
+            )
+        }
     }
 }
 
