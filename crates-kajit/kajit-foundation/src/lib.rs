@@ -10,7 +10,9 @@ mod schema;
 
 pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> {
     let schema_path = workspace_root.join("notes/unified-ast/pilot/hir.repr.styx");
-    let repr = normalize::normalize_repr(&schema::load_hir_pilot_schema(&schema_path)?)?;
+    let loaded = schema::load_hir_pilot_schema(&schema_path)?;
+    let repr = normalize::normalize_repr(&loaded.body)?;
+    let repr = normalize::with_module_doc(repr, loaded.doc);
 
     let out_dir = workspace_root.join("crates-kajit/kajit-reprs/src/schema_poc");
     fs::create_dir_all(&out_dir)

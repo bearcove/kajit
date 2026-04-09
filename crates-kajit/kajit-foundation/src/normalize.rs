@@ -78,6 +78,7 @@ pub(crate) enum NormalizedNodeDecl {
 
 #[derive(Debug, Clone)]
 pub(crate) struct NormalizedRepr {
+    pub(crate) doc: Option<Vec<String>>,
     pub(crate) name: String,
     pub(crate) file_ext: String,
     pub(crate) contract: NormalizedContract,
@@ -288,6 +289,7 @@ pub(crate) fn normalize_repr(repr: &ReprBody) -> Result<NormalizedRepr, String> 
         .collect::<Result<HashMap<_, _>, String>>()?;
 
     Ok(NormalizedRepr {
+        doc: None,
         name: repr.name.clone(),
         file_ext: repr.file_ext.clone(),
         contract: NormalizedContract {
@@ -305,6 +307,14 @@ pub(crate) fn normalize_repr(repr: &ReprBody) -> Result<NormalizedRepr, String> 
         support,
         nodes,
     })
+}
+
+pub(crate) fn with_module_doc(
+    mut repr: NormalizedRepr,
+    doc: Option<Vec<String>>,
+) -> NormalizedRepr {
+    repr.doc = doc;
+    repr
 }
 
 pub(crate) fn syntax_type_name(ty: &SyntaxTypeUse) -> Option<&str> {

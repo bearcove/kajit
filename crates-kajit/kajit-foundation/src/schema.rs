@@ -18,7 +18,13 @@ pub(crate) struct WithDoc<T> {
 #[allow(dead_code)]
 pub(crate) struct PilotSchemaDocument {
     pub(crate) meta: PilotMeta,
-    pub(crate) repr: ReprDecl,
+    pub(crate) repr: Documented<ReprDecl>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LoadedRepr {
+    pub(crate) doc: Option<Vec<String>>,
+    pub(crate) body: ReprBody,
 }
 
 #[derive(Facet, Debug, Clone)]
@@ -174,7 +180,7 @@ pub(crate) struct NodeVariants {
     pub(crate) variants: HashMap<Documented<String>, NodeDecl>,
 }
 
-pub(crate) fn load_hir_pilot_schema(schema_path: &Path) -> Result<ReprBody, String> {
+pub(crate) fn load_hir_pilot_schema(schema_path: &Path) -> Result<LoadedRepr, String> {
     let schema_source = fs::read_to_string(schema_path)
         .map_err(|e| format!("failed to read {}: {e}", schema_path.display()))?;
     let schema: PilotSchemaDocument = facet_styx::from_str(&schema_source).map_err(|e| {
@@ -190,7 +196,7 @@ pub(crate) fn load_hir_pilot_schema(schema_path: &Path) -> Result<ReprBody, Stri
 fn validate_hir_pilot_schema(
     schema: &PilotSchemaDocument,
     path: &Path,
-) -> Result<ReprBody, String> {
+) -> Result<LoadedRepr, String> {
     if schema.meta.id != "kajit:repr-schema/hir-pilot" {
         return Err(format!(
             "expected {} meta.id to be kajit:repr-schema/hir-pilot, got {:?}",
@@ -213,7 +219,7 @@ fn validate_hir_pilot_schema(
         ));
     }
 
-    let ReprDecl::Module(repr) = &schema.repr;
+    let ReprDecl::Module(repr) = &schema.repr.value;
 
     if repr.name != "HIR" {
         return Err(format!(
@@ -334,23 +340,26 @@ fn validate_hir_pilot_schema(
         ));
     }
 
-    Ok(ReprBody {
-        name: repr.name.clone(),
-        file_ext: repr.file_ext.clone(),
-        contract: ReprContract {
-            purpose: repr.contract.purpose.clone(),
-            canonical_identities: repr.contract.canonical_identities.clone(),
-            round_trip: repr.contract.round_trip.clone(),
-            provenance: repr.contract.provenance.clone(),
+    Ok(LoadedRepr {
+        doc: schema.repr.doc.clone(),
+        body: ReprBody {
+            name: repr.name.clone(),
+            file_ext: repr.file_ext.clone(),
+            contract: ReprContract {
+                purpose: repr.contract.purpose.clone(),
+                canonical_identities: repr.contract.canonical_identities.clone(),
+                round_trip: repr.contract.round_trip.clone(),
+                provenance: repr.contract.provenance.clone(),
+            },
+            syntax: ReprSyntax {
+                tokens: repr.syntax.tokens.clone(),
+                rules: repr.syntax.rules.clone(),
+                canonical_print: repr.syntax.canonical_print.clone(),
+            },
+            common: repr.common.clone(),
+            support: repr.support.clone(),
+            nodes: repr.nodes.clone(),
         },
-        syntax: ReprSyntax {
-            tokens: repr.syntax.tokens.clone(),
-            rules: repr.syntax.rules.clone(),
-            canonical_print: repr.syntax.canonical_print.clone(),
-        },
-        common: repr.common.clone(),
-        support: repr.support.clone(),
-        nodes: repr.nodes.clone(),
     })
 }
 
