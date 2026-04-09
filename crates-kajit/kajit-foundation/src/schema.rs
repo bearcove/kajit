@@ -118,6 +118,8 @@ pub(crate) struct RuleNamed(pub(crate) (String, Box<RuleExpr>));
 pub(crate) enum TypeUse {
     Optional(Vec<TypeUse>),
     Seq(Vec<TypeUse>),
+    Pool(Vec<TypeUse>),
+    Order(Vec<TypeUse>),
     #[facet(other)]
     Ref {
         #[facet(tag)]

@@ -37,6 +37,8 @@ pub(crate) enum SyntaxRule {
 pub(crate) enum SyntaxTypeUse {
     Optional(Box<SyntaxTypeUse>),
     Seq(Box<SyntaxTypeUse>),
+    Pool(Box<SyntaxTypeUse>),
+    Order(Box<SyntaxTypeUse>),
     Ref { name: String },
 }
 
@@ -156,10 +158,18 @@ pub(crate) fn normalize_type_use(ty: &TypeUse) -> Result<SyntaxTypeUse, String> 
         TypeUse::Seq(items) if items.len() == 1 => {
             Ok(SyntaxTypeUse::Seq(Box::new(normalize_type_use(&items[0])?)))
         }
+        TypeUse::Pool(items) if items.len() == 1 => Ok(SyntaxTypeUse::Pool(Box::new(
+            normalize_type_use(&items[0])?,
+        ))),
+        TypeUse::Order(items) if items.len() == 1 => Ok(SyntaxTypeUse::Order(Box::new(
+            normalize_type_use(&items[0])?,
+        ))),
         TypeUse::Ref { name: Some(name) } => Ok(SyntaxTypeUse::Ref { name: name.clone() }),
         TypeUse::Ref { name: None } => Err("type reference missing tag name".to_owned()),
         TypeUse::Optional(_) => Err("optional type must have exactly one item".to_owned()),
         TypeUse::Seq(_) => Err("seq type must have exactly one item".to_owned()),
+        TypeUse::Pool(_) => Err("pool type must have exactly one item".to_owned()),
+        TypeUse::Order(_) => Err("order type must have exactly one item".to_owned()),
     }
 }
 
@@ -379,7 +389,9 @@ pub(crate) fn with_module_doc(
 pub(crate) fn render_default_value(ty: &SyntaxTypeUse, provenance_tag: &str) -> Option<String> {
     match ty {
         SyntaxTypeUse::Optional(_) => Some("None".to_owned()),
-        SyntaxTypeUse::Seq(_) => Some("Vec::new()".to_owned()),
+        SyntaxTypeUse::Seq(_) | SyntaxTypeUse::Pool(_) | SyntaxTypeUse::Order(_) => {
+            Some("Vec::new()".to_owned())
+        }
         SyntaxTypeUse::Ref { name } if name == provenance_tag => {
             Some(format!("{provenance_tag}::default()"))
         }

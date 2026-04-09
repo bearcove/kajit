@@ -57,7 +57,10 @@ pub(crate) fn snake_case(name: &str) -> String {
 pub(crate) fn collect_syntax_type_tags(ty: &SyntaxTypeUse, out: &mut Vec<String>) {
     match ty {
         SyntaxTypeUse::Ref { name } => out.push(name.clone()),
-        SyntaxTypeUse::Optional(inner) | SyntaxTypeUse::Seq(inner) => {
+        SyntaxTypeUse::Optional(inner)
+        | SyntaxTypeUse::Seq(inner)
+        | SyntaxTypeUse::Pool(inner)
+        | SyntaxTypeUse::Order(inner) => {
             collect_syntax_type_tags(inner, out);
         }
     }
@@ -76,6 +79,12 @@ pub(crate) fn render_syntax_type_use(
             )
         }
         SyntaxTypeUse::Seq(inner) => {
+            format!("Vec<{}>", render_syntax_type_use(inner, node_names, false))
+        }
+        SyntaxTypeUse::Pool(inner) => {
+            format!("Vec<{}>", render_syntax_type_use(inner, node_names, false))
+        }
+        SyntaxTypeUse::Order(inner) => {
             format!("Vec<{}>", render_syntax_type_use(inner, node_names, false))
         }
         SyntaxTypeUse::Ref { name } => {
@@ -149,6 +158,16 @@ pub(crate) fn render_common_placeholder(
             )
         }
         _ => format!("#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct {tag};"),
+    }
+}
+
+pub(crate) fn render_type_use_kind(ty: &SyntaxTypeUse) -> String {
+    match ty {
+        SyntaxTypeUse::Optional(inner) => format!("optional<{}>", render_type_use_kind(inner)),
+        SyntaxTypeUse::Seq(inner) => format!("seq<{}>", render_type_use_kind(inner)),
+        SyntaxTypeUse::Pool(inner) => format!("pool<{}>", render_type_use_kind(inner)),
+        SyntaxTypeUse::Order(inner) => format!("order<{}>", render_type_use_kind(inner)),
+        SyntaxTypeUse::Ref { name } => name.clone(),
     }
 }
 
@@ -278,7 +297,7 @@ pub(crate) fn render_visit_calls(
                 )]
             }
         }
-        SyntaxTypeUse::Seq(inner) => {
+        SyntaxTypeUse::Seq(inner) | SyntaxTypeUse::Pool(inner) | SyntaxTypeUse::Order(inner) => {
             let inner = render_visit_calls(inner, "value", node_names, mutable, true);
             if inner.is_empty() {
                 Vec::new()

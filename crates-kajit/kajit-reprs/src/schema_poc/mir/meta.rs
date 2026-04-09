@@ -22,6 +22,15 @@ pub struct TypeUseSpec {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FieldSpec {
+    pub owner: &'static str,
+
+    pub field: &'static str,
+
+    pub kind: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeSpec {
     pub name: &'static str,
 
@@ -205,6 +214,8 @@ pub static COMMON_TYPES: &[TypeUseSpec] = &[
     },
 ];
 
+pub static SUPPORT_FIELDS: &[FieldSpec] = &[];
+
 pub static NODES: &[NodeSpec] = &[
     NodeSpec {
         name: "Block",
@@ -265,6 +276,569 @@ pub static NODES: &[NodeSpec] = &[
     NodeSpec {
         name: "UnaryOp",
         kind: "enum",
+    },
+];
+
+pub static NODE_FIELDS: &[FieldSpec] = &[
+    FieldSpec {
+        owner: "Block",
+        field: "docs",
+        kind: "optional<DocBlock>",
+    },
+    FieldSpec {
+        owner: "Block",
+        field: "id",
+        kind: "BlockId",
+    },
+    FieldSpec {
+        owner: "Block",
+        field: "insts",
+        kind: "order<InstId>",
+    },
+    FieldSpec {
+        owner: "Block",
+        field: "params",
+        kind: "order<VReg>",
+    },
+    FieldSpec {
+        owner: "Block",
+        field: "preds",
+        kind: "order<EdgeId>",
+    },
+    FieldSpec {
+        owner: "Block",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Block",
+        field: "succs",
+        kind: "order<EdgeId>",
+    },
+    FieldSpec {
+        owner: "Block",
+        field: "term",
+        kind: "TermId",
+    },
+    FieldSpec {
+        owner: "ConstRef.Named",
+        field: "name",
+        kind: "Symbol",
+    },
+    FieldSpec {
+        owner: "ConstRef.Named",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "ConstRef.Value",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "ConstRef.Value",
+        field: "value",
+        kind: "Nat",
+    },
+    FieldSpec {
+        owner: "DataArgsLine",
+        field: "args",
+        kind: "order<VReg>",
+    },
+    FieldSpec {
+        owner: "DataArgsLine",
+        field: "docs",
+        kind: "optional<DocBlock>",
+    },
+    FieldSpec {
+        owner: "DataArgsLine",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "DataResultsLine",
+        field: "docs",
+        kind: "optional<DocBlock>",
+    },
+    FieldSpec {
+        owner: "DataResultsLine",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "DataResultsLine",
+        field: "results",
+        kind: "order<VReg>",
+    },
+    FieldSpec {
+        owner: "Edge",
+        field: "args",
+        kind: "order<EdgeArg>",
+    },
+    FieldSpec {
+        owner: "Edge",
+        field: "docs",
+        kind: "optional<DocBlock>",
+    },
+    FieldSpec {
+        owner: "Edge",
+        field: "from",
+        kind: "BlockId",
+    },
+    FieldSpec {
+        owner: "Edge",
+        field: "id",
+        kind: "EdgeId",
+    },
+    FieldSpec {
+        owner: "Edge",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Edge",
+        field: "to",
+        kind: "BlockId",
+    },
+    FieldSpec {
+        owner: "EdgeArg.Identity",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "EdgeArg.Identity",
+        field: "vreg",
+        kind: "VReg",
+    },
+    FieldSpec {
+        owner: "EdgeArg.Mapped",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "EdgeArg.Mapped",
+        field: "source",
+        kind: "VReg",
+    },
+    FieldSpec {
+        owner: "EdgeArg.Mapped",
+        field: "target",
+        kind: "VReg",
+    },
+    FieldSpec {
+        owner: "FixedReg.AbiArg",
+        field: "index",
+        kind: "Nat",
+    },
+    FieldSpec {
+        owner: "FixedReg.AbiArg",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "FixedReg.AbiRet",
+        field: "index",
+        kind: "Nat",
+    },
+    FieldSpec {
+        owner: "FixedReg.AbiRet",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "FixedReg.HwReg",
+        field: "index",
+        kind: "Nat",
+    },
+    FieldSpec {
+        owner: "FixedReg.HwReg",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Function",
+        field: "blocks",
+        kind: "pool<Block>",
+    },
+    FieldSpec {
+        owner: "Function",
+        field: "data_args",
+        kind: "DataArgsLine",
+    },
+    FieldSpec {
+        owner: "Function",
+        field: "data_results",
+        kind: "DataResultsLine",
+    },
+    FieldSpec {
+        owner: "Function",
+        field: "docs",
+        kind: "optional<DocBlock>",
+    },
+    FieldSpec {
+        owner: "Function",
+        field: "edges",
+        kind: "pool<Edge>",
+    },
+    FieldSpec {
+        owner: "Function",
+        field: "entry",
+        kind: "BlockId",
+    },
+    FieldSpec {
+        owner: "Function",
+        field: "function_id",
+        kind: "FunctionId",
+    },
+    FieldSpec {
+        owner: "Function",
+        field: "insts",
+        kind: "pool<Inst>",
+    },
+    FieldSpec {
+        owner: "Function",
+        field: "lambda_id",
+        kind: "LambdaId",
+    },
+    FieldSpec {
+        owner: "Function",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Function",
+        field: "terms",
+        kind: "pool<Terminator>",
+    },
+    FieldSpec {
+        owner: "Inst",
+        field: "clobbers",
+        kind: "optional<ClobberKind>",
+    },
+    FieldSpec {
+        owner: "Inst",
+        field: "defs",
+        kind: "optional<order<Operand>>",
+    },
+    FieldSpec {
+        owner: "Inst",
+        field: "docs",
+        kind: "optional<DocBlock>",
+    },
+    FieldSpec {
+        owner: "Inst",
+        field: "id",
+        kind: "InstId",
+    },
+    FieldSpec {
+        owner: "Inst",
+        field: "op",
+        kind: "InstOp",
+    },
+    FieldSpec {
+        owner: "Inst",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Inst",
+        field: "uses",
+        kind: "optional<order<Operand>>",
+    },
+    FieldSpec {
+        owner: "InstOp.BinOp",
+        field: "op",
+        kind: "BinOpKind",
+    },
+    FieldSpec {
+        owner: "InstOp.BinOp",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "InstOp.CallEffect",
+        field: "func",
+        kind: "IntrinsicRef",
+    },
+    FieldSpec {
+        owner: "InstOp.CallEffect",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "InstOp.CallIntrinsic",
+        field: "func",
+        kind: "IntrinsicRef",
+    },
+    FieldSpec {
+        owner: "InstOp.CallIntrinsic",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "InstOp.CallLambda",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "InstOp.CallLambda",
+        field: "target",
+        kind: "LambdaId",
+    },
+    FieldSpec {
+        owner: "InstOp.CallPure",
+        field: "func",
+        kind: "IntrinsicRef",
+    },
+    FieldSpec {
+        owner: "InstOp.CallPure",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "InstOp.Const",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "InstOp.Const",
+        field: "value",
+        kind: "ConstRef",
+    },
+    FieldSpec {
+        owner: "InstOp.Copy",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "InstOp.DataAddr",
+        field: "blob_id",
+        kind: "BlobId",
+    },
+    FieldSpec {
+        owner: "InstOp.DataAddr",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "InstOp.ExternAddr",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "InstOp.ExternAddr",
+        field: "symbol",
+        kind: "IntrinsicRef",
+    },
+    FieldSpec {
+        owner: "InstOp.LoadFromAddr",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "InstOp.LoadFromAddr",
+        field: "width",
+        kind: "Width",
+    },
+    FieldSpec {
+        owner: "InstOp.ReadFromSlot",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "InstOp.ReadFromSlot",
+        field: "slot",
+        kind: "SlotId",
+    },
+    FieldSpec {
+        owner: "InstOp.StackAlloc",
+        field: "id",
+        kind: "StackAllocId",
+    },
+    FieldSpec {
+        owner: "InstOp.StackAlloc",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "InstOp.StoreToAddr",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "InstOp.StoreToAddr",
+        field: "width",
+        kind: "Width",
+    },
+    FieldSpec {
+        owner: "InstOp.UnaryOp",
+        field: "op",
+        kind: "UnaryOp",
+    },
+    FieldSpec {
+        owner: "InstOp.UnaryOp",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "InstOp.WriteToSlot",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "InstOp.WriteToSlot",
+        field: "slot",
+        kind: "SlotId",
+    },
+    FieldSpec {
+        owner: "IntrinsicRef.Address",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "IntrinsicRef.Address",
+        field: "value",
+        kind: "Nat",
+    },
+    FieldSpec {
+        owner: "IntrinsicRef.Named",
+        field: "name",
+        kind: "Symbol",
+    },
+    FieldSpec {
+        owner: "IntrinsicRef.Named",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Operand",
+        field: "class",
+        kind: "RegClass",
+    },
+    FieldSpec {
+        owner: "Operand",
+        field: "fixed",
+        kind: "optional<FixedReg>",
+    },
+    FieldSpec {
+        owner: "Operand",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Operand",
+        field: "vreg",
+        kind: "VReg",
+    },
+    FieldSpec {
+        owner: "Program",
+        field: "docs",
+        kind: "optional<DocBlock>",
+    },
+    FieldSpec {
+        owner: "Program",
+        field: "functions",
+        kind: "pool<Function>",
+    },
+    FieldSpec {
+        owner: "Program",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Program",
+        field: "slot_count",
+        kind: "Nat",
+    },
+    FieldSpec {
+        owner: "Program",
+        field: "vreg_count",
+        kind: "Nat",
+    },
+    FieldSpec {
+        owner: "Terminator.Branch",
+        field: "edge",
+        kind: "EdgeId",
+    },
+    FieldSpec {
+        owner: "Terminator.Branch",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Terminator.BranchIf",
+        field: "cond",
+        kind: "VReg",
+    },
+    FieldSpec {
+        owner: "Terminator.BranchIf",
+        field: "fallthrough",
+        kind: "EdgeId",
+    },
+    FieldSpec {
+        owner: "Terminator.BranchIf",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Terminator.BranchIf",
+        field: "taken",
+        kind: "EdgeId",
+    },
+    FieldSpec {
+        owner: "Terminator.BranchIfZero",
+        field: "cond",
+        kind: "VReg",
+    },
+    FieldSpec {
+        owner: "Terminator.BranchIfZero",
+        field: "fallthrough",
+        kind: "EdgeId",
+    },
+    FieldSpec {
+        owner: "Terminator.BranchIfZero",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Terminator.BranchIfZero",
+        field: "taken",
+        kind: "EdgeId",
+    },
+    FieldSpec {
+        owner: "Terminator.JumpTable",
+        field: "default",
+        kind: "EdgeId",
+    },
+    FieldSpec {
+        owner: "Terminator.JumpTable",
+        field: "predicate",
+        kind: "VReg",
+    },
+    FieldSpec {
+        owner: "Terminator.JumpTable",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Terminator.JumpTable",
+        field: "targets",
+        kind: "order<EdgeId>",
+    },
+    FieldSpec {
+        owner: "Terminator.Return",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "UnaryOp.SignExtend",
+        field: "from_width",
+        kind: "Width",
+    },
+    FieldSpec {
+        owner: "UnaryOp.SignExtend",
+        field: "prov",
+        kind: "Prov",
     },
 ];
 

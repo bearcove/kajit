@@ -4,7 +4,7 @@ use crate::normalize::{NormalizedNodeDecl, NormalizedNodeKind, NormalizedRepr};
 use crate::parser_codegen::render_parser_block;
 use crate::render_helpers::{
     collect_syntax_type_tags, render_common_placeholder, render_node_decl, render_provenance_impl,
-    render_support_decl, render_walk_fn, snake_case,
+    render_support_decl, render_type_use_kind, render_walk_fn, snake_case,
 };
 use crate::semantic_codegen::render_semantic_block;
 
@@ -87,6 +87,8 @@ struct RenderParts {
     common_rows: String,
     support_rows: String,
     node_rows: String,
+    support_field_rows: String,
+    node_field_rows: String,
     print_rows: String,
     placeholder_rows: String,
     ast_rows: String,
@@ -178,9 +180,8 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         .iter()
         .map(|name| {
             let kind = match repr.common.get(name) {
-                Some(crate::normalize::SyntaxTypeUse::Ref { name }) => name.as_str(),
-                Some(_) => "scalar",
-                None => "<missing>",
+                Some(ty) => render_type_use_kind(ty),
+                None => "<missing>".to_owned(),
             };
             format!("    TypeUseSpec {{ name: {name:?}, kind: {kind:?} }},")
         })
@@ -216,6 +217,77 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         })
         .collect::<Vec<_>>()
         .join("\n\n");
+
+    let support_field_rows = support_names
+        .iter()
+        .flat_map(|name| {
+            let decl = repr.support.get(name).unwrap();
+            match &decl.value {
+                crate::normalize::NormalizedSupportDecl::Struct(fields) => {
+                    let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
+                    field_names.sort();
+                    field_names
+                        .into_iter()
+                        .map(|field_name| {
+                            let kind = render_type_use_kind(&fields[&field_name].value);
+                            format!(
+                                "    FieldSpec {{ owner: {name:?}, field: {field_name:?}, kind: {kind:?} }},"
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                }
+                _ => Vec::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let node_field_rows = node_names
+        .iter()
+        .flat_map(|name| {
+            let decl = repr.nodes.get(name).unwrap();
+            match &decl.value {
+                NormalizedNodeDecl::Record { fields, .. } => {
+                    let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
+                    field_names.sort();
+                    field_names
+                        .into_iter()
+                        .map(|field_name| {
+                            let kind = render_type_use_kind(&fields[&field_name].value);
+                            format!(
+                                "    FieldSpec {{ owner: {name:?}, field: {field_name:?}, kind: {kind:?} }},"
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                }
+                NormalizedNodeDecl::Enum(variants) => {
+                    let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
+                    variant_names.sort();
+                    variant_names
+                        .into_iter()
+                        .flat_map(|variant_name| match &variants[&variant_name].value {
+                            NormalizedNodeDecl::Record { fields, .. } => {
+                                let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
+                                field_names.sort();
+                                field_names
+                                    .into_iter()
+                                    .map(|field_name| {
+                                        let kind = render_type_use_kind(&fields[&field_name].value);
+                                        format!(
+                                            "    FieldSpec {{ owner: {:?}, field: {field_name:?}, kind: {kind:?} }},",
+                                            format!("{name}.{variant_name}")
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                            }
+                            NormalizedNodeDecl::Enum(_) => Vec::new(),
+                        })
+                        .collect::<Vec<_>>()
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
 
     let mut placeholder_names = Vec::new();
     for ty in repr.common.values() {
@@ -365,6 +437,8 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         common_rows,
         support_rows,
         node_rows,
+        support_field_rows,
+        node_field_rows,
         print_rows,
         placeholder_rows,
         ast_rows,
@@ -570,6 +644,13 @@ pub struct TypeUseSpec {{
 }}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FieldSpec {{
+    pub owner: &'static str,
+    pub field: &'static str,
+    pub kind: &'static str,
+}}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeSpec {{
     pub name: &'static str,
     pub kind: &'static str,
@@ -604,8 +685,16 @@ pub static COMMON_TYPES: &[TypeUseSpec] = &[
 {common_rows}
 ];
 
+pub static SUPPORT_FIELDS: &[FieldSpec] = &[
+{support_field_rows}
+];
+
 pub static NODES: &[NodeSpec] = &[
 {node_rows}
+];
+
+pub static NODE_FIELDS: &[FieldSpec] = &[
+{node_field_rows}
 ];
 
 pub static CANONICAL_PRINT: &[PrintSpec] = &[
@@ -622,7 +711,9 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
         token_rows = parts.token_rows,
         rule_rows = parts.rule_rows,
         common_rows = parts.common_rows,
+        support_field_rows = parts.support_field_rows,
         node_rows = parts.node_rows,
+        node_field_rows = parts.node_field_rows,
         print_rows = parts.print_rows,
     )
 }

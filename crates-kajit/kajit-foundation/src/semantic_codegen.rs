@@ -82,7 +82,7 @@ fn recurse_calls_for_type(
                 )]
             }
         }
-        SyntaxTypeUse::Seq(inner) => {
+        SyntaxTypeUse::Seq(inner) | SyntaxTypeUse::Pool(inner) | SyntaxTypeUse::Order(inner) => {
             let inner_calls = recurse_calls_for_type(inner, "value", node_names, true);
             if inner_calls.is_empty() {
                 Vec::new()
@@ -125,7 +125,10 @@ fn render_field_annotation_line(
     node_names: &[String],
 ) -> Option<String> {
     match ty {
-        SyntaxTypeUse::Optional(_) | SyntaxTypeUse::Seq(_) => None,
+        SyntaxTypeUse::Optional(_)
+        | SyntaxTypeUse::Seq(_)
+        | SyntaxTypeUse::Pool(_)
+        | SyntaxTypeUse::Order(_) => None,
         SyntaxTypeUse::Ref { name }
             if is_string_scalar_type(repr, name) || is_int_scalar_type(repr, name) =>
         {

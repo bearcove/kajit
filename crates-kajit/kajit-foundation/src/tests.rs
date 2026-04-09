@@ -220,6 +220,104 @@ repr @module{
 }
 
 #[test]
+fn supports_pool_and_order_storage_shapes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("storage.repr.styx");
+    fs::write(
+        &path,
+        r#"
+meta {
+    id kajit:test/storage-shapes
+    version 1
+    description "storage schema"
+}
+
+repr @module{
+    name Storage
+    file_ext .k-storage
+    contract {
+        purpose "storage"
+        canonical_identities (block-id)
+        round_trip canonical-print
+        provenance required
+    }
+    syntax {
+        root Program
+        tokens {
+            int @regex("[0-9]+")
+        }
+        rules {
+            Program @seq(
+                "program"
+                "{"
+                @field(blocks @repeat(@ref(Block)))
+                "}"
+            )
+            Block @seq(
+                "block"
+                @field(id @token(int))
+                "["
+                @field(succs @repeat(@ref(BlockId) {sep ","}))
+                "]"
+            )
+            BlockId @token(int)
+        }
+        canonical_print {
+            Program "program {\n{blocks}\n}"
+            Block "block {id} [{succs:, }]"
+        }
+    }
+    common {
+        provenance @Prov
+    }
+    support {
+        BlockId @id
+    }
+    nodes {
+        Program @node{
+            prov @Prov
+            blocks @pool(@Block)
+        }
+        Block @entity{
+            prov @Prov
+            id @BlockId
+            succs @order(@BlockId)
+        }
+    }
+}
+"#,
+    )
+    .unwrap();
+
+    let loaded = schema::load_pilot_schema(&path).unwrap();
+    let repr =
+        normalize::with_module_doc(normalize::normalize_repr(&loaded.body).unwrap(), loaded.doc);
+    let files = render_module::render_repr_poc_files(&[repr]);
+
+    let ast = files
+        .iter()
+        .find(|file| file.relative_path == "storage/ast.rs")
+        .unwrap()
+        .contents
+        .clone();
+    let meta = files
+        .iter()
+        .find(|file| file.relative_path == "storage/meta.rs")
+        .unwrap()
+        .contents
+        .clone();
+
+    assert!(ast.contains("pub blocks: Vec<Block>,"));
+    assert!(ast.contains("pub succs: Vec<BlockId>,"));
+    assert!(meta.contains("owner: \"Program\""));
+    assert!(meta.contains("field: \"blocks\""));
+    assert!(meta.contains("kind: \"pool<Block>\""));
+    assert!(meta.contains("owner: \"Block\""));
+    assert!(meta.contains("field: \"succs\""));
+    assert!(meta.contains("kind: \"order<BlockId>\""));
+}
+
+#[test]
 fn mir_pilot_schema_loads_and_normalizes() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../notes/unified-ast/pilot/mir.repr.styx");

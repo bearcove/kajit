@@ -22,6 +22,15 @@ pub struct TypeUseSpec {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FieldSpec {
+    pub owner: &'static str,
+
+    pub field: &'static str,
+
+    pub kind: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeSpec {
     pub name: &'static str,
 
@@ -107,6 +116,8 @@ pub static COMMON_TYPES: &[TypeUseSpec] = &[
     },
 ];
 
+pub static SUPPORT_FIELDS: &[FieldSpec] = &[];
+
 pub static NODES: &[NodeSpec] = &[
     NodeSpec {
         name: "Block",
@@ -143,6 +154,299 @@ pub static NODES: &[NodeSpec] = &[
     NodeSpec {
         name: "TypeDef",
         kind: "node",
+    },
+];
+
+pub static NODE_FIELDS: &[FieldSpec] = &[
+    FieldSpec {
+        owner: "Block",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Block",
+        field: "statements",
+        kind: "seq<Stmt>",
+    },
+    FieldSpec {
+        owner: "Expr.Binary",
+        field: "lhs",
+        kind: "Expr",
+    },
+    FieldSpec {
+        owner: "Expr.Binary",
+        field: "op",
+        kind: "BinaryOp",
+    },
+    FieldSpec {
+        owner: "Expr.Binary",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Expr.Binary",
+        field: "rhs",
+        kind: "Expr",
+    },
+    FieldSpec {
+        owner: "Expr.Call",
+        field: "args",
+        kind: "seq<Expr>",
+    },
+    FieldSpec {
+        owner: "Expr.Call",
+        field: "callee",
+        kind: "Symbol",
+    },
+    FieldSpec {
+        owner: "Expr.Call",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Expr.Field",
+        field: "base",
+        kind: "Expr",
+    },
+    FieldSpec {
+        owner: "Expr.Field",
+        field: "field",
+        kind: "Symbol",
+    },
+    FieldSpec {
+        owner: "Expr.Field",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Expr.Literal",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Expr.Literal",
+        field: "value",
+        kind: "Literal",
+    },
+    FieldSpec {
+        owner: "Expr.Local",
+        field: "name",
+        kind: "Symbol",
+    },
+    FieldSpec {
+        owner: "Expr.Local",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Function",
+        field: "body",
+        kind: "Block",
+    },
+    FieldSpec {
+        owner: "Function",
+        field: "docs",
+        kind: "optional<DocBlock>",
+    },
+    FieldSpec {
+        owner: "Function",
+        field: "locals",
+        kind: "seq<Local>",
+    },
+    FieldSpec {
+        owner: "Function",
+        field: "name",
+        kind: "Symbol",
+    },
+    FieldSpec {
+        owner: "Function",
+        field: "params",
+        kind: "seq<Param>",
+    },
+    FieldSpec {
+        owner: "Function",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Function",
+        field: "return_type",
+        kind: "Type",
+    },
+    FieldSpec {
+        owner: "Local",
+        field: "kind",
+        kind: "LocalKind",
+    },
+    FieldSpec {
+        owner: "Local",
+        field: "name",
+        kind: "Symbol",
+    },
+    FieldSpec {
+        owner: "Local",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Local",
+        field: "ty",
+        kind: "Type",
+    },
+    FieldSpec {
+        owner: "Module",
+        field: "docs",
+        kind: "optional<DocBlock>",
+    },
+    FieldSpec {
+        owner: "Module",
+        field: "functions",
+        kind: "seq<Function>",
+    },
+    FieldSpec {
+        owner: "Module",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Module",
+        field: "type_defs",
+        kind: "seq<TypeDef>",
+    },
+    FieldSpec {
+        owner: "Param",
+        field: "name",
+        kind: "Symbol",
+    },
+    FieldSpec {
+        owner: "Param",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Param",
+        field: "ty",
+        kind: "Type",
+    },
+    FieldSpec {
+        owner: "Place.Field",
+        field: "base",
+        kind: "Place",
+    },
+    FieldSpec {
+        owner: "Place.Field",
+        field: "field",
+        kind: "Symbol",
+    },
+    FieldSpec {
+        owner: "Place.Field",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Place.Local",
+        field: "name",
+        kind: "Symbol",
+    },
+    FieldSpec {
+        owner: "Place.Local",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Stmt.Assign",
+        field: "place",
+        kind: "Place",
+    },
+    FieldSpec {
+        owner: "Stmt.Assign",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Stmt.Assign",
+        field: "value",
+        kind: "Expr",
+    },
+    FieldSpec {
+        owner: "Stmt.Expr",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Stmt.Expr",
+        field: "value",
+        kind: "Expr",
+    },
+    FieldSpec {
+        owner: "Stmt.If",
+        field: "condition",
+        kind: "Expr",
+    },
+    FieldSpec {
+        owner: "Stmt.If",
+        field: "else",
+        kind: "optional<Block>",
+    },
+    FieldSpec {
+        owner: "Stmt.If",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Stmt.If",
+        field: "then",
+        kind: "Block",
+    },
+    FieldSpec {
+        owner: "Stmt.Init",
+        field: "place",
+        kind: "Place",
+    },
+    FieldSpec {
+        owner: "Stmt.Init",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Stmt.Init",
+        field: "value",
+        kind: "Expr",
+    },
+    FieldSpec {
+        owner: "Stmt.Return",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Stmt.Return",
+        field: "value",
+        kind: "optional<Expr>",
+    },
+    FieldSpec {
+        owner: "TypeDef",
+        field: "docs",
+        kind: "optional<DocBlock>",
+    },
+    FieldSpec {
+        owner: "TypeDef",
+        field: "kind",
+        kind: "TypeDefKind",
+    },
+    FieldSpec {
+        owner: "TypeDef",
+        field: "name",
+        kind: "Symbol",
+    },
+    FieldSpec {
+        owner: "TypeDef",
+        field: "params",
+        kind: "seq<GenericParam>",
+    },
+    FieldSpec {
+        owner: "TypeDef",
+        field: "prov",
+        kind: "Prov",
     },
 ];
 

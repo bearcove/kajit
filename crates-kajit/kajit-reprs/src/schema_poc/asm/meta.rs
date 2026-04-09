@@ -22,6 +22,15 @@ pub struct TypeUseSpec {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FieldSpec {
+    pub owner: &'static str,
+
+    pub field: &'static str,
+
+    pub kind: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeSpec {
     pub name: &'static str,
 
@@ -134,6 +143,8 @@ pub static COMMON_TYPES: &[TypeUseSpec] = &[
     },
 ];
 
+pub static SUPPORT_FIELDS: &[FieldSpec] = &[];
+
 pub static NODES: &[NodeSpec] = &[
     NodeSpec {
         name: "A64Item",
@@ -194,6 +205,379 @@ pub static NODES: &[NodeSpec] = &[
     NodeSpec {
         name: "X86_64DialectKeyword",
         kind: "struct",
+    },
+];
+
+pub static NODE_FIELDS: &[FieldSpec] = &[
+    FieldSpec {
+        owner: "A64Item.AddImm",
+        field: "imm",
+        kind: "Imm",
+    },
+    FieldSpec {
+        owner: "A64Item.AddImm",
+        field: "op",
+        kind: "AddKeyword",
+    },
+    FieldSpec {
+        owner: "A64Item.AddImm",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "A64Item.AddImm",
+        field: "rd",
+        kind: "A64Reg",
+    },
+    FieldSpec {
+        owner: "A64Item.AddImm",
+        field: "rn",
+        kind: "A64Reg",
+    },
+    FieldSpec {
+        owner: "A64Item.B",
+        field: "op",
+        kind: "BKeyword",
+    },
+    FieldSpec {
+        owner: "A64Item.B",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "A64Item.B",
+        field: "target",
+        kind: "LabelName",
+    },
+    FieldSpec {
+        owner: "A64Item.Label",
+        field: "name",
+        kind: "LabelName",
+    },
+    FieldSpec {
+        owner: "A64Item.Label",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "A64Item.Mov",
+        field: "op",
+        kind: "MovKeyword",
+    },
+    FieldSpec {
+        owner: "A64Item.Mov",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "A64Item.Mov",
+        field: "rd",
+        kind: "A64Reg",
+    },
+    FieldSpec {
+        owner: "A64Item.Mov",
+        field: "rm",
+        kind: "A64Reg",
+    },
+    FieldSpec {
+        owner: "A64Item.Movz",
+        field: "imm",
+        kind: "Imm",
+    },
+    FieldSpec {
+        owner: "A64Item.Movz",
+        field: "op",
+        kind: "MovzKeyword",
+    },
+    FieldSpec {
+        owner: "A64Item.Movz",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "A64Item.Movz",
+        field: "rd",
+        kind: "A64Reg",
+    },
+    FieldSpec {
+        owner: "A64Item.Nop",
+        field: "op",
+        kind: "NopKeyword",
+    },
+    FieldSpec {
+        owner: "A64Item.Nop",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "A64Item.Ret",
+        field: "op",
+        kind: "RetKeyword",
+    },
+    FieldSpec {
+        owner: "A64Item.Ret",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "A64Reg.Sp",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "A64Reg.X0",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "A64Reg.X1",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "A64Reg.X2",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "A64Reg.X3",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "AArch64DialectKeyword",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "AddKeyword",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "AsmKeyword",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "BKeyword",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "JmpKeyword",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "MovKeyword",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "MovzKeyword",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "NopKeyword",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Program.AArch64",
+        field: "dialect",
+        kind: "AArch64DialectKeyword",
+    },
+    FieldSpec {
+        owner: "Program.AArch64",
+        field: "docs",
+        kind: "optional<DocBlock>",
+    },
+    FieldSpec {
+        owner: "Program.AArch64",
+        field: "items",
+        kind: "seq<A64Item>",
+    },
+    FieldSpec {
+        owner: "Program.AArch64",
+        field: "keyword",
+        kind: "AsmKeyword",
+    },
+    FieldSpec {
+        owner: "Program.AArch64",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "Program.X86_64",
+        field: "dialect",
+        kind: "X86_64DialectKeyword",
+    },
+    FieldSpec {
+        owner: "Program.X86_64",
+        field: "docs",
+        kind: "optional<DocBlock>",
+    },
+    FieldSpec {
+        owner: "Program.X86_64",
+        field: "items",
+        kind: "seq<X64Item>",
+    },
+    FieldSpec {
+        owner: "Program.X86_64",
+        field: "keyword",
+        kind: "AsmKeyword",
+    },
+    FieldSpec {
+        owner: "Program.X86_64",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "RetKeyword",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "X64Item.AddImm",
+        field: "imm",
+        kind: "Imm",
+    },
+    FieldSpec {
+        owner: "X64Item.AddImm",
+        field: "op",
+        kind: "AddKeyword",
+    },
+    FieldSpec {
+        owner: "X64Item.AddImm",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "X64Item.AddImm",
+        field: "rd",
+        kind: "X64Reg",
+    },
+    FieldSpec {
+        owner: "X64Item.Jmp",
+        field: "op",
+        kind: "JmpKeyword",
+    },
+    FieldSpec {
+        owner: "X64Item.Jmp",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "X64Item.Jmp",
+        field: "target",
+        kind: "LabelName",
+    },
+    FieldSpec {
+        owner: "X64Item.Label",
+        field: "name",
+        kind: "LabelName",
+    },
+    FieldSpec {
+        owner: "X64Item.Label",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "X64Item.MovImm",
+        field: "imm",
+        kind: "Imm",
+    },
+    FieldSpec {
+        owner: "X64Item.MovImm",
+        field: "op",
+        kind: "MovKeyword",
+    },
+    FieldSpec {
+        owner: "X64Item.MovImm",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "X64Item.MovImm",
+        field: "rd",
+        kind: "X64Reg",
+    },
+    FieldSpec {
+        owner: "X64Item.MovReg",
+        field: "op",
+        kind: "MovKeyword",
+    },
+    FieldSpec {
+        owner: "X64Item.MovReg",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "X64Item.MovReg",
+        field: "rd",
+        kind: "X64Reg",
+    },
+    FieldSpec {
+        owner: "X64Item.MovReg",
+        field: "rm",
+        kind: "X64Reg",
+    },
+    FieldSpec {
+        owner: "X64Item.Nop",
+        field: "op",
+        kind: "NopKeyword",
+    },
+    FieldSpec {
+        owner: "X64Item.Nop",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "X64Item.Ret",
+        field: "op",
+        kind: "RetKeyword",
+    },
+    FieldSpec {
+        owner: "X64Item.Ret",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "X64Reg.Rax",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "X64Reg.Rbp",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "X64Reg.Rbx",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "X64Reg.Rcx",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "X64Reg.Rdx",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "X64Reg.Rsp",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "X86_64DialectKeyword",
+        field: "prov",
+        kind: "Prov",
     },
 ];
 

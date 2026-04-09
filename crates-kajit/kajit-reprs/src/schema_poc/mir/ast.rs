@@ -14,12 +14,9 @@ pub use kajit_types::{Prov, Span};
 /// The binary-op family used by the pilot text format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BinOpKind {
-    /// Equality comparison.
+    /// Integer addition.
     #[default]
-    CmpEq,
-
-    /// Integer subtraction.
-    Sub,
+    Add,
 
     /// Bitwise OR.
     Or,
@@ -27,20 +24,14 @@ pub enum BinOpKind {
     /// Greater-than comparison.
     CmpGt,
 
+    /// Bitwise AND.
+    And,
+
     /// Bitwise XOR.
     Xor,
 
-    /// Inequality comparison.
-    CmpNe,
-
-    /// Logical right shift.
-    Shr,
-
-    /// Integer addition.
-    Add,
-
-    /// Integer multiplication.
-    Mul,
+    /// Equality comparison.
+    CmpEq,
 
     /// Arithmetic right shift.
     Sar,
@@ -48,14 +39,23 @@ pub enum BinOpKind {
     /// Logical left shift.
     Shl,
 
+    /// Logical right shift.
+    Shr,
+
     /// Less-than comparison.
     CmpLt,
+
+    /// Integer subtraction.
+    Sub,
+
+    /// Integer multiplication.
+    Mul,
 
     /// Less-than-or-equal comparison.
     CmpLe,
 
-    /// Bitwise AND.
-    And,
+    /// Inequality comparison.
+    CmpNe,
 
     /// Greater-than-or-equal comparison.
     CmpGe,
@@ -90,15 +90,15 @@ impl BlockId {
 /// Named clobber groups printed after `!`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ClobberKind {
-    /// Caller-saved GPRs are clobbered.
-    #[default]
-    Gpr,
-
     /// Caller-saved SIMD registers are clobbered.
+    #[default]
     Simd,
 
     /// Both caller-saved GPR and SIMD registers are clobbered.
     Both,
+
+    /// Caller-saved GPRs are clobbered.
+    Gpr,
 }
 
 /// A control-flow edge identifier.
@@ -241,18 +241,18 @@ impl VReg {
 /// A scalar width used by loads, stores, and sign extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Width {
-    /// Four bytes.
+    /// Eight bytes.
     #[default]
-    W4,
+    W8,
 
-    /// One byte.
-    W1,
+    /// Four bytes.
+    W4,
 
     /// Two bytes.
     W2,
 
-    /// Eight bytes.
-    W8,
+    /// One byte.
+    W1,
 }
 
 /// A live basic block.

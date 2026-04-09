@@ -116,8 +116,11 @@ fn render_value_parser(
             Ok(format!("({inner}).or_not()"))
         }
         SyntaxRule::Repeat { item, sep } => {
-            let SyntaxTypeUse::Seq(inner_ty) = ty else {
-                return Err("repeat rule without seq type".to_owned());
+            let inner_ty = match ty {
+                SyntaxTypeUse::Seq(inner_ty)
+                | SyntaxTypeUse::Pool(inner_ty)
+                | SyntaxTypeUse::Order(inner_ty) => inner_ty,
+                _ => return Err("repeat rule without repeated type".to_owned()),
             };
             let inner = render_value_parser(repr, item, inner_ty, rule_names, node_names, false)?;
             Ok(if let Some(sep) = sep.as_deref() {

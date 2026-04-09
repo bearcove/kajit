@@ -637,7 +637,7 @@ repr @module{
             /// Total number of stack slots available in this program.
             slot_count @Nat
             /// Lowered functions in the program.
-            functions @seq(@Function)
+            functions @pool(@Function)
         }
 
         /// A lowered lambda/function in canonical CFG-MIR form.
@@ -657,13 +657,13 @@ repr @module{
             /// Printed `data_results` header line for the function.
             data_results @DataResultsLine
             /// Live blocks in canonical order.
-            blocks @seq(@Block)
+            blocks @pool(@Block)
             /// Non-terminator instructions in arena order.
-            insts @seq(@Inst)
+            insts @pool(@Inst)
             /// Terminators in arena order.
-            terms @seq(@Terminator)
+            terms @pool(@Terminator)
             /// Control-flow edges in arena order.
-            edges @seq(@Edge)
+            edges @pool(@Edge)
         }
 
         /// The `data_args` header line.
@@ -673,7 +673,7 @@ repr @module{
             /// Optional docs attached to the line.
             docs @optional(@DocBlock)
             /// Data arguments available at the function entry.
-            args @seq(@VReg)
+            args @order(@VReg)
         }
 
         /// The `data_results` header line.
@@ -683,7 +683,7 @@ repr @module{
             /// Optional docs attached to the line.
             docs @optional(@DocBlock)
             /// Data results returned from the function.
-            results @seq(@VReg)
+            results @order(@VReg)
         }
 
         /// A live basic block.
@@ -698,15 +698,15 @@ repr @module{
             /// Stable block ID.
             id @BlockId
             /// SSA block parameters filled from incoming edge arguments.
-            params @seq(@VReg)
+            params @order(@VReg)
             /// Instruction IDs executed before the terminator.
-            insts @seq(@InstId)
+            insts @order(@InstId)
             /// Block terminator.
             term @TermId
             /// Incoming edges, rebuildable from the edge list.
-            preds @seq(@EdgeId)
+            preds @order(@EdgeId)
             /// Outgoing edges, rebuildable from the edge list.
-            succs @seq(@EdgeId)
+            succs @order(@EdgeId)
         }
 
         /// A single edge-argument binding.
@@ -737,7 +737,7 @@ repr @module{
             /// Destination block.
             to @BlockId
             /// Arguments passed along the edge.
-            args @seq(@EdgeArg)
+            args @order(@EdgeArg)
         }
 
         /// A register operand used by an instruction.
@@ -895,11 +895,11 @@ repr @module{
             /// Stable instruction ID.
             id @InstId
             /// Destination operands printed before `=`.
-            defs @optional(@seq(@Operand))
+            defs @optional(@order(@Operand))
             /// The opcode and its payload.
             op @InstOp
             /// Source operands printed after the opcode.
-            uses @optional(@seq(@Operand))
+            uses @optional(@order(@Operand))
             /// Optional caller-saved clobber marker.
             clobbers @optional(@ClobberKind)
         }
@@ -933,7 +933,7 @@ repr @module{
             JumpTable @struct{
                 prov @Prov
                 predicate @VReg
-                targets @seq(@EdgeId)
+                targets @order(@EdgeId)
                 default @EdgeId
             }
         }
