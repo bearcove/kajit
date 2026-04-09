@@ -105,9 +105,7 @@ pub(crate) fn render_common_placeholder(
                 .filter(|name| name.as_str() != "provenance")
                 .map(|name| format!("pub type {} = Prov;\n", pascal_case(name)))
                 .unwrap_or_default();
-            format!(
-                "#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]\npub struct Span {{\n    pub start: u32,\n    pub end: u32,\n}}\n\n#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct Prov {{\n    pub file_id: Option<u32>,\n    pub span: Option<Span>,\n}}\n{alias}"
-            )
+            format!("pub use kajit_types::{{Prov, Span}};\n{alias}")
         }
         "Symbol" => {
             let alias = common_name
@@ -164,7 +162,7 @@ pub(crate) fn render_support_decl(
                     }
                 })
                 .collect::<Vec<_>>()
-                .join("\n");
+                .join("\n\n");
             format!(
                 "#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]\npub enum {name} {{\n{rows}\n}}"
             )
@@ -371,7 +369,6 @@ pub(crate) fn render_node_decl(
     name: &str,
     decl: &NormalizedNodeDecl,
     node_names: &[String],
-    provenance_tag: &str,
     doc: Option<&[String]>,
 ) -> String {
     match decl {
@@ -446,25 +443,10 @@ pub(crate) fn render_node_decl(
                     },
                 )
                 .collect::<Vec<_>>()
-                .join("\n");
-            let prov_impl = if variants
-                .values()
-                .all(|variant| matches!(&variant.value, NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) if node_fields_have_prov(fields, provenance_tag)))
-            {
-                let match_rows = variant_names
-                    .iter()
-                    .map(|variant_name| format!("            Self::{variant_name} {{ prov, .. }} => Some(prov),"))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                format!(
-                    "\nimpl HasProvenance for {name} {{\n    fn provenance(&self) -> Option<&{provenance_tag}> {{\n        match self {{\n{match_rows}\n        }}\n    }}\n}}"
-                )
-            } else {
-                String::new()
-            };
+                .join("\n\n");
             let docs = render_doc_lines(doc, "");
             let body = format!(
-                "#[derive(Debug, Clone, PartialEq, Eq)]\npub enum {name} {{\n{variant_rows}\n}}{prov_impl}"
+                "#[derive(Debug, Clone, PartialEq, Eq)]\npub enum {name} {{\n{variant_rows}\n}}"
             );
             if docs.is_empty() {
                 body
@@ -472,5 +454,44 @@ pub(crate) fn render_node_decl(
                 format!("{docs}\n{body}")
             }
         }
+    }
+}
+
+pub(crate) fn render_provenance_impl(
+    name: &str,
+    decl: &NormalizedNodeDecl,
+    provenance_tag: &str,
+) -> Option<String> {
+    match decl {
+        NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields)
+            if node_fields_have_prov(fields, provenance_tag) =>
+        {
+            Some(format!(
+                "impl HasProvenance for {name} {{\n    fn provenance(&self) -> Option<&{provenance_tag}> {{\n        Some(&self.prov)\n    }}\n}}"
+            ))
+        }
+        NormalizedNodeDecl::Enum(variants)
+            if variants.values().all(|variant| {
+                matches!(
+                    &variant.value,
+                    NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields)
+                        if node_fields_have_prov(fields, provenance_tag)
+                )
+            }) =>
+        {
+            let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
+            variant_names.sort();
+            let match_rows = variant_names
+                .iter()
+                .map(|variant_name| {
+                    format!("            Self::{variant_name} {{ prov, .. }} => Some(prov),")
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            Some(format!(
+                "impl HasProvenance for {name} {{\n    fn provenance(&self) -> Option<&{provenance_tag}> {{\n        match self {{\n{match_rows}\n        }}\n    }}\n}}"
+            ))
+        }
+        _ => None,
     }
 }

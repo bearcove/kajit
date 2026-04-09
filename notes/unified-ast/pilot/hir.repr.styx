@@ -1,100 +1,154 @@
 meta {
+    /// Stable identifier for this pilot schema document.
     id kajit:repr-schema/hir-pilot
+    /// Schema revision for the pilot format itself.
     version 1
+    /// Human summary of the pilot's purpose.
     description "Pilot representation schema for Kajit HIR"
 }
 
+/// Pilot schema for the HIR representation family.
 repr @module{
+    /// Human-facing representation name.
     name HIR
+    /// Canonical text file extension for HIR documents.
     file_ext .vixen-hir
 
+    /// High-level stage contract for HIR.
     contract {
+        /// What this stage is for in the pipeline.
         purpose "Human-semantic structured IR"
+        /// Names/identities that remain canonical in printed HIR.
         canonical_identities (symbol local-name type-name function-name)
+        /// Required round-trip guarantee for the stage text format.
         round_trip canonical-print
+        /// Provenance expectation for nodes at this stage.
         provenance required
     }
 
+    /// Text-format description for the pilot HIR subset.
     syntax {
+        /// Token classes used by the pilot parser.
         tokens {
+            /// A bare identifier used for local names and type names.
             ident @regex("[A-Za-z_][A-Za-z0-9_]*")
+            /// A symbolic callee or external symbol reference.
             symbol @regex("@[A-Za-z_][A-Za-z0-9_.]*")
+            /// A decimal integer literal token.
             int @regex("[0-9]+")
         }
 
+        /// Grammar rules for the currently supported pilot subset.
         rules {
+            /// A module with a flat list of functions.
             Module @seq(
                 "module"
                 "{"
+                /// Functions declared inside the module body.
                 @field(functions @repeat(@ref(Function)))
                 "}"
             )
 
+            /// A function signature plus structured body.
             Function @seq(
                 "fn"
+                /// Function name in source order.
                 @field(name @token(ident))
                 "("
+                /// Ordered parameter list.
                 @field(params @repeat(@ref(Param) {sep ","}))
                 ")"
                 "->"
+                /// Printed return type.
                 @field(return_type @ref(Type))
+                /// Structured function body.
                 @field(body @ref(Block))
             )
 
+            /// A single function parameter.
             Param @seq(
+                /// Parameter name.
                 @field(name @token(ident))
                 ":"
+                /// Parameter type annotation.
                 @field(ty @ref(Type))
             )
 
+            /// A braced statement block.
             Block @seq(
                 "{"
+                /// Statements inside the block.
                 @field(statements @repeat(@ref(Stmt)))
                 "}"
             )
 
+            /// Statement forms supported by the pilot parser.
             Stmt @choice(
+                /// A return statement with an optional value.
                 @variant(Return @seq(
                     "return"
+                    /// Optional returned expression.
                     @field(value @optional(@ref(Expr)))
                 ))
+                /// A bare expression used as a statement.
                 @variant(Expr @seq(
                     @field(value @ref(Expr))
                 ))
             )
 
+            /// Expression forms supported by the pilot parser.
             Expr @choice(
+                /// A local value reference.
                 @variant(Local @field(name @token(ident)))
+                /// A decimal integer literal.
                 @variant(Literal @field(value @token(int)))
+                /// A symbolic function call.
                 @variant(Call @seq(
                     "call"
+                    /// Symbolic callee name.
                     @field(callee @token(symbol))
                     "("
+                    /// Positional call arguments.
                     @field(args @repeat(@ref(Expr) {sep ","}))
                     ")"
                 ))
             )
         }
 
+        /// Canonical printer templates for the pilot subset.
         canonical_print {
+            /// Canonical module layout.
             Module "module {\n{functions}\n}"
+            /// Canonical function layout.
             Function "fn {name}({params:, }) -> {return_type} {body}"
+            /// Canonical parameter layout.
             Param "{name}: {ty}"
+            /// Canonical block layout.
             Block "{\n{statements}\n}"
+            /// Canonical return statement layout.
             Stmt.Return "return{value? : {value}}"
+            /// Canonical expression statement layout.
             Stmt.Expr "{value}"
+            /// Canonical local expression layout.
             Expr.Local "{name}"
+            /// Canonical literal expression layout.
             Expr.Literal "{value}"
+            /// Canonical call expression layout.
             Expr.Call "call {callee}({args:, })"
         }
     }
 
+    /// Shared scalar-ish building blocks reused by multiple nodes.
     common {
+        /// Node provenance payload.
         provenance @Prov
+        /// Symbolic identifier payload.
         symbol @Symbol
+        /// Free-form doc block payload.
         docs @DocBlock
     }
 
+    /// Semantic support types that are not themselves structural nodes.
     support {
         /// A named type reference in HIR.
         Type @string
@@ -110,26 +164,37 @@ repr @module{
         TypeDefKind @enum(Struct Enum Alias)
     }
 
+    /// Structural AST nodes for the wider HIR surface.
     nodes {
         /// The root HIR module.
         Module @node{
+            /// Optional module-level docs.
             docs @optional(@DocBlock)
+            /// Type definitions declared in the module.
             type_defs @seq(@TypeDef)
             /// Top-level functions declared in the module.
             functions @seq(@Function)
         }
 
+        /// A type definition declared at module scope.
         TypeDef @node{
+            /// Source provenance for the definition.
             prov @Prov
+            /// Optional docs attached to the definition.
             docs @optional(@DocBlock)
+            /// Type definition name.
             name @Symbol
+            /// Generic parameters introduced by the type definition.
             params @seq(@GenericParam)
+            /// Kind of type definition.
             kind @TypeDefKind
         }
 
         /// A lowered function body.
         Function @node{
+            /// Source provenance for the function.
             prov @Prov
+            /// Optional function docs.
             docs @optional(@DocBlock)
             /// Symbolic function name.
             name @Symbol
@@ -137,6 +202,7 @@ repr @module{
             params @seq(@Param)
             /// Declared return type.
             return_type @Type
+            /// Local bindings declared in the function.
             locals @seq(@Local)
             /// Structured function body.
             body @Block
@@ -144,6 +210,7 @@ repr @module{
 
         /// A function parameter.
         Param @node{
+            /// Source provenance for the parameter.
             prov @Prov
             /// Parameter name.
             name @Symbol
@@ -151,46 +218,73 @@ repr @module{
             ty @Type
         }
 
+        /// A local binding introduced inside a function.
         Local @node{
+            /// Source provenance for the local.
             prov @Prov
+            /// Local name.
             name @Symbol
+            /// Local type.
             ty @Type
+            /// Classification of the local.
             kind @LocalKind
         }
 
+        /// A sequence of statements with shared provenance.
         Block @node{
+            /// Source provenance for the block.
             prov @Prov
+            /// Statements in execution order.
             statements @seq(@Stmt)
         }
 
         /// A statement in structured HIR.
         Stmt @enum{
+            /// Initialize a place for the first time.
             Init @struct{
+                /// Source provenance for the statement.
                 prov @Prov
+                /// Destination place being initialized.
                 place @Place
+                /// Initial value expression.
                 value @Expr
             }
 
+            /// Assign a new value to an existing place.
             Assign @struct{
+                /// Source provenance for the statement.
                 prov @Prov
+                /// Destination place being assigned to.
                 place @Place
+                /// Value being assigned.
                 value @Expr
             }
 
+            /// Evaluate an expression for its effects or result discard.
             Expr @struct{
+                /// Source provenance for the statement.
                 prov @Prov
+                /// Expression to evaluate.
                 value @Expr
             }
 
+            /// Structured conditional statement.
             If @struct{
+                /// Source provenance for the conditional.
                 prov @Prov
+                /// Condition expression.
                 condition @Expr
+                /// Then-branch body.
                 then @Block
+                /// Optional else-branch body.
                 else @optional(@Block)
             }
 
+            /// Return from the current function.
             Return @struct{
+                /// Source provenance for the return.
                 prov @Prov
+                /// Optional returned expression.
                 value @optional(@Expr)
             }
         }
@@ -199,47 +293,70 @@ repr @module{
         Expr @enum{
             /// Read a local value by name.
             Local @struct{
+                /// Source provenance for the expression.
                 prov @Prov
+                /// Referenced local name.
                 name @Symbol
             }
 
             /// An inline literal.
             Literal @struct{
+                /// Source provenance for the expression.
                 prov @Prov
+                /// Literal payload.
                 value @Literal
             }
 
             /// A symbolic call.
             Call @struct{
+                /// Source provenance for the expression.
                 prov @Prov
+                /// Symbolic callee name.
                 callee @Symbol
                 /// Positional call arguments.
                 args @seq(@Expr)
             }
 
+            /// Access a field of a base expression.
             Field @struct{
+                /// Source provenance for the expression.
                 prov @Prov
+                /// Base value being projected from.
                 base @Expr
+                /// Selected field name.
                 field @Symbol
             }
 
+            /// Apply a binary operator to two operands.
             Binary @struct{
+                /// Source provenance for the expression.
                 prov @Prov
+                /// Operator being applied.
                 op @BinaryOp
+                /// Left-hand operand.
                 lhs @Expr
+                /// Right-hand operand.
                 rhs @Expr
             }
         }
 
+        /// A writeable place expression.
         Place @enum{
+            /// A local storage location.
             Local @struct{
+                /// Source provenance for the place.
                 prov @Prov
+                /// Local name referenced by the place.
                 name @Symbol
             }
 
+            /// A field projection from another place.
             Field @struct{
+                /// Source provenance for the place.
                 prov @Prov
+                /// Base place being projected from.
                 base @Place
+                /// Selected field name.
                 field @Symbol
             }
         }

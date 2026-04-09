@@ -4,6 +4,7 @@ use super::*;
 pub fn format_module_text(node: &Module) -> String {
     format_module(node)
 }
+
 impl std::fmt::Display for Module {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&format_module(self))

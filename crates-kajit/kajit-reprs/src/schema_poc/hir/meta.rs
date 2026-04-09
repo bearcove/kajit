@@ -3,35 +3,51 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TokenSpec {
     pub name: &'static str,
+
     pub kind: &'static str,
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuleSpec {
     pub name: &'static str,
+
     pub kind: &'static str,
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TypeUseSpec {
     pub name: &'static str,
+
     pub kind: &'static str,
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeSpec {
     pub name: &'static str,
+
     pub kind: &'static str,
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PrintSpec {
     pub name: &'static str,
+
     pub template: &'static str,
 }
+
 pub const REPR_NAME: &str = "HIR";
+
 pub const REPR_FILE_EXT: &str = ".vixen-hir";
+
 pub const REPR_PURPOSE: &str = "Human-semantic structured IR";
+
 pub const REPR_ROUND_TRIP: &str = "canonical-print";
+
 pub const REPR_PROVENANCE: &str = "required";
+
 pub static REPR_CANONICAL_IDENTITIES: &[&str] =
     &["symbol", "local-name", "type-name", "function-name"];
+
 pub static TOKENS: &[TokenSpec] = &[
     TokenSpec {
         name: "ident",
@@ -46,6 +62,7 @@ pub static TOKENS: &[TokenSpec] = &[
         kind: "regex",
     },
 ];
+
 pub static RULES: &[RuleSpec] = &[
     RuleSpec {
         name: "Block",
@@ -72,6 +89,7 @@ pub static RULES: &[RuleSpec] = &[
         kind: "choice",
     },
 ];
+
 pub static COMMON_TYPES: &[TypeUseSpec] = &[
     TypeUseSpec {
         name: "docs",
@@ -86,6 +104,7 @@ pub static COMMON_TYPES: &[TypeUseSpec] = &[
         kind: "Symbol",
     },
 ];
+
 pub static NODES: &[NodeSpec] = &[
     NodeSpec {
         name: "Block",
@@ -124,6 +143,7 @@ pub static NODES: &[NodeSpec] = &[
         kind: "node",
     },
 ];
+
 pub static CANONICAL_PRINT: &[PrintSpec] = &[
     PrintSpec {
         name: "Block",

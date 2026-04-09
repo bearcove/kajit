@@ -1,6 +1,20 @@
 use std::collections::HashMap;
 use std::fmt;
 
+/// Byte-range span within a source file.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Span {
+    pub start: u32,
+    pub end: u32,
+}
+
+/// Source provenance attached to repr nodes and other compiler artifacts.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Prov {
+    pub file_id: Option<u32>,
+    pub span: Option<Span>,
+}
+
 /// A single function argument value with its type.
 #[derive(Clone, Debug)]
 pub enum ArgValue {
