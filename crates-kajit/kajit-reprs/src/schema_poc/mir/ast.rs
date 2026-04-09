@@ -14,39 +14,18 @@ pub use kajit_types::{Prov, Span};
 /// The binary-op family used by the pilot text format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BinOpKind {
-    /// Integer addition.
+    /// Equality comparison.
     #[default]
-    Add,
-
-    /// Less-than comparison.
-    CmpLt,
-
-    /// Arithmetic right shift.
-    Sar,
-
-    /// Logical right shift.
-    Shr,
-
-    /// Less-than-or-equal comparison.
-    CmpLe,
-
-    /// Bitwise AND.
-    And,
+    CmpEq,
 
     /// Integer subtraction.
     Sub,
 
-    /// Equality comparison.
-    CmpEq,
-
     /// Bitwise OR.
     Or,
 
-    /// Integer multiplication.
-    Mul,
-
-    /// Logical left shift.
-    Shl,
+    /// Greater-than comparison.
+    CmpGt,
 
     /// Bitwise XOR.
     Xor,
@@ -54,11 +33,32 @@ pub enum BinOpKind {
     /// Inequality comparison.
     CmpNe,
 
+    /// Logical right shift.
+    Shr,
+
+    /// Integer addition.
+    Add,
+
+    /// Integer multiplication.
+    Mul,
+
+    /// Arithmetic right shift.
+    Sar,
+
+    /// Logical left shift.
+    Shl,
+
+    /// Less-than comparison.
+    CmpLt,
+
+    /// Less-than-or-equal comparison.
+    CmpLe,
+
+    /// Bitwise AND.
+    And,
+
     /// Greater-than-or-equal comparison.
     CmpGe,
-
-    /// Greater-than comparison.
-    CmpGt,
 }
 
 /// An embedded data blob identifier.
@@ -90,15 +90,15 @@ impl BlockId {
 /// Named clobber groups printed after `!`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ClobberKind {
-    /// Both caller-saved GPR and SIMD registers are clobbered.
+    /// Caller-saved GPRs are clobbered.
     #[default]
-    Both,
+    Gpr,
 
     /// Caller-saved SIMD registers are clobbered.
     Simd,
 
-    /// Caller-saved GPRs are clobbered.
-    Gpr,
+    /// Both caller-saved GPR and SIMD registers are clobbered.
+    Both,
 }
 
 /// A control-flow edge identifier.
@@ -164,12 +164,12 @@ pub struct Nat {
 /// Required register class for an operand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RegClass {
-    /// General-purpose registers.
-    #[default]
-    Gpr,
-
     /// SIMD/vector registers.
+    #[default]
     Simd,
+
+    /// General-purpose registers.
+    Gpr,
 }
 
 /// A stack slot identifier.
@@ -241,18 +241,18 @@ impl VReg {
 /// A scalar width used by loads, stores, and sign extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Width {
-    /// Two bytes.
-    #[default]
-    W2,
-
-    /// Eight bytes.
-    W8,
-
     /// Four bytes.
+    #[default]
     W4,
 
     /// One byte.
     W1,
+
+    /// Two bytes.
+    W2,
+
+    /// Eight bytes.
+    W8,
 }
 
 /// A live basic block.

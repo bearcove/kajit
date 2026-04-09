@@ -6,46 +6,26 @@ use crate::normalize::{
 };
 use crate::render_helpers::{is_prov_only_struct, rust_ident, snake_case};
 
-enum SemanticTarget {
-    Literal(String),
-    Field {
-        type_name: String,
-        variant_name: Option<String>,
-        field_name: String,
-    },
-    Variant {
-        type_name: String,
-        variant_name: String,
-    },
-}
-
-fn parse_target(target: &str) -> Result<SemanticTarget, String> {
+fn parse_target(target: &str) -> Result<Option<(String, String)>, String> {
     if let Some(literal) = target.strip_prefix("literal.") {
-        return Ok(SemanticTarget::Literal(literal.to_owned()));
+        if literal.is_empty() {
+            return Err(format!("unsupported semantic token target {target:?}"));
+        }
+        return Ok(None);
     }
     if let Some(path) = target.strip_prefix("field.") {
         let parts = path.split('.').collect::<Vec<_>>();
         return match parts.as_slice() {
-            [type_name, field_name] => Ok(SemanticTarget::Field {
-                type_name: (*type_name).to_owned(),
-                variant_name: None,
-                field_name: (*field_name).to_owned(),
-            }),
-            [type_name, variant_name, field_name] => Ok(SemanticTarget::Field {
-                type_name: (*type_name).to_owned(),
-                variant_name: Some((*variant_name).to_owned()),
-                field_name: (*field_name).to_owned(),
-            }),
+            [_, _] | [_, _, _] => Ok(None),
             _ => Err(format!("unsupported semantic token target {target:?}")),
         };
     }
     if let Some(path) = target.strip_prefix("variant.") {
         let parts = path.split('.').collect::<Vec<_>>();
         return match parts.as_slice() {
-            [type_name, variant_name] => Ok(SemanticTarget::Variant {
-                type_name: (*type_name).to_owned(),
-                variant_name: (*variant_name).to_owned(),
-            }),
+            [type_name, variant_name] => {
+                Ok(Some(((*type_name).to_owned(), (*variant_name).to_owned())))
+            }
             _ => Err(format!("unsupported semantic token target {target:?}")),
         };
     }
@@ -231,9 +211,11 @@ pub(crate) fn render_semantic_block(
     repr: &NormalizedRepr,
     node_names: &[String],
 ) -> Result<String, String> {
-    let mut parsed_targets = Vec::new();
+    let mut variant_targets = std::collections::HashSet::new();
     for target in repr.syntax.semantic_tokens.keys() {
-        parsed_targets.push(parse_target(target)?);
+        if let Some((type_name, variant_name)) = parse_target(target)? {
+            variant_targets.insert((type_name, variant_name));
+        }
     }
 
     let root_name = &repr.syntax.root;
@@ -323,12 +305,10 @@ pub(crate) fn render_semantic_block(
                                 )
                             })
                             .collect::<Vec<_>>();
-                        let variant_row = match parsed_targets.iter().find(|target| matches!(
-                            target,
-                            SemanticTarget::Variant { type_name, variant_name: target_variant }
-                                if type_name == node_name && target_variant == &variant_name
-                        )) {
-                            Some(_) => repr
+                        let variant_row = if variant_targets
+                            .contains(&(node_name.clone(), variant_name.clone()))
+                        {
+                            repr
                                 .syntax
                                 .semantic_tokens
                                 .get(&format!("variant.{node_name}.{variant_name}"))
@@ -337,8 +317,9 @@ pub(crate) fn render_semantic_block(
                                         "if let Some(prov) = node.provenance() {{ emit_prov_token(prov, {kind:?}, out); }}"
                                     )
                                 })
-                                .unwrap_or_default(),
-                            None => String::new(),
+                                .unwrap_or_default()
+                        } else {
+                            String::new()
                         };
                         match variant {
                             NormalizedNodeDecl::Record { fields, .. } => {
