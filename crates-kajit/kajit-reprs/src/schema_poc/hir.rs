@@ -90,12 +90,8 @@ pub const REPR_FILE_EXT: &str = ".vixen-hir";
 pub const REPR_PURPOSE: &str = "Human-semantic structured IR";
 pub const REPR_ROUND_TRIP: &str = "canonical-print";
 pub const REPR_PROVENANCE: &str = "required";
-pub static REPR_CANONICAL_IDENTITIES: &[&str] = &[
-    "symbol",
-    "local-name",
-    "type-name",
-    "function-name",
-];
+pub static REPR_CANONICAL_IDENTITIES: &[&str] =
+    &["symbol", "local-name", "type-name", "function-name"];
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BinaryOp;
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -129,11 +125,30 @@ pub struct Block {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
-    Binary { lhs: Box<Expr>, op: BinaryOp, prov: Prov, rhs: Box<Expr> },
-    Call { args: Vec<Expr>, callee: Symbol, prov: Prov },
-    Field { base: Box<Expr>, field: Symbol, prov: Prov },
-    Literal { prov: Prov, value: Literal },
-    Local { name: Symbol, prov: Prov },
+    Binary {
+        lhs: Box<Expr>,
+        op: BinaryOp,
+        prov: Prov,
+        rhs: Box<Expr>,
+    },
+    Call {
+        args: Vec<Expr>,
+        callee: Symbol,
+        prov: Prov,
+    },
+    Field {
+        base: Box<Expr>,
+        field: Symbol,
+        prov: Prov,
+    },
+    Literal {
+        prov: Prov,
+        value: Literal,
+    },
+    Local {
+        name: Symbol,
+        prov: Prov,
+    },
 }
 impl HasProvenance for Expr {
     fn provenance(&self) -> Option<&Prov> {
@@ -177,8 +192,15 @@ pub struct Param {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Place {
-    Field { base: Box<Place>, field: Symbol, prov: Prov },
-    Local { name: Symbol, prov: Prov },
+    Field {
+        base: Box<Place>,
+        field: Symbol,
+        prov: Prov,
+    },
+    Local {
+        name: Symbol,
+        prov: Prov,
+    },
 }
 impl HasProvenance for Place {
     fn provenance(&self) -> Option<&Prov> {
@@ -190,16 +212,30 @@ impl HasProvenance for Place {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
-    Assign { place: Box<Place>, prov: Prov, value: Box<Expr> },
-    Expr { prov: Prov, value: Box<Expr> },
+    Assign {
+        place: Box<Place>,
+        prov: Prov,
+        value: Box<Expr>,
+    },
+    Expr {
+        prov: Prov,
+        value: Box<Expr>,
+    },
     If {
         condition: Box<Expr>,
         r#else: Option<Box<Block>>,
         prov: Prov,
         then: Box<Block>,
     },
-    Init { place: Box<Place>, prov: Prov, value: Box<Expr> },
-    Return { prov: Prov, value: Option<Box<Expr>> },
+    Init {
+        place: Box<Place>,
+        prov: Prov,
+        value: Box<Expr>,
+    },
+    Return {
+        prov: Prov,
+        value: Option<Box<Expr>>,
+    },
 }
 impl HasProvenance for Stmt {
     fn provenance(&self) -> Option<&Prov> {
@@ -304,7 +340,12 @@ pub fn walk_stmt<V: ?Sized + Visit>(v: &mut V, node: &Stmt) {
         Stmt::Expr { value, .. } => {
             v.visit_expr(value);
         }
-        Stmt::If { condition, r#else, then, .. } => {
+        Stmt::If {
+            condition,
+            r#else,
+            then,
+            ..
+        } => {
             v.visit_expr(condition);
             if let Some(value) = r#else {
                 v.visit_block(value);
@@ -382,7 +423,12 @@ pub fn walk_stmt_mut<V: ?Sized + VisitMut>(v: &mut V, node: &mut Stmt) {
         Stmt::Expr { value, .. } => {
             v.visit_expr_mut(value);
         }
-        Stmt::If { condition, r#else, then, .. } => {
+        Stmt::If {
+            condition,
+            r#else,
+            then,
+            ..
+        } => {
             v.visit_expr_mut(condition);
             if let Some(value) = r#else {
                 v.visit_block_mut(value);
@@ -403,22 +449,17 @@ pub fn walk_stmt_mut<V: ?Sized + VisitMut>(v: &mut V, node: &mut Stmt) {
 pub fn walk_type_def_mut<V: ?Sized + VisitMut>(_v: &mut V, _node: &mut TypeDef) {}
 type ParseExtra<'src> = extra::Err<Rich<'src, char>>;
 fn ws<'src>() -> impl Parser<'src, &'src str, (), ParseExtra<'src>> + Clone {
-    any().filter(|c: &char| c.is_whitespace()).repeated().ignored()
+    any()
+        .filter(|c: &char| c.is_whitespace())
+        .repeated()
+        .ignored()
 }
-fn ident_token<'src>() -> impl Parser<
-    'src,
-    &'src str,
-    String,
-    ParseExtra<'src>,
-> + Clone {
-    text::ident::<_, ParseExtra<'src>>().map(str::to_owned).padded_by(ws())
+fn ident_token<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> + Clone {
+    text::ident::<_, ParseExtra<'src>>()
+        .map(str::to_owned)
+        .padded_by(ws())
 }
-fn symbol_token<'src>() -> impl Parser<
-    'src,
-    &'src str,
-    String,
-    ParseExtra<'src>,
-> + Clone {
+fn symbol_token<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> + Clone {
     just('@')
         .then(text::ident::<_, ParseExtra<'src>>().map(str::to_owned))
         .then(
@@ -438,123 +479,255 @@ fn symbol_token<'src>() -> impl Parser<
         .padded_by(ws())
 }
 fn int_token<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> + Clone {
-    text::int::<_, ParseExtra<'src>>(10).map(str::to_owned).padded_by(ws())
+    text::int::<_, ParseExtra<'src>>(10)
+        .map(str::to_owned)
+        .padded_by(ws())
 }
 pub fn parse_module_text(source: &str) -> Result<Module, String> {
     let param_parser = (((ident_token().map(Symbol)).then_ignore(just(":").padded()))
         .then(ident_token().map(Type)))
-        .map(|(name, ty)| Param {
-            name: name,
-            prov: Prov::default(),
-            ty: ty,
-        })
-        .boxed();
+    .map(|(name, ty)| Param {
+        name: name,
+        prov: Prov::default(),
+        ty: ty,
+    })
+    .boxed();
     let expr_parser = recursive(|expr_parser| {
         choice((
-                (ident_token().map(Symbol))
-                    .map(|name| Expr::Local {
-                        name: name,
-                        prov: Prov::default(),
-                    }),
-                (int_token().map(Literal))
-                    .map(|value| Expr::Literal {
-                        prov: Prov::default(),
-                        value: value,
-                    }),
-                (((((just("call").padded()).ignore_then(symbol_token().map(Symbol)))
-                    .then_ignore(just("(").padded()))
-                    .then(
-                        (expr_parser.clone())
-                            .separated_by(just(",").padded())
-                            .allow_trailing()
-                            .collect::<Vec<_>>(),
-                    ))
-                    .then_ignore(just(")").padded()))
-                    .map(|(callee, args)| Expr::Call {
-                        args: args,
-                        callee: callee,
-                        prov: Prov::default(),
-                    }),
+            (ident_token().map(Symbol)).map(|name| Expr::Local {
+                name: name,
+                prov: Prov::default(),
+            }),
+            (int_token().map(Literal)).map(|value| Expr::Literal {
+                prov: Prov::default(),
+                value: value,
+            }),
+            (((((just("call").padded()).ignore_then(symbol_token().map(Symbol)))
+                .then_ignore(just("(").padded()))
+            .then(
+                (expr_parser.clone())
+                    .separated_by(just(",").padded())
+                    .allow_trailing()
+                    .collect::<Vec<_>>(),
             ))
-            .boxed()
+            .then_ignore(just(")").padded()))
+            .map(|(callee, args)| Expr::Call {
+                args: args,
+                callee: callee,
+                prov: Prov::default(),
+            }),
+        ))
+        .boxed()
     });
     let stmt_parser = choice((
-            ((just("return").padded())
-                .ignore_then(((expr_parser.clone()).map(Box::new)).or_not()))
-                .map(|value| Stmt::Return {
-                    prov: Prov::default(),
-                    value: value,
-                }),
-            ((expr_parser.clone()).map(Box::new))
-                .map(|value| Stmt::Expr {
-                    prov: Prov::default(),
-                    value: value,
-                }),
-        ))
-        .boxed();
+        ((just("return").padded()).ignore_then(((expr_parser.clone()).map(Box::new)).or_not()))
+            .map(|value| Stmt::Return {
+                prov: Prov::default(),
+                value: value,
+            }),
+        ((expr_parser.clone()).map(Box::new)).map(|value| Stmt::Expr {
+            prov: Prov::default(),
+            value: value,
+        }),
+    ))
+    .boxed();
     let block_parser = (((just("{").padded())
         .ignore_then((stmt_parser.clone()).repeated().collect::<Vec<_>>()))
-        .then_ignore(just("}").padded()))
-        .map(|statements| Block {
-            prov: Prov::default(),
-            statements: statements,
-        })
-        .boxed();
+    .then_ignore(just("}").padded()))
+    .map(|statements| Block {
+        prov: Prov::default(),
+        statements: statements,
+    })
+    .boxed();
     let function_parser = ((((((((just("fn").padded())
         .ignore_then(ident_token().map(Symbol)))
-        .then_ignore(just("(").padded()))
-        .then(
-            (param_parser.clone())
-                .separated_by(just(",").padded())
-                .allow_trailing()
-                .collect::<Vec<_>>(),
-        ))
-        .then_ignore(just(")").padded()))
-        .then_ignore(just("->").padded()))
-        .then(ident_token().map(Type)))
-        .then((block_parser.clone()).map(Box::new)))
-        .map(|(((name, params), return_type), body)| Function {
-            body: body,
-            docs: None,
-            locals: Vec::new(),
-            name: name,
-            params: params,
-            prov: Prov::default(),
-            return_type: return_type,
-        })
-        .boxed();
-    let module_parser = (((just("module").padded())
-        .ignore_then(
-            (just("{").padded())
-                .ignore_then((function_parser.clone()).repeated().collect::<Vec<_>>()),
-        ))
-        .then_ignore(just("}").padded()))
-        .map(|functions| Module {
-            docs: None,
-            functions: functions,
-            type_defs: Vec::new(),
-        })
-        .boxed();
+    .then_ignore(just("(").padded()))
+    .then(
+        (param_parser.clone())
+            .separated_by(just(",").padded())
+            .allow_trailing()
+            .collect::<Vec<_>>(),
+    ))
+    .then_ignore(just(")").padded()))
+    .then_ignore(just("->").padded()))
+    .then(ident_token().map(Type)))
+    .then((block_parser.clone()).map(Box::new)))
+    .map(|(((name, params), return_type), body)| Function {
+        body: body,
+        docs: None,
+        locals: Vec::new(),
+        name: name,
+        params: params,
+        prov: Prov::default(),
+        return_type: return_type,
+    })
+    .boxed();
+    let module_parser = (((just("module").padded()).ignore_then(
+        (just("{").padded()).ignore_then((function_parser.clone()).repeated().collect::<Vec<_>>()),
+    ))
+    .then_ignore(just("}").padded()))
+    .map(|functions| Module {
+        docs: None,
+        functions: functions,
+        type_defs: Vec::new(),
+    })
+    .boxed();
     module_parser
         .then_ignore(end())
         .parse(source)
         .into_result()
         .map_err(|errs| crate::format_rich_errors(source, errs))
 }
+pub fn format_module_text(node: &Module) -> String {
+    format_module(node)
+}
+impl std::fmt::Display for Module {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&format_module(self))
+    }
+}
+pub fn format_block(node: &Block) -> String {
+    let mut out = String::new();
+    out.push_str("{");
+    out.push_str("\n");
+    out.push_str(
+        &(node
+            .statements
+            .iter()
+            .map(|value| format_stmt(&value))
+            .collect::<Vec<_>>()
+            .join("\n")),
+    );
+    out.push_str("\n}");
+    out
+}
+pub fn format_expr(node: &Expr) -> String {
+    match node {
+        other @ Expr::Binary { .. } => format!("{:?}", other),
+        Expr::Call { args, callee, .. } => {
+            let mut out = String::new();
+            out.push_str("call ");
+            out.push_str(&(callee.0.clone()));
+            out.push_str("(");
+            out.push_str(
+                &(args
+                    .iter()
+                    .map(|value| format_expr(&value))
+                    .collect::<Vec<_>>()
+                    .join(", ")),
+            );
+            out.push_str(")");
+            out
+        }
+        other @ Expr::Field { .. } => format!("{:?}", other),
+        Expr::Literal { value, .. } => {
+            let mut out = String::new();
+            out.push_str(&(value.0.clone()));
+            out
+        }
+        Expr::Local { name, .. } => {
+            let mut out = String::new();
+            out.push_str(&(name.0.clone()));
+            out
+        }
+    }
+}
+pub fn format_function(node: &Function) -> String {
+    let mut out = String::new();
+    out.push_str("fn ");
+    out.push_str(&(node.name.0.clone()));
+    out.push_str("(");
+    out.push_str(
+        &(node
+            .params
+            .iter()
+            .map(|value| format_param(&value))
+            .collect::<Vec<_>>()
+            .join(", ")),
+    );
+    out.push_str(") -> ");
+    out.push_str(&(node.return_type.0.clone()));
+    out.push_str(" ");
+    out.push_str(&(format_block(&node.body)));
+    out
+}
+pub fn format_local(node: &Local) -> String {
+    format!("{:?}", node)
+}
+pub fn format_module(node: &Module) -> String {
+    let mut out = String::new();
+    out.push_str("module ");
+    out.push_str("{");
+    out.push_str("\n");
+    out.push_str(
+        &(node
+            .functions
+            .iter()
+            .map(|value| format_function(&value))
+            .collect::<Vec<_>>()
+            .join("\n")),
+    );
+    out.push_str("\n}");
+    out
+}
+pub fn format_param(node: &Param) -> String {
+    let mut out = String::new();
+    out.push_str(&(node.name.0.clone()));
+    out.push_str(": ");
+    out.push_str(&(node.ty.0.clone()));
+    out
+}
+pub fn format_place(node: &Place) -> String {
+    match node {
+        other @ Place::Field { .. } => format!("{:?}", other),
+        other @ Place::Local { .. } => format!("{:?}", other),
+    }
+}
+pub fn format_stmt(node: &Stmt) -> String {
+    match node {
+        other @ Stmt::Assign { .. } => format!("{:?}", other),
+        Stmt::Expr { value, .. } => {
+            let mut out = String::new();
+            out.push_str(&(format_expr(&value)));
+            out
+        }
+        other @ Stmt::If { .. } => format!("{:?}", other),
+        other @ Stmt::Init { .. } => format!("{:?}", other),
+        Stmt::Return { value, .. } => {
+            let mut out = String::new();
+            out.push_str("return");
+            if let Some(value) = value.as_ref() {
+                out.push_str(&(format_expr(&value)));
+            }
+            out
+        }
+    }
+}
+pub fn format_type_def(node: &TypeDef) -> String {
+    format!("{:?}", node)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn parse_module_smoke() {
-        let module = parse_module_text("module { fn main() -> Value { return } }")
-            .unwrap();
+        let module = parse_module_text("module { fn main() -> Value { return } }").unwrap();
         assert_eq!(module.functions.len(), 1);
         assert_eq!(module.functions[0].name, Symbol("main".to_owned()));
         assert_eq!(module.functions[0].return_type, Type("Value".to_owned()));
-        assert!(
-            matches!(module.functions[0].body.statements.as_slice(), [Stmt::Return {
-            value : None, .. }])
-        );
+        assert!(matches!(
+            module.functions[0].body.statements.as_slice(),
+            [Stmt::Return { value: None, .. }]
+        ));
+    }
+    #[test]
+    fn format_module_smoke() {
+        let text = "module { fn main() -> Value { return } }";
+        let module = parse_module_text(text).unwrap();
+        let formatted = format_module_text(&module);
+        assert_eq!(formatted, "module {\nfn main() -> Value {\nreturn\n}\n}");
+        let reparsed = parse_module_text(&formatted).unwrap();
+        assert_eq!(reparsed, module);
     }
 }
 pub static TOKENS: &[TokenSpec] = &[

@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod formatter_codegen;
 mod normalize;
 mod parser_codegen;
 mod render_helpers;

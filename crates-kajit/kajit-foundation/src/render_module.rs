@@ -1,3 +1,4 @@
+use crate::formatter_codegen::render_formatter_block;
 use crate::normalize::{NormalizedNodeDecl, NormalizedRepr};
 use crate::parser_codegen::render_parser_block;
 use crate::render_helpers::{
@@ -209,6 +210,8 @@ pub(crate) fn render_hir_poc_module(repr: &NormalizedRepr) -> String {
 
     let parser_rows = render_parser_block(repr, &node_names, &provenance_tag)
         .expect("parser block should render");
+    let formatter_rows =
+        render_formatter_block(repr, &node_names).expect("formatter block should render");
 
     let raw = format!(
         r###"
@@ -283,6 +286,8 @@ pub static REPR_CANONICAL_IDENTITIES: &[&str] = &[
 
 {parser_rows}
 
+{formatter_rows}
+
 #[cfg(test)]
 mod tests {{
     use super::*;
@@ -294,6 +299,17 @@ mod tests {{
         assert_eq!(module.functions[0].name, Symbol("main".to_owned()));
         assert_eq!(module.functions[0].return_type, Type("Value".to_owned()));
         assert!(matches!(module.functions[0].body.statements.as_slice(), [Stmt::Return {{ value: None, .. }}]));
+    }}
+
+    #[test]
+    fn format_module_smoke() {{
+        let text = "module {{ fn main() -> Value {{ return }} }}";
+        let module = parse_module_text(text).unwrap();
+        let formatted = format_module_text(&module);
+        assert_eq!(formatted, "module {{\nfn main() -> Value {{\nreturn\n}}\n}}");
+
+        let reparsed = parse_module_text(&formatted).unwrap();
+        assert_eq!(reparsed, module);
     }}
 }}
 
@@ -331,6 +347,7 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
         walk_rows = walk_rows,
         walk_mut_rows = walk_mut_rows,
         parser_rows = parser_rows,
+        formatter_rows = formatter_rows,
         provenance_tag = provenance_tag,
         token_rows = token_rows,
         rule_rows = rule_rows,
