@@ -90,7 +90,6 @@ pub fn write_print_main_executable(
     output_dir: &Path,
     base_name: &str,
 ) -> Result<std::path::PathBuf, WaresError> {
-    ensure_native_target(input.object.target_arch)?;
     std::fs::create_dir_all(output_dir).map_err(|e| WaresError::Io("create output dir", e))?;
 
     let obj_path = output_dir.join(format!("{base_name}.o"));
@@ -100,22 +99,9 @@ pub fn write_print_main_executable(
     write_print_main_wrapper(input.object.function_name, &c_path)?;
 
     let exe_path = output_dir.join(base_name);
-    link_print_main_executable(&c_path, &obj_path, &exe_path)?;
+    link_print_main_executable(input.object.target_arch, &c_path, &obj_path, &exe_path)?;
 
     Ok(exe_path)
-}
-
-fn ensure_native_target(target_arch: TargetArch) -> Result<(), WaresError> {
-    match target_arch {
-        TargetArch::Aarch64 if cfg!(target_arch = "aarch64") => Ok(()),
-        TargetArch::X86_64 if cfg!(target_arch = "x86_64") => Ok(()),
-        TargetArch::Aarch64 => Err(WaresError::UnsupportedTarget(
-            "standalone executable linking is only supported for the native host architecture (wanted aarch64)",
-        )),
-        TargetArch::X86_64 => Err(WaresError::UnsupportedTarget(
-            "standalone executable linking is only supported for the native host architecture (wanted x86_64)",
-        )),
-    }
 }
 
 fn write_aarch64_object_file(input: &ObjectInput<'_>, path: &Path) -> Result<(), WaresError> {
@@ -521,12 +507,15 @@ int main(void) {{
 }
 
 fn link_print_main_executable(
+    target_arch: TargetArch,
     c_path: &Path,
     obj_path: &Path,
     exe_path: &Path,
 ) -> Result<(), WaresError> {
     let mut command = std::process::Command::new("cc");
     command.arg("-O0");
+
+    add_target_arch_flags(&mut command, target_arch)?;
 
     #[cfg(target_os = "macos")]
     {
@@ -555,4 +544,33 @@ fn link_print_main_executable(
     }
 
     Ok(())
+}
+
+fn add_target_arch_flags(
+    command: &mut std::process::Command,
+    target_arch: TargetArch,
+) -> Result<(), WaresError> {
+    #[cfg(target_os = "macos")]
+    {
+        command.arg("-arch");
+        command.arg(match target_arch {
+            TargetArch::Aarch64 => "arm64",
+            TargetArch::X86_64 => "x86_64",
+        });
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        if matches!(
+            (target_arch, std::env::consts::ARCH),
+            (TargetArch::Aarch64, "aarch64") | (TargetArch::X86_64, "x86_64")
+        ) {
+            return Ok(());
+        }
+
+        Err(WaresError::UnsupportedTarget(
+            "cross-arch standalone executable linking is only implemented on macOS right now",
+        ))
+    }
 }
