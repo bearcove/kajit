@@ -105,6 +105,7 @@ impl LanguageServer for KajitLanguageServer {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
+                document_formatting_provider: Some(OneOf::Left(true)),
                 semantic_tokens_provider: Some(
                     SemanticTokensServerCapabilities::SemanticTokensOptions(
                         SemanticTokensOptions {
@@ -198,6 +199,30 @@ impl LanguageServer for KajitLanguageServer {
             data: tokens,
         })))
     }
+
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        if !is_hir_uri(&params.text_document.uri) {
+            return Ok(None);
+        }
+
+        let maybe_doc = {
+            let docs = self.documents.read().await;
+            docs.get(&params.text_document.uri).cloned()
+        };
+
+        let content = if let Some(doc) = maybe_doc {
+            doc.content
+        } else if let Ok(path) = params.text_document.uri.to_file_path() {
+            match fs::read_to_string(&path) {
+                Ok(content) => content,
+                Err(_) => return Ok(None),
+            }
+        } else {
+            return Ok(None);
+        };
+
+        Ok(format_hir_document(&content).map(|edit| vec![edit]))
+    }
 }
 
 fn semantic_token_legend() -> SemanticTokensLegend {
@@ -233,7 +258,7 @@ fn path_matches_ext(path: &std::path::Path, file_ext: &str) -> bool {
 }
 
 fn compute_hir_diagnostics(content: &str) -> Vec<Diagnostic> {
-    match schema_hir::parse_module_text_rich(content, None) {
+    match schema_hir::parse_root_text_rich(content, None) {
         Ok(_) => Vec::new(),
         Err(errors) => errors
             .into_iter()
@@ -259,7 +284,7 @@ fn compute_hir_diagnostics(content: &str) -> Vec<Diagnostic> {
 }
 
 fn compute_hir_semantic_tokens(content: &str) -> Vec<SemanticToken> {
-    let Ok(module) = schema_hir::parse_module_text_rich(content, None) else {
+    let Ok(module) = schema_hir::parse_root_text_rich(content, None) else {
         return Vec::new();
     };
 
@@ -277,6 +302,22 @@ fn compute_hir_semantic_tokens(content: &str) -> Vec<SemanticToken> {
             && a.token_type == b.token_type
     });
     encode_semantic_tokens(&raw)
+}
+
+fn format_hir_document(content: &str) -> Option<TextEdit> {
+    let module = schema_hir::parse_root_text(content).ok()?;
+    let formatted = schema_hir::format_root_text(&module);
+    if formatted == content {
+        return None;
+    }
+
+    Some(TextEdit {
+        range: Range {
+            start: Position::new(0, 0),
+            end: offset_to_position(content, content.len()),
+        },
+        new_text: formatted,
+    })
 }
 
 fn collect_module_tokens(content: &str, module: &Module, raw: &mut Vec<RawSemanticToken>) {
@@ -601,5 +642,17 @@ mod tests {
         let source = "module { fn broken( -> Value { return } }";
         let diagnostics = compute_hir_diagnostics(source);
         assert!(!diagnostics.is_empty());
+    }
+
+    #[test]
+    fn formats_hir_document() {
+        let source = "module { fn main() -> Value { return 42 } }";
+        let edit = format_hir_document(source).expect("expected formatting edit");
+        assert_eq!(edit.range.start, Position::new(0, 0));
+        assert_eq!(edit.range.end, offset_to_position(source, source.len()));
+        assert_eq!(
+            edit.new_text,
+            "module {\nfn main() -> Value {\nreturn 42\n}\n}"
+        );
     }
 }

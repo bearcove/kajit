@@ -9,13 +9,20 @@ pub struct ReprSpec {
     pub file_ext: &'static str,
 
     pub validate: fn(&str) -> Result<(), String>,
+
+    pub format: fn(&str) -> Result<String, String>,
 }
 fn validate_hir(source: &str) -> Result<(), String> {
-    hir::parse_module_text(source).map(|_| ())
+    hir::parse_root_text(source).map(|_| ())
+}
+fn format_hir(source: &str) -> Result<String, String> {
+    let root = hir::parse_root_text(source)?;
+    Ok(hir::format_root_text(&root))
 }
 
 pub static REPRS: &[ReprSpec] = &[ReprSpec {
     name: hir::REPR_NAME,
     file_ext: hir::REPR_FILE_EXT,
     validate: validate_hir,
+    format: format_hir,
 }];

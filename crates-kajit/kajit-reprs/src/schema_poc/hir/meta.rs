@@ -39,6 +39,8 @@ pub const REPR_NAME: &str = "HIR";
 
 pub const REPR_FILE_EXT: &str = ".k-hir";
 
+pub const REPR_ROOT: &str = "Module";
+
 pub const REPR_PURPOSE: &str = "Human-semantic structured IR";
 
 pub const REPR_ROUND_TRIP: &str = "canonical-print";
@@ -51,15 +53,15 @@ pub static REPR_CANONICAL_IDENTITIES: &[&str] =
 pub static TOKENS: &[TokenSpec] = &[
     TokenSpec {
         name: "ident",
-        kind: "regex",
+        kind: "ident",
     },
     TokenSpec {
         name: "int",
-        kind: "regex",
+        kind: "int",
     },
     TokenSpec {
         name: "symbol",
-        kind: "regex",
+        kind: "symbol",
     },
 ];
 
@@ -179,6 +181,6 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
     },
     PrintSpec {
         name: "Stmt.Return",
-        template: "return{value? : {value}}",
+        template: "return{value? :  {value}}",
     },
 ];

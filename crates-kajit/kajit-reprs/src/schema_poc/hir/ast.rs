@@ -13,12 +13,12 @@ pub struct Symbol(pub String);
 /// A binary operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BinaryOp {
-    /// Integer subtraction.
-    #[default]
-    Sub,
-
     /// Integer addition.
+    #[default]
     Add,
+
+    /// Integer subtraction.
+    Sub,
 }
 
 /// A generic parameter name.
@@ -32,12 +32,12 @@ pub struct Literal(pub String);
 /// The kind of local binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LocalKind {
-    /// A named source-level local.
-    #[default]
-    Local,
-
     /// A compiler-introduced temporary.
+    #[default]
     Temp,
+
+    /// A named source-level local.
+    Local,
 }
 
 /// A named type reference in HIR.
@@ -51,11 +51,11 @@ pub enum TypeDefKind {
     #[default]
     Struct,
 
-    /// An enum type definition.
-    Enum,
-
     /// A type alias definition.
     Alias,
+
+    /// An enum type definition.
+    Enum,
 }
 
 /// A sequence of statements with shared provenance.

@@ -2,6 +2,7 @@ use facet::Facet;
 use figue as args;
 use std::path::PathBuf;
 
+mod format;
 mod lsp;
 mod validate;
 
@@ -32,6 +33,13 @@ enum Command {
         #[facet(args::positional)]
         path: PathBuf,
     },
+
+    /// Parse and reformat a Kajit text file based on its extension
+    Format {
+        /// Path to the file to format
+        #[facet(args::positional)]
+        path: PathBuf,
+    },
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -47,6 +55,12 @@ async fn main() {
         Command::Lsp { stdio } => lsp::cmd_lsp(stdio).await,
         Command::Validate { path } => {
             if let Err(err) = validate::cmd_validate(&path) {
+                eprintln!("{err}");
+                std::process::exit(1);
+            }
+        }
+        Command::Format { path } => {
+            if let Err(err) = format::cmd_format(&path) {
                 eprintln!("{err}");
                 std::process::exit(1);
             }

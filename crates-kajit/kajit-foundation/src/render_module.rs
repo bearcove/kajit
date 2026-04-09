@@ -58,6 +58,7 @@ struct RenderParts {
     module_doc_rows: String,
     file_ext: String,
     name: String,
+    root_name: String,
     provenance_tag: String,
     purpose: String,
     round_trip: String,
@@ -120,7 +121,11 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
     let token_rows = token_names
         .iter()
         .map(|name| {
-            let kind = repr.syntax.token_kinds.get(name).unwrap().as_str();
+            let kind = match repr.syntax.token_kinds.get(name).unwrap() {
+                crate::normalize::NormalizedTokenKind::Ident => "ident",
+                crate::normalize::NormalizedTokenKind::Symbol => "symbol",
+                crate::normalize::NormalizedTokenKind::Int => "int",
+            };
             format!("    TokenSpec {{ name: {name:?}, kind: {kind:?} }},")
         })
         .collect::<Vec<_>>()
@@ -313,6 +318,7 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         module_doc_rows,
         file_ext: repr.file_ext.clone(),
         name: repr.name.clone(),
+        root_name: repr.syntax.root.clone(),
         provenance_tag,
         purpose: repr.contract.purpose.clone(),
         round_trip: repr.contract.round_trip.clone(),
@@ -346,16 +352,23 @@ pub struct ReprSpec {
     pub name: &'static str,
     pub file_ext: &'static str,
     pub validate: fn(&str) -> Result<(), String>,
+    pub format: fn(&str) -> Result<String, String>,
 }
 
 fn validate_hir(source: &str) -> Result<(), String> {
-    hir::parse_module_text(source).map(|_| ())
+    hir::parse_root_text(source).map(|_| ())
+}
+
+fn format_hir(source: &str) -> Result<String, String> {
+    let root = hir::parse_root_text(source)?;
+    Ok(hir::format_root_text(&root))
 }
 
 pub static REPRS: &[ReprSpec] = &[ReprSpec {
     name: hir::REPR_NAME,
     file_ext: hir::REPR_FILE_EXT,
     validate: validate_hir,
+    format: format_hir,
 }];
 "#
         .to_owned(),
@@ -421,6 +434,7 @@ pub struct PrintSpec {{
 
 pub const REPR_NAME: &str = {name:?};
 pub const REPR_FILE_EXT: &str = {file_ext:?};
+pub const REPR_ROOT: &str = {root_name:?};
 pub const REPR_PURPOSE: &str = {purpose:?};
 pub const REPR_ROUND_TRIP: &str = {round_trip:?};
 pub const REPR_PROVENANCE: &str = {provenance:?};
@@ -451,6 +465,7 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
 "#,
         name = parts.name,
         file_ext = parts.file_ext,
+        root_name = parts.root_name,
         purpose = parts.purpose,
         round_trip = parts.round_trip,
         provenance = parts.provenance,
@@ -551,7 +566,7 @@ use super::*;
 
 #[test]
 fn parse_module_smoke() {
-    let module = parse_module_text("module { fn main() -> Value { return } }").unwrap();
+    let module = parse_root_text("module { fn main() -> Value { return } }").unwrap();
     assert_eq!(module.functions.len(), 1);
     assert_eq!(module.functions[0].name, Symbol("main".to_owned()));
     assert_eq!(module.functions[0].return_type, Type("Value".to_owned()));
@@ -564,11 +579,11 @@ fn parse_module_smoke() {
 #[test]
 fn format_module_smoke() {
     let text = "module { fn main() -> Value { return } }";
-    let module = parse_module_text(text).unwrap();
-    let formatted = format_module_text(&module);
+    let module = parse_root_text(text).unwrap();
+    let formatted = format_root_text(&module);
     assert_eq!(formatted, "module {\nfn main() -> Value {\nreturn\n}\n}");
 
-    let reparsed = parse_module_text(&formatted).unwrap();
+    let reparsed = parse_root_text(&formatted).unwrap();
     assert_eq!(reparsed, module);
 }
 "#

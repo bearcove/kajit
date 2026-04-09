@@ -21,6 +21,8 @@ pub(crate) fn render_formatter_block(
     node_names: &[String],
 ) -> Result<String, String> {
     let mut formatters = Vec::new();
+    let root_name = &repr.syntax.root;
+    let root_fn = snake_case(root_name);
 
     for node_name in node_names {
         let decl = &repr
@@ -33,19 +35,25 @@ pub(crate) fn render_formatter_block(
 
     Ok(format!(
         r#"
-pub fn format_module_text(node: &Module) -> String {{
-    format_module(node)
+pub fn format_root_text(node: &{root_name}) -> String {{
+    format_{root_fn}(node)
 }}
 
-impl std::fmt::Display for Module {{
+pub fn format_{root_fn}_text(node: &{root_name}) -> String {{
+    format_root_text(node)
+}}
+
+impl std::fmt::Display for {root_name} {{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{
-        f.write_str(&format_module(self))
+        f.write_str(&format_root_text(self))
     }}
 }}
 
-{}
+{formatters}
 "#,
-        formatters.join("\n\n")
+        root_name = root_name,
+        root_fn = root_fn,
+        formatters = formatters.join("\n\n"),
     ))
 }
 

@@ -50,9 +50,17 @@ pub(crate) struct NormalizedContract {
 
 #[derive(Debug, Clone)]
 pub(crate) struct NormalizedSyntax {
-    pub(crate) token_kinds: HashMap<String, String>,
+    pub(crate) root: String,
+    pub(crate) token_kinds: HashMap<String, NormalizedTokenKind>,
     pub(crate) rules: HashMap<String, SyntaxRule>,
     pub(crate) canonical_print: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NormalizedTokenKind {
+    Ident,
+    Symbol,
+    Int,
 }
 
 #[derive(Debug, Clone)]
@@ -279,9 +287,21 @@ pub(crate) fn normalize_repr(repr: &ReprBody) -> Result<NormalizedRepr, String> 
         .iter()
         .map(|(name, token)| {
             let kind = match token {
-                crate::schema::TokenExpr::Regex(_) => "regex".to_owned(),
+                crate::schema::TokenExpr::Regex(patterns) => {
+                    match patterns.first().map(String::as_str) {
+                        Some("[A-Za-z_][A-Za-z0-9_]*") => NormalizedTokenKind::Ident,
+                        Some("@[A-Za-z_][A-Za-z0-9_.]*") => NormalizedTokenKind::Symbol,
+                        Some("[0-9]+") => NormalizedTokenKind::Int,
+                        Some(other) => {
+                            return Err(format!("unsupported token regex pattern {other:?}"));
+                        }
+                        None => {
+                            return Err("regex token missing pattern".to_owned());
+                        }
+                    }
+                }
                 crate::schema::TokenExpr::Other { name, .. } => {
-                    name.clone().unwrap_or_else(|| "<unknown>".to_owned())
+                    return Err(format!("unsupported token expression kind {:?}", name));
                 }
             };
             Ok((name.clone(), kind))
@@ -299,6 +319,7 @@ pub(crate) fn normalize_repr(repr: &ReprBody) -> Result<NormalizedRepr, String> 
             provenance: repr.contract.provenance.clone(),
         },
         syntax: NormalizedSyntax {
+            root: repr.syntax.root.clone(),
             token_kinds,
             rules,
             canonical_print: repr.syntax.canonical_print.clone(),
@@ -317,20 +338,21 @@ pub(crate) fn with_module_doc(
     repr
 }
 
-pub(crate) fn syntax_type_name(ty: &SyntaxTypeUse) -> Option<&str> {
+pub(crate) fn render_default_value(ty: &SyntaxTypeUse, provenance_tag: &str) -> Option<String> {
     match ty {
-        SyntaxTypeUse::Ref { name } => Some(name.as_str()),
-        _ => None,
+        SyntaxTypeUse::Optional(_) => Some("None".to_owned()),
+        SyntaxTypeUse::Seq(_) => Some("Vec::new()".to_owned()),
+        SyntaxTypeUse::Ref { name } if name == provenance_tag => {
+            Some(format!("{provenance_tag}::default()"))
+        }
+        SyntaxTypeUse::Ref { .. } => None,
     }
 }
 
-pub(crate) fn render_default_value(ty: &SyntaxTypeUse, provenance_tag: &str) -> String {
-    match ty {
-        SyntaxTypeUse::Optional(_) => "None".to_owned(),
-        SyntaxTypeUse::Seq(_) => "Vec::new()".to_owned(),
-        SyntaxTypeUse::Ref { name } if name == provenance_tag => {
-            format!("{provenance_tag}::default()")
-        }
-        SyntaxTypeUse::Ref { name } => format!("{name}::default()"),
-    }
+pub(crate) fn is_string_scalar_type(repr: &NormalizedRepr, name: &str) -> bool {
+    name == "Symbol"
+        || repr
+            .support
+            .get(name)
+            .is_some_and(|decl| matches!(decl.value, NormalizedSupportDecl::String))
 }

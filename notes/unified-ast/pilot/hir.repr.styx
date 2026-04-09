@@ -28,6 +28,9 @@ repr @module{
 
     /// Text-format description for the pilot HIR subset.
     syntax {
+        /// Root rule and root AST node for parsed HIR documents.
+        root Module
+
         /// Token classes used by the pilot parser.
         tokens {
             /// A bare identifier used for local names and type names.
@@ -56,7 +59,7 @@ repr @module{
                 @field(params @repeat(@ref(Param) {sep ","}))
                 ")"
                 "->"
-                @field(return_type @ref(Type))
+                @field(return_type @token(ident))
                 @field(body @ref(Block))
             )
 
@@ -64,7 +67,7 @@ repr @module{
             Param @seq(
                 @field(name @token(ident))
                 ":"
-                @field(ty @ref(Type))
+                @field(ty @token(ident))
             )
 
             /// A braced statement block.
@@ -115,7 +118,7 @@ repr @module{
             /// Canonical block layout.
             Block "{\n{statements}\n}"
             /// Canonical return statement layout.
-            Stmt.Return "return{value? : {value}}"
+            Stmt.Return "return{value? :  {value}}"
             /// Canonical expression statement layout.
             Stmt.Expr "{value}"
             /// Canonical local expression layout.
