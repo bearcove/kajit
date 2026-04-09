@@ -158,7 +158,7 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
     let node_rows = node_names
         .iter()
         .map(|name| {
-            let kind = match repr.nodes.get(name) {
+            let kind = match repr.nodes.get(name).map(|decl| &decl.value) {
                 Some(NormalizedNodeDecl::Node(_)) => "node",
                 Some(NormalizedNodeDecl::Enum(_)) => "enum",
                 Some(NormalizedNodeDecl::Struct(_)) => "struct",
@@ -174,7 +174,10 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
 
     let support_rows = support_names
         .iter()
-        .map(|name| render_support_decl(name, repr.support.get(name).unwrap()))
+        .map(|name| {
+            let decl = repr.support.get(name).unwrap();
+            render_support_decl(name, &decl.value, decl.doc.as_deref())
+        })
         .collect::<Vec<_>>()
         .join("\n\n");
 
@@ -183,19 +186,19 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         collect_syntax_type_tags(ty, &mut placeholder_names);
     }
     for decl in repr.nodes.values() {
-        match decl {
+        match &decl.value {
             NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
                 for ty in fields.values() {
-                    collect_syntax_type_tags(ty, &mut placeholder_names);
+                    collect_syntax_type_tags(&ty.value, &mut placeholder_names);
                 }
             }
             NormalizedNodeDecl::Enum(variants) => {
                 for variant in variants.values() {
                     if let NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) =
-                        variant
+                        &variant.value
                     {
                         for ty in fields.values() {
-                            collect_syntax_type_tags(ty, &mut placeholder_names);
+                            collect_syntax_type_tags(&ty.value, &mut placeholder_names);
                         }
                     }
                 }
@@ -219,11 +222,13 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
     let ast_rows = node_names
         .iter()
         .map(|name| {
+            let decl = repr.nodes.get(name).unwrap();
             render_node_decl(
                 name,
-                repr.nodes.get(name).unwrap(),
+                &decl.value,
                 &node_names,
                 &provenance_tag,
+                decl.doc.as_deref(),
             )
         })
         .collect::<Vec<_>>()
@@ -233,7 +238,7 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         .iter()
         .filter_map(|name| {
             let decl = repr.nodes.get(name)?;
-            match decl {
+            match &decl.value {
                 NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields)
                     if node_fields_have_prov(fields, &provenance_tag) =>
                 {
@@ -271,13 +276,27 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
 
     let walk_rows = node_names
         .iter()
-        .map(|name| render_walk_fn(name, repr.nodes.get(name).unwrap(), &node_names, false))
+        .map(|name| {
+            render_walk_fn(
+                name,
+                &repr.nodes.get(name).unwrap().value,
+                &node_names,
+                false,
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n\n");
 
     let walk_mut_rows = node_names
         .iter()
-        .map(|name| render_walk_fn(name, repr.nodes.get(name).unwrap(), &node_names, true))
+        .map(|name| {
+            render_walk_fn(
+                name,
+                &repr.nodes.get(name).unwrap().value,
+                &node_names,
+                true,
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n\n");
 

@@ -96,18 +96,26 @@ repr @module{
     }
 
     support {
+        /// A named type reference in HIR.
         Type @string
+        /// A literal value in canonical HIR text.
         Literal @string
+        /// A binary operator.
         BinaryOp @enum(Add Sub)
+        /// A generic parameter name.
         GenericParam @string
+        /// The kind of local binding.
         LocalKind @enum(Local Temp)
+        /// The kind of type definition.
         TypeDefKind @enum(Struct Enum Alias)
     }
 
     nodes {
+        /// The root HIR module.
         Module @node{
             docs @optional(@DocBlock)
             type_defs @seq(@TypeDef)
+            /// Top-level functions declared in the module.
             functions @seq(@Function)
         }
 
@@ -119,19 +127,27 @@ repr @module{
             kind @TypeDefKind
         }
 
+        /// A lowered function body.
         Function @node{
             prov @Prov
             docs @optional(@DocBlock)
+            /// Symbolic function name.
             name @Symbol
+            /// Ordered function parameters.
             params @seq(@Param)
+            /// Declared return type.
             return_type @Type
             locals @seq(@Local)
+            /// Structured function body.
             body @Block
         }
 
+        /// A function parameter.
         Param @node{
             prov @Prov
+            /// Parameter name.
             name @Symbol
+            /// Parameter type.
             ty @Type
         }
 
@@ -147,6 +163,7 @@ repr @module{
             statements @seq(@Stmt)
         }
 
+        /// A statement in structured HIR.
         Stmt @enum{
             Init @struct{
                 prov @Prov
@@ -178,20 +195,25 @@ repr @module{
             }
         }
 
+        /// An expression in structured HIR.
         Expr @enum{
+            /// Read a local value by name.
             Local @struct{
                 prov @Prov
                 name @Symbol
             }
 
+            /// An inline literal.
             Literal @struct{
                 prov @Prov
                 value @Literal
             }
 
+            /// A symbolic call.
             Call @struct{
                 prov @Prov
                 callee @Symbol
+                /// Positional call arguments.
                 args @seq(@Expr)
             }
 

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::schema::{
-    NodeDecl, NodeFields, ReprBody, RuleExpr, SupportDecl, TypeUse, rule_literal_text,
-    rule_named_parts,
+    NodeDecl, NodeFields, ReprBody, RuleExpr, SupportDecl, TypeUse, documented_doc,
+    documented_name, rule_literal_text, rule_named_parts,
 };
 
 #[derive(Debug, Clone)]
@@ -56,6 +56,12 @@ pub(crate) struct NormalizedSyntax {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct DocumentedValue<T> {
+    pub(crate) value: T,
+    pub(crate) doc: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) enum NormalizedSupportDecl {
     String,
     StringSeq,
@@ -65,9 +71,9 @@ pub(crate) enum NormalizedSupportDecl {
 
 #[derive(Debug, Clone)]
 pub(crate) enum NormalizedNodeDecl {
-    Node(HashMap<String, SyntaxTypeUse>),
-    Enum(HashMap<String, NormalizedNodeDecl>),
-    Struct(HashMap<String, SyntaxTypeUse>),
+    Node(HashMap<String, DocumentedValue<SyntaxTypeUse>>),
+    Enum(HashMap<String, DocumentedValue<NormalizedNodeDecl>>),
+    Struct(HashMap<String, DocumentedValue<SyntaxTypeUse>>),
 }
 
 #[derive(Debug, Clone)]
@@ -77,8 +83,8 @@ pub(crate) struct NormalizedRepr {
     pub(crate) contract: NormalizedContract,
     pub(crate) syntax: NormalizedSyntax,
     pub(crate) common: HashMap<String, SyntaxTypeUse>,
-    pub(crate) support: HashMap<String, NormalizedSupportDecl>,
-    pub(crate) nodes: HashMap<String, NormalizedNodeDecl>,
+    pub(crate) support: HashMap<String, DocumentedValue<NormalizedSupportDecl>>,
+    pub(crate) nodes: HashMap<String, DocumentedValue<NormalizedNodeDecl>>,
 }
 
 fn normalize_support_decl(decl: &SupportDecl) -> Result<NormalizedSupportDecl, String> {
@@ -167,11 +173,19 @@ pub(crate) fn normalize_rule(rule: &RuleExpr) -> Result<SyntaxRule, String> {
 
 pub(crate) fn normalize_node_fields(
     fields: &NodeFields,
-) -> Result<HashMap<String, SyntaxTypeUse>, String> {
+) -> Result<HashMap<String, DocumentedValue<SyntaxTypeUse>>, String> {
     fields
         .fields
         .iter()
-        .map(|(name, ty)| Ok((name.clone(), normalize_type_use(ty)?)))
+        .map(|(name, ty)| {
+            Ok((
+                documented_name(name).to_owned(),
+                DocumentedValue {
+                    value: normalize_type_use(ty)?,
+                    doc: documented_doc(name).map(|lines| lines.to_vec()),
+                },
+            ))
+        })
         .collect()
 }
 
@@ -182,7 +196,13 @@ fn normalize_node_decl(decl: &NodeDecl) -> Result<NormalizedNodeDecl, String> {
         NodeDecl::Enum(variants) => {
             let mut out = HashMap::new();
             for (name, variant) in &variants.variants {
-                out.insert(name.clone(), normalize_node_decl(variant)?);
+                out.insert(
+                    documented_name(name).to_owned(),
+                    DocumentedValue {
+                        value: normalize_node_decl(variant)?,
+                        doc: documented_doc(name).map(|lines| lines.to_vec()),
+                    },
+                );
             }
             Ok(NormalizedNodeDecl::Enum(out))
         }
@@ -207,7 +227,15 @@ pub(crate) fn normalize_repr(repr: &ReprBody) -> Result<NormalizedRepr, String> 
         .as_ref()
         .ok_or_else(|| "repr.nodes missing after validation".to_owned())?
         .iter()
-        .map(|(name, decl)| Ok((name.clone(), normalize_node_decl(decl)?)))
+        .map(|(name, decl)| {
+            Ok((
+                documented_name(name).to_owned(),
+                DocumentedValue {
+                    value: normalize_node_decl(decl)?,
+                    doc: documented_doc(name).map(|lines| lines.to_vec()),
+                },
+            ))
+        })
         .collect::<Result<HashMap<_, _>, String>>()?;
 
     let support = repr
@@ -215,7 +243,15 @@ pub(crate) fn normalize_repr(repr: &ReprBody) -> Result<NormalizedRepr, String> 
         .clone()
         .unwrap_or_default()
         .into_iter()
-        .map(|(name, decl)| Ok((name, normalize_support_decl(&decl)?)))
+        .map(|(name, decl)| {
+            Ok((
+                documented_name(&name).to_owned(),
+                DocumentedValue {
+                    value: normalize_support_decl(&decl)?,
+                    doc: documented_doc(&name).map(|lines| lines.to_vec()),
+                },
+            ))
+        })
         .collect::<Result<HashMap<_, _>, String>>()?;
 
     let rules = repr

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::normalize::{NormalizedNodeDecl, NormalizedSupportDecl, SyntaxTypeUse};
+use crate::normalize::{DocumentedValue, NormalizedNodeDecl, NormalizedSupportDecl, SyntaxTypeUse};
 
 pub(crate) fn rust_ident(name: &str) -> String {
     match name {
@@ -82,12 +82,12 @@ pub(crate) fn render_syntax_type_use(
 }
 
 pub(crate) fn node_fields_have_prov(
-    fields: &HashMap<String, SyntaxTypeUse>,
+    fields: &HashMap<String, DocumentedValue<SyntaxTypeUse>>,
     provenance_tag: &str,
 ) -> bool {
-    fields
-        .get("prov")
-        .is_some_and(|ty| matches!(ty, SyntaxTypeUse::Ref { name } if name == provenance_tag))
+    fields.get("prov").is_some_and(
+        |ty| matches!(&ty.value, SyntaxTypeUse::Ref { name } if name == provenance_tag),
+    )
 }
 
 pub(crate) fn render_common_placeholder(
@@ -136,8 +136,13 @@ pub(crate) fn render_common_placeholder(
     }
 }
 
-pub(crate) fn render_support_decl(name: &str, decl: &NormalizedSupportDecl) -> String {
-    match decl {
+pub(crate) fn render_support_decl(
+    name: &str,
+    decl: &NormalizedSupportDecl,
+    doc: Option<&[String]>,
+) -> String {
+    let docs = render_doc_lines(doc, "");
+    let body = match decl {
         NormalizedSupportDecl::String => format!(
             "#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct {name}(pub String);"
         ),
@@ -164,7 +169,26 @@ pub(crate) fn render_support_decl(name: &str, decl: &NormalizedSupportDecl) -> S
                 "#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]\npub enum {name} {{\n{rows}\n}}"
             )
         }
+    };
+    if docs.is_empty() {
+        body
+    } else {
+        format!("{docs}\n{body}")
     }
+}
+
+fn render_doc_lines(doc: Option<&[String]>, indent: &str) -> String {
+    let Some(lines) = doc else {
+        return String::new();
+    };
+    if lines.is_empty() {
+        return String::new();
+    }
+    lines
+        .iter()
+        .map(|line| format!("{indent}/// {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(crate) fn render_visit_calls(
@@ -259,7 +283,7 @@ pub(crate) fn render_walk_fn(
                 .flat_map(|field_name| {
                     let field_expr = format!("node.{}", rust_ident(field_name));
                     render_visit_calls(
-                        fields.get(field_name).unwrap(),
+                        &fields.get(field_name).unwrap().value,
                         &field_expr,
                         node_names,
                         mutable,
@@ -284,7 +308,7 @@ pub(crate) fn render_walk_fn(
             variant_names.sort();
             let arms = variant_names
                 .iter()
-                .filter_map(|variant_name| match variants.get(variant_name).unwrap() {
+                .filter_map(|variant_name| match &variants.get(variant_name).unwrap().value {
                     NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
                         let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
                         field_names.sort();
@@ -293,7 +317,7 @@ pub(crate) fn render_walk_fn(
                             .filter_map(|field_name| {
                                 let expr = rust_ident(field_name);
                                 let calls = render_visit_calls(
-                                    fields.get(field_name).unwrap(),
+                                    &fields.get(field_name).unwrap().value,
                                     &expr,
                                     node_names,
                                     mutable,
@@ -348,6 +372,7 @@ pub(crate) fn render_node_decl(
     decl: &NormalizedNodeDecl,
     node_names: &[String],
     provenance_tag: &str,
+    doc: Option<&[String]>,
 ) -> String {
     match decl {
         NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
@@ -356,47 +381,75 @@ pub(crate) fn render_node_decl(
             let field_rows = field_names
                 .iter()
                 .map(|field_name| {
-                    let ty =
-                        render_syntax_type_use(fields.get(field_name).unwrap(), node_names, true);
-                    format!("    pub {}: {},", rust_ident(field_name), ty)
+                    let field = fields.get(field_name).unwrap();
+                    let ty = render_syntax_type_use(&field.value, node_names, true);
+                    let docs = render_doc_lines(field.doc.as_deref(), "    ");
+                    if docs.is_empty() {
+                        format!("    pub {}: {},", rust_ident(field_name), ty)
+                    } else {
+                        format!("{docs}\n    pub {}: {},", rust_ident(field_name), ty)
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-
-            format!(
+            let docs = render_doc_lines(doc, "");
+            let body = format!(
                 "#[derive(Debug, Clone, PartialEq, Eq)]\npub struct {name} {{\n{field_rows}\n}}"
-            )
+            );
+            if docs.is_empty() {
+                body
+            } else {
+                format!("{docs}\n{body}")
+            }
         }
         NormalizedNodeDecl::Enum(variants) => {
             let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
             variant_names.sort();
             let variant_rows = variant_names
                 .iter()
-                .map(|variant_name| match variants.get(variant_name).unwrap() {
-                    NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
-                        let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
-                        field_names.sort();
-                        let rows = field_names
-                            .iter()
-                            .map(|field_name| {
-                                let ty = render_syntax_type_use(
-                                    fields.get(field_name).unwrap(),
-                                    node_names,
-                                    true,
-                                );
-                                format!("        {}: {},", rust_ident(field_name), ty)
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        format!("    {variant_name} {{\n{rows}\n    }},")
-                    }
-                    other => format!("    {variant_name}, // unsupported variant shape: {other:?}"),
-                })
+                .map(
+                    |variant_name| match &variants.get(variant_name).unwrap().value {
+                        NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
+                            let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
+                            field_names.sort();
+                            let rows = field_names
+                                .iter()
+                                .map(|field_name| {
+                                    let field = fields.get(field_name).unwrap();
+                                    let ty = render_syntax_type_use(&field.value, node_names, true);
+                                    let docs = render_doc_lines(field.doc.as_deref(), "        ");
+                                    if docs.is_empty() {
+                                        format!("        {}: {},", rust_ident(field_name), ty)
+                                    } else {
+                                        format!(
+                                            "{docs}\n        {}: {},",
+                                            rust_ident(field_name),
+                                            ty
+                                        )
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            let variant_docs = render_doc_lines(
+                                variants.get(variant_name).unwrap().doc.as_deref(),
+                                "    ",
+                            );
+                            if variant_docs.is_empty() {
+                                format!("    {variant_name} {{\n{rows}\n    }},")
+                            } else {
+                                format!("{variant_docs}\n    {variant_name} {{\n{rows}\n    }},")
+                            }
+                        }
+                        other => {
+                            format!("    {variant_name}, // unsupported variant shape: {other:?}")
+                        }
+                    },
+                )
                 .collect::<Vec<_>>()
                 .join("\n");
             let prov_impl = if variants
                 .values()
-                .all(|variant| matches!(variant, NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) if node_fields_have_prov(fields, provenance_tag)))
+                .all(|variant| matches!(&variant.value, NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) if node_fields_have_prov(fields, provenance_tag)))
             {
                 let match_rows = variant_names
                     .iter()
@@ -409,9 +462,15 @@ pub(crate) fn render_node_decl(
             } else {
                 String::new()
             };
-            format!(
+            let docs = render_doc_lines(doc, "");
+            let body = format!(
                 "#[derive(Debug, Clone, PartialEq, Eq)]\npub enum {name} {{\n{variant_rows}\n}}{prov_impl}"
-            )
+            );
+            if docs.is_empty() {
+                body
+            } else {
+                format!("{docs}\n{body}")
+            }
         }
     }
 }

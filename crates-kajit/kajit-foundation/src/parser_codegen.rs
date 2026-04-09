@@ -1,8 +1,8 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::normalize::{
-    NormalizedNodeDecl, NormalizedRepr, SyntaxRule, SyntaxTypeUse, render_default_value,
-    syntax_type_name,
+    DocumentedValue, NormalizedNodeDecl, NormalizedRepr, SyntaxRule, SyntaxTypeUse,
+    render_default_value, syntax_type_name,
 };
 use crate::render_helpers::rust_ident;
 
@@ -103,7 +103,7 @@ fn render_value_parser(
 
 fn flatten_struct_rule_items(
     rule: &SyntaxRule,
-    fields: &HashMap<String, SyntaxTypeUse>,
+    fields: &HashMap<String, DocumentedValue<SyntaxTypeUse>>,
     rule_names: &[String],
     node_names: &[String],
 ) -> Result<Vec<SeqItem>, String> {
@@ -119,9 +119,10 @@ fn flatten_struct_rule_items(
         }
         SyntaxRule::Field(named) => {
             let field_name = named.name.as_str();
-            let ty = fields
+            let ty = &fields
                 .get(field_name)
-                .ok_or_else(|| format!("schema node field {field_name:?} not found"))?;
+                .ok_or_else(|| format!("schema node field {field_name:?} not found"))?
+                .value;
             let parser =
                 render_value_parser(named.inner.as_ref(), ty, rule_names, node_names, true)?;
             Ok(vec![SeqItem::Bind {
@@ -191,7 +192,7 @@ fn render_binding_chain(items: &[SeqItem]) -> Result<(String, Vec<String>), Stri
 
 fn render_struct_parser_expr(
     type_name: &str,
-    fields: &HashMap<String, SyntaxTypeUse>,
+    fields: &HashMap<String, DocumentedValue<SyntaxTypeUse>>,
     rule: &SyntaxRule,
     rule_names: &[String],
     node_names: &[String],
@@ -210,7 +211,7 @@ fn render_struct_parser_expr(
             let value = if bound_set.contains(&ident) {
                 ident.clone()
             } else {
-                render_default_value(fields.get(field_name).unwrap(), provenance_tag)
+                render_default_value(&fields.get(field_name).unwrap().value, provenance_tag)
             };
             format!("{ident}: {value}")
         })
@@ -233,7 +234,7 @@ fn render_struct_parser_expr(
 
 fn render_enum_parser_expr(
     enum_name: &str,
-    variants: &HashMap<String, NormalizedNodeDecl>,
+    variants: &HashMap<String, DocumentedValue<NormalizedNodeDecl>>,
     rule: &SyntaxRule,
     rule_names: &[String],
     node_names: &[String],
@@ -251,11 +252,16 @@ fn render_enum_parser_expr(
             ));
         };
         let variant_name = named.name.as_str();
-        let Some(NormalizedNodeDecl::Struct(fields) | NormalizedNodeDecl::Node(fields)) =
-            variants.get(variant_name)
-        else {
+        let Some(variant_decl) = variants.get(variant_name) else {
             return Err(format!(
                 "schema enum {enum_name} is missing variant declaration {variant_name:?}"
+            ));
+        };
+        let (NormalizedNodeDecl::Struct(fields) | NormalizedNodeDecl::Node(fields)) =
+            &variant_decl.value
+        else {
+            return Err(format!(
+                "schema enum {enum_name} variant {variant_name:?} has unsupported declaration"
             ));
         };
         let items =
@@ -271,7 +277,7 @@ fn render_enum_parser_expr(
                 let value = if bound_set.contains(&ident) {
                     ident.clone()
                 } else {
-                    render_default_value(fields.get(field_name).unwrap(), provenance_tag)
+                    render_default_value(&fields.get(field_name).unwrap().value, provenance_tag)
                 };
                 format!("{ident}: {value}")
             })
@@ -338,7 +344,7 @@ pub(crate) fn render_parser_block(
         .iter()
         .filter_map(|name| {
             let rule = repr.syntax.rules.get(*name)?;
-            let decl = repr.nodes.get(*name)?;
+            let decl = &repr.nodes.get(*name)?.value;
             Some(render_rule_parser_expr(
                 name,
                 rule,

@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use facet::Facet;
-use facet_styx::RenderError;
+use facet_styx::{Documented, RenderError};
 
 #[derive(Facet, Debug, Clone)]
 #[allow(dead_code)]
@@ -36,8 +36,8 @@ pub(crate) struct ReprBody {
     pub(crate) contract: ReprContract,
     pub(crate) syntax: ReprSyntax,
     pub(crate) common: Option<HashMap<String, TypeUse>>,
-    pub(crate) support: Option<HashMap<String, SupportDecl>>,
-    pub(crate) nodes: Option<HashMap<String, NodeDecl>>,
+    pub(crate) support: Option<HashMap<Documented<String>, SupportDecl>>,
+    pub(crate) nodes: Option<HashMap<Documented<String>, NodeDecl>>,
 }
 
 #[derive(Facet, Debug, Clone)]
@@ -140,14 +140,14 @@ pub(crate) enum NodeDecl {
 #[allow(dead_code)]
 pub(crate) struct NodeFields {
     #[facet(flatten)]
-    pub(crate) fields: HashMap<String, TypeUse>,
+    pub(crate) fields: HashMap<Documented<String>, TypeUse>,
 }
 
 #[derive(Facet, Debug, Clone)]
 #[allow(dead_code)]
 pub(crate) struct NodeVariants {
     #[facet(flatten)]
-    pub(crate) variants: HashMap<String, NodeDecl>,
+    pub(crate) variants: HashMap<Documented<String>, NodeDecl>,
 }
 
 pub(crate) fn load_hir_pilot_schema(schema_path: &Path) -> Result<ReprBody, String> {
@@ -328,6 +328,14 @@ fn validate_hir_pilot_schema(
         support: repr.support.clone(),
         nodes: repr.nodes.clone(),
     })
+}
+
+pub(crate) fn documented_name(key: &Documented<String>) -> &str {
+    key.value.as_str()
+}
+
+pub(crate) fn documented_doc(key: &Documented<String>) -> Option<&[String]> {
+    key.doc.as_deref()
 }
 
 fn expect_tagged_rule(

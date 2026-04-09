@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::normalize::{NormalizedNodeDecl, NormalizedRepr, SyntaxTypeUse};
+use crate::normalize::{DocumentedValue, NormalizedNodeDecl, NormalizedRepr, SyntaxTypeUse};
 use crate::render_helpers::{rust_ident, snake_case};
 
 #[derive(Debug, Clone)]
@@ -23,10 +23,11 @@ pub(crate) fn render_formatter_block(
     let mut formatters = Vec::new();
 
     for node_name in node_names {
-        let decl = repr
+        let decl = &repr
             .nodes
             .get(node_name)
-            .ok_or_else(|| format!("missing node declaration for {node_name}"))?;
+            .ok_or_else(|| format!("missing node declaration for {node_name}"))?
+            .value;
         formatters.push(render_node_formatter(node_name, decl, repr, node_names)?);
     }
 
@@ -76,7 +77,7 @@ fn render_node_formatter(
             for variant_name in variant_names {
                 let variant_decl = variants.get(&variant_name).unwrap();
                 let (NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields)) =
-                    variant_decl
+                    &variant_decl.value
                 else {
                     return Err(format!(
                         "unsupported nested enum variant {node_name}.{variant_name}"
@@ -112,7 +113,11 @@ fn render_node_formatter(
                                 field.clone(),
                                 (
                                     rust_ident(field),
-                                    fields.get(field).expect("used field should exist").clone(),
+                                    fields
+                                        .get(field)
+                                        .expect("used field should exist")
+                                        .value
+                                        .clone(),
                                 ),
                             )
                         })
@@ -144,7 +149,7 @@ fn render_node_formatter(
 fn render_template_parts(
     parts: &[TemplatePart],
     node_expr: &str,
-    fields: &HashMap<String, SyntaxTypeUse>,
+    fields: &HashMap<String, DocumentedValue<SyntaxTypeUse>>,
     overrides: Option<&HashMap<String, (String, SyntaxTypeUse)>>,
     node_names: &[String],
 ) -> Result<String, String> {
@@ -160,7 +165,7 @@ fn render_template_lines(
     parts: &[TemplatePart],
     out_name: &str,
     node_expr: &str,
-    fields: &HashMap<String, SyntaxTypeUse>,
+    fields: &HashMap<String, DocumentedValue<SyntaxTypeUse>>,
     overrides: Option<&HashMap<String, (String, SyntaxTypeUse)>>,
     node_names: &[String],
 ) -> Result<Vec<String>, String> {
@@ -204,16 +209,17 @@ fn render_template_lines(
 fn lookup_field(
     field_name: &str,
     node_expr: &str,
-    fields: &HashMap<String, SyntaxTypeUse>,
+    fields: &HashMap<String, DocumentedValue<SyntaxTypeUse>>,
     overrides: Option<&HashMap<String, (String, SyntaxTypeUse)>>,
 ) -> Result<(String, SyntaxTypeUse), String> {
     if let Some((expr, ty)) = overrides.and_then(|map| map.get(field_name)) {
         return Ok((expr.clone(), ty.clone()));
     }
 
-    let ty = fields
+    let ty = &fields
         .get(field_name)
-        .ok_or_else(|| format!("template refers to unknown field {field_name:?}"))?;
+        .ok_or_else(|| format!("template refers to unknown field {field_name:?}"))?
+        .value;
     Ok((
         format!("{node_expr}.{}", rust_ident(field_name)),
         ty.clone(),

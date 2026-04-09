@@ -17,24 +17,30 @@ pub struct Prov {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Symbol(pub String);
+/// A binary operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BinaryOp {
     #[default]
     Add,
     Sub,
 }
+/// A generic parameter name.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GenericParam(pub String);
+/// A literal value in canonical HIR text.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Literal(pub String);
+/// The kind of local binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LocalKind {
     #[default]
     Local,
     Temp,
 }
+/// A named type reference in HIR.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Type(pub String);
+/// The kind of type definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TypeDefKind {
     #[default]
@@ -47,6 +53,7 @@ pub struct Block {
     pub prov: Prov,
     pub statements: Vec<Stmt>,
 }
+/// An expression in structured HIR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Binary {
@@ -55,7 +62,9 @@ pub enum Expr {
         prov: Prov,
         rhs: Box<Expr>,
     },
+    /// A symbolic call.
     Call {
+        /// Positional call arguments.
         args: Vec<Expr>,
         callee: Symbol,
         prov: Prov,
@@ -65,14 +74,10 @@ pub enum Expr {
         field: Symbol,
         prov: Prov,
     },
-    Literal {
-        prov: Prov,
-        value: Literal,
-    },
-    Local {
-        name: Symbol,
-        prov: Prov,
-    },
+    /// An inline literal.
+    Literal { prov: Prov, value: Literal },
+    /// Read a local value by name.
+    Local { name: Symbol, prov: Prov },
 }
 impl HasProvenance for Expr {
     fn provenance(&self) -> Option<&Prov> {
@@ -85,14 +90,19 @@ impl HasProvenance for Expr {
         }
     }
 }
+/// A lowered function body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
+    /// Structured function body.
     pub body: Box<Block>,
     pub docs: Option<DocBlock>,
     pub locals: Vec<Local>,
+    /// Symbolic function name.
     pub name: Symbol,
+    /// Ordered function parameters.
     pub params: Vec<Param>,
     pub prov: Prov,
+    /// Declared return type.
     pub return_type: Type,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,16 +112,21 @@ pub struct Local {
     pub prov: Prov,
     pub ty: Type,
 }
+/// The root HIR module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Module {
     pub docs: Option<DocBlock>,
+    /// Top-level functions declared in the module.
     pub functions: Vec<Function>,
     pub type_defs: Vec<TypeDef>,
 }
+/// A function parameter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Param {
+    /// Parameter name.
     pub name: Symbol,
     pub prov: Prov,
+    /// Parameter type.
     pub ty: Type,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,6 +149,7 @@ impl HasProvenance for Place {
         }
     }
 }
+/// A statement in structured HIR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Assign {
