@@ -1,9 +1,10 @@
 use std::ptr;
 
 use crate::common::EmissionState;
+#[cfg(test)]
+use kajit_types::decode_source_map_le;
 use kajit_types::{
     SourceLocation, SourceMap, SourceMapEntry, SourceMapError, TraceEntry, TraceError,
-    decode_source_map_le,
 };
 
 #[cfg(target_os = "macos")]

@@ -1,9 +1,10 @@
 use std::ptr;
 
 use crate::common::EmissionState;
+#[cfg(test)]
+use kajit_types::decode_source_map_le;
 use kajit_types::{
     SourceLocation, SourceMap, SourceMapEntry, SourceMapError, TraceEntry, TraceError,
-    decode_source_map_le,
 };
 
 #[cfg(target_os = "macos")]
@@ -907,12 +908,12 @@ impl Emitter {
         Ok(())
     }
 
-    pub fn emit_sxtb(&mut self, width: Width, rd: Reg, rn: Reg) -> Result<(), EmitError> {
+    pub fn emit_sxtb(&mut self, _width: Width, rd: Reg, rn: Reg) -> Result<(), EmitError> {
         self.emit_word(encode_sxtb(rd, rn)?);
         Ok(())
     }
 
-    pub fn emit_sxth(&mut self, width: Width, rd: Reg, rn: Reg) -> Result<(), EmitError> {
+    pub fn emit_sxth(&mut self, _width: Width, rd: Reg, rn: Reg) -> Result<(), EmitError> {
         self.emit_word(encode_sxth(rd, rn)?);
         Ok(())
     }
@@ -949,7 +950,7 @@ impl Emitter {
     pub fn emit_load_extern(
         &mut self,
         rd: Reg,
-        symbol: String,
+        _symbol: String,
         addr: u64,
     ) -> Result<(), EmitError> {
         // Capture the symbolic LoadExtern instruction

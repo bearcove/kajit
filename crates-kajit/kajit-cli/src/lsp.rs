@@ -670,6 +670,7 @@ fn render_symbol_hover(definition: &SymbolDef) -> Option<String> {
 
 fn compute_document_symbols(repr_kind: ReprKind, content: &str) -> Option<Vec<DocumentSymbol>> {
     let resolutions = resolve_document(repr_kind, content)?;
+    #[allow(deprecated)]
     let mut symbols = resolutions
         .definitions
         .iter()
@@ -678,7 +679,6 @@ fn compute_document_symbols(repr_kind: ReprKind, content: &str) -> Option<Vec<Do
             detail: definition.detail.clone(),
             kind: symbol_kind_to_document_symbol_kind(definition.kind),
             tags: None,
-            deprecated: None,
             range: Range {
                 start: offset_to_position(content, definition.start as usize),
                 end: offset_to_position(content, definition.end as usize),
@@ -688,6 +688,7 @@ fn compute_document_symbols(repr_kind: ReprKind, content: &str) -> Option<Vec<Do
                 end: offset_to_position(content, definition.end as usize),
             },
             children: None,
+            deprecated: None,
         })
         .collect::<Vec<_>>();
     symbols.sort_by_key(|symbol| {
