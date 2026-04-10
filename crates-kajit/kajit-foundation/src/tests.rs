@@ -405,3 +405,19 @@ fn hir_support_enum_variant_order_stays_in_schema_order() {
     let literal_pos = ast.find("\n    Literal {").unwrap();
     assert!(call_pos < local_pos && local_pos < literal_pos);
 }
+
+#[test]
+fn asm_repro_schema_loads() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../notes/unified-ast/pilot/asm-repro.repr.styx");
+
+    let _loaded = schema::load_pilot_schema(&path).unwrap();
+}
+
+#[test]
+fn asm_pilot_schema_loads() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../notes/unified-ast/pilot/asm.repr.styx");
+
+    let _loaded = schema::load_pilot_schema(&path).unwrap();
+}
