@@ -885,10 +885,12 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
             let kind = match repr.syntax.rules.get(name).unwrap() {
                 crate::normalize::SyntaxRule::Seq(_) => "seq",
                 crate::normalize::SyntaxRule::Choice(_) => "choice",
+                crate::normalize::SyntaxRule::Semantic { .. } => "semantic",
                 crate::normalize::SyntaxRule::Field(_) => "field",
                 crate::normalize::SyntaxRule::Variant(_) => "variant",
                 crate::normalize::SyntaxRule::Ref { .. } => "ref",
                 crate::normalize::SyntaxRule::Token { .. } => "token",
+                crate::normalize::SyntaxRule::Tag(_) => "tag",
                 crate::normalize::SyntaxRule::Optional { .. } => "optional",
                 crate::normalize::SyntaxRule::Repeat { .. } => "repeat",
                 crate::normalize::SyntaxRule::Literal(_) => "literal",

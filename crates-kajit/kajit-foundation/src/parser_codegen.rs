@@ -2,8 +2,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::normalize::{
     DocumentedValue, NormalizedNodeDecl, NormalizedRepr, NormalizedSupportDecl,
-    NormalizedTokenSpec, SyntaxRule, SyntaxTypeUse, direct_ref_name, is_docs_type, is_id_type,
-    is_int_scalar_type, is_string_scalar_type, render_default_value,
+    NormalizedTokenSpec, SyntaxRepeatSeparator, SyntaxRule, SyntaxTypeUse, direct_ref_name,
+    is_docs_type, is_id_type, is_int_scalar_type, is_string_scalar_type, render_default_value,
 };
 use crate::render_helpers::{
     is_prov_only_struct, leaf_variant_wrapper_name, rust_ident, snake_case,
@@ -278,6 +278,16 @@ fn render_value_parser(
     }
 
     match rule {
+        SyntaxRule::Semantic { inner, .. } => render_value_parser(
+            repr,
+            inner,
+            ty,
+            rule_names,
+            node_names,
+            box_node_refs,
+            arena_infos,
+        ),
+        SyntaxRule::Tag(text) => Ok(format!("just({text:?}).padded()")),
         SyntaxRule::Token { name } => render_token_value_parser(repr, name, ty),
         SyntaxRule::Ref { name } => {
             render_ref_value_parser(repr, name, ty, rule_names, node_names, box_node_refs)
@@ -314,10 +324,17 @@ fn render_value_parser(
                 false,
                 arena_infos,
             )?;
-            let collected = if let Some(sep) = sep.as_deref() {
-                format!(
-                    "({inner}).separated_by(just({sep:?}).padded()).allow_trailing().collect::<Vec<_>>()"
-                )
+            let collected = if let Some(sep) = sep {
+                let sep_parser = match sep {
+                    SyntaxRepeatSeparator::Literal(text) => format!("just({text:?}).padded()"),
+                    SyntaxRepeatSeparator::RuleRef(name) => {
+                        let target = repr.syntax.rules.get(name).ok_or_else(|| {
+                            format!("repeat separator ref target {name:?} does not exist")
+                        })?;
+                        render_separator_parser(repr, target)?
+                    }
+                };
+                format!("({inner}).separated_by({sep_parser}).allow_trailing().collect::<Vec<_>>()")
             } else {
                 format!("({inner}).repeated().collect::<Vec<_>>()")
             };
@@ -387,6 +404,9 @@ fn flatten_struct_rule_items(
     arena_infos: &[ArenaParserInfo],
 ) -> Result<Vec<SeqItem>, String> {
     match rule {
+        SyntaxRule::Semantic { inner, .. } => {
+            flatten_struct_rule_items(repr, inner, fields, rule_names, node_names, arena_infos)
+        }
         SyntaxRule::Seq(items) => {
             let mut out = Vec::new();
             for item in items {
@@ -443,6 +463,15 @@ fn flatten_struct_rule_items(
             }])
         }
         SyntaxRule::Literal(text) => Ok(vec![SeqItem::Ignore(format!("just({text:?}).padded()"))]),
+        SyntaxRule::Tag(text) => Ok(vec![SeqItem::Ignore(format!("just({text:?}).padded()"))]),
+        SyntaxRule::Ref { name } => Ok(vec![SeqItem::Ignore(format!(
+            "({}).map(|_| ())",
+            format!("{}_parser.clone()", snake_case(name))
+        ))]),
+        SyntaxRule::Token { name } => Ok(vec![SeqItem::Ignore(format!(
+            "{}().then_ignore(ws()).to(())",
+            token_parser_fn_name(name)
+        ))]),
         _ => Err(format!("unsupported struct rule shape: {rule:?}")),
     }
 }
@@ -530,6 +559,15 @@ fn render_scalar_support_rule_expr(
     };
 
     match rule {
+        SyntaxRule::Semantic { inner, .. } => render_scalar_support_rule_expr(
+            repr,
+            support_name,
+            decl,
+            inner,
+            rule_names,
+            node_names,
+            arena_infos,
+        ),
         SyntaxRule::Token { .. }
         | SyntaxRule::Ref { .. }
         | SyntaxRule::Optional { .. }
@@ -555,6 +593,9 @@ fn render_scalar_support_rule_expr(
             for item in items {
                 match item {
                     SyntaxRule::Literal(text) => {
+                        items_out.push(SeqItem::Ignore(format!("just({text:?}).padded()")));
+                    }
+                    SyntaxRule::Tag(text) => {
                         items_out.push(SeqItem::Ignore(format!("just({text:?}).padded()")));
                     }
                     SyntaxRule::Field(named) if named.name == expected_field => {
@@ -941,6 +982,85 @@ fn render_rule_parser_expr(
     }
 }
 
+fn render_syntax_only_rule_parser_expr(
+    repr: &NormalizedRepr,
+    rule: &SyntaxRule,
+) -> Result<String, String> {
+    fn render_sep_expr(
+        repr: &NormalizedRepr,
+        sep: &SyntaxRepeatSeparator,
+    ) -> Result<String, String> {
+        match sep {
+            SyntaxRepeatSeparator::Literal(text) => Ok(format!("just({text:?}).padded()")),
+            SyntaxRepeatSeparator::RuleRef(name) => {
+                let target = repr
+                    .syntax
+                    .rules
+                    .get(name)
+                    .ok_or_else(|| format!("repeat separator rule {name:?} does not exist"))?;
+                render_syntax_only_rule_parser_expr(repr, target)
+            }
+        }
+    }
+
+    match rule {
+        SyntaxRule::Semantic { inner, .. } => render_syntax_only_rule_parser_expr(repr, inner),
+        SyntaxRule::Tag(text) | SyntaxRule::Literal(text) => {
+            Ok(format!("just({text:?}).padded().to(()).boxed()"))
+        }
+        SyntaxRule::Token { name } => Ok(format!(
+            "{}().then_ignore(ws()).to(()).boxed()",
+            token_parser_fn_name(name)
+        )),
+        SyntaxRule::Ref { name } => Ok(format!(
+            "{}_parser.clone().map(|_| ()).boxed()",
+            snake_case(name)
+        )),
+        SyntaxRule::Optional { inner } => {
+            let inner = render_syntax_only_rule_parser_expr(repr, inner)?;
+            Ok(format!("({inner}).or_not().to(()).boxed()"))
+        }
+        SyntaxRule::Repeat { item, sep } => {
+            let item_expr = render_syntax_only_rule_parser_expr(repr, item)?;
+            let repeated = if let Some(sep) = sep {
+                let sep_expr = render_sep_expr(repr, sep)?;
+                format!(
+                    "({item_expr}).separated_by({sep_expr}).allow_trailing().collect::<Vec<_>>()"
+                )
+            } else {
+                format!("({item_expr}).repeated().collect::<Vec<_>>()")
+            };
+            Ok(format!("({repeated}).to(()).boxed()"))
+        }
+        SyntaxRule::Seq(items) => {
+            let mut iter = items.iter();
+            let Some(first) = iter.next() else {
+                return Ok("empty().to(()).boxed()".to_owned());
+            };
+            let mut chain = render_syntax_only_rule_parser_expr(repr, first)?;
+            for item in iter {
+                let part = render_syntax_only_rule_parser_expr(repr, item)?;
+                chain = format!("({chain}).ignore_then({part})");
+            }
+            Ok(format!("({chain}).to(()).boxed()"))
+        }
+        SyntaxRule::Choice(items) => {
+            if items.is_empty() {
+                return Err("choice rule must have at least one item".to_owned());
+            }
+            let branches = items
+                .iter()
+                .map(|item| render_syntax_only_rule_parser_expr(repr, item))
+                .collect::<Result<Vec<_>, _>>()?
+                .join(", ");
+            Ok(format!("choice(({branches})).boxed()"))
+        }
+        SyntaxRule::Field(_) | SyntaxRule::Variant(_) => {
+            Err("syntax-only rules cannot contain @field or @variant".to_owned())
+        }
+    }
+}
+
 fn collect_rule_dependencies(
     rule: &SyntaxRule,
     rule_names: &HashSet<String>,
@@ -951,6 +1071,9 @@ fn collect_rule_dependencies(
             for item in items {
                 collect_rule_dependencies(item, rule_names, out);
             }
+        }
+        SyntaxRule::Semantic { inner, .. } => {
+            collect_rule_dependencies(inner, rule_names, out);
         }
         SyntaxRule::Field(named) | SyntaxRule::Variant(named) => {
             collect_rule_dependencies(named.inner.as_ref(), rule_names, out);
@@ -966,7 +1089,7 @@ fn collect_rule_dependencies(
         SyntaxRule::Repeat { item, .. } => {
             collect_rule_dependencies(item.as_ref(), rule_names, out);
         }
-        SyntaxRule::Token { .. } | SyntaxRule::Literal(_) => {}
+        SyntaxRule::Token { .. } | SyntaxRule::Tag(_) | SyntaxRule::Literal(_) => {}
     }
 }
 
@@ -1057,7 +1180,9 @@ fn render_token_parser_fn(token_name: &str, spec: &NormalizedTokenSpec) -> Resul
 fn extract_single_literal(rule: &SyntaxRule) -> Option<&str> {
     match rule {
         SyntaxRule::Literal(text) => Some(text.as_str()),
+        SyntaxRule::Tag(text) => Some(text.as_str()),
         SyntaxRule::Seq(items) if items.len() == 1 => extract_single_literal(&items[0]),
+        SyntaxRule::Semantic { inner, .. } => extract_single_literal(inner),
         _ => None,
     }
 }
@@ -1072,12 +1197,13 @@ fn collect_rule_refs(rule: &SyntaxRule, out: &mut HashSet<String>) {
                 collect_rule_refs(item, out);
             }
         }
+        SyntaxRule::Semantic { inner, .. } => collect_rule_refs(inner, out),
         SyntaxRule::Field(named) | SyntaxRule::Variant(named) => {
             collect_rule_refs(named.inner.as_ref(), out);
         }
         SyntaxRule::Optional { inner } => collect_rule_refs(inner, out),
         SyntaxRule::Repeat { item, .. } => collect_rule_refs(item, out),
-        SyntaxRule::Token { .. } | SyntaxRule::Literal(_) => {}
+        SyntaxRule::Token { .. } | SyntaxRule::Tag(_) | SyntaxRule::Literal(_) => {}
     }
 }
 
@@ -1115,18 +1241,21 @@ pub(crate) fn render_parser_block(
                     repr.support
                         .get(name)
                         .map(|decl| RuleTargetDecl::Support(&decl.value))
-                })
-                .ok_or_else(|| format!("missing type declaration for {name}"))?;
-            let parser_expr = render_rule_parser_expr(
-                repr,
-                name,
-                rule,
-                decl,
-                &rule_names,
-                node_names,
-                provenance_tag,
-                &arena_infos,
-            )?;
+                });
+            let parser_expr = if let Some(decl) = decl {
+                render_rule_parser_expr(
+                    repr,
+                    name,
+                    rule,
+                    decl,
+                    &rule_names,
+                    node_names,
+                    provenance_tag,
+                    &arena_infos,
+                )?
+            } else {
+                render_syntax_only_rule_parser_expr(repr, rule)?
+            };
             let parser_name = format!("{}_parser", snake_case(name));
             let binding_name = if name == root_name || referenced_rules.contains(name) {
                 parser_name.clone()
@@ -1372,4 +1501,20 @@ pub fn parse_{root_fn_suffix}_into_graph(
         root_handle_name = root_handle_name,
         root_fn_suffix = root_fn_suffix,
     ))
+}
+fn render_separator_parser(repr: &NormalizedRepr, rule: &SyntaxRule) -> Result<String, String> {
+    match rule {
+        SyntaxRule::Tag(text) | SyntaxRule::Literal(text) => Ok(format!("just({text:?}).padded()")),
+        SyntaxRule::Semantic { inner, .. } => render_separator_parser(repr, inner),
+        SyntaxRule::Ref { name } => {
+            let target =
+                repr.syntax.rules.get(name).ok_or_else(|| {
+                    format!("repeat separator ref target {name:?} does not exist")
+                })?;
+            render_separator_parser(repr, target)
+        }
+        other => Err(format!(
+            "repeat separator must resolve to @tag(\"...\") via optional @ref/@semantic wrapper, got {other:?}"
+        )),
+    }
 }

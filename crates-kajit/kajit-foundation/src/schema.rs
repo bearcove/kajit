@@ -71,7 +71,6 @@ pub(crate) struct ReprSyntax {
     pub(crate) tokens: HashMap<String, TokenExpr>,
     pub(crate) rules: HashMap<String, RuleExpr>,
     pub(crate) canonical_print: HashMap<String, String>,
-    pub(crate) semantic_tokens: Option<HashMap<String, String>>,
 }
 
 #[derive(Facet, Debug, Clone)]
@@ -96,6 +95,8 @@ pub(crate) enum TokenExpr {
 pub(crate) enum RuleExpr {
     Seq(Vec<RuleExpr>),
     Choice(Vec<RuleExpr>),
+    Semantic(Vec<RuleExpr>),
+    Tag(Vec<String>),
     Field(RuleNamed),
     Variant(RuleNamed),
     Ref(Vec<String>),
@@ -325,13 +326,6 @@ fn validate_repr_schema(schema: &PilotSchemaDocument, path: &Path) -> Result<Loa
     }
 
     for (rule_name, rule) in &repr.syntax.rules {
-        if !type_decl_exists(repr, rule_name) {
-            return Err(format!(
-                "expected {} syntax.rules.{rule_name} to have a matching type declaration",
-                path.display()
-            ));
-        }
-
         let mut refs = Vec::new();
         collect_rule_refs(rule, &mut refs);
         for target in refs {
@@ -373,23 +367,6 @@ fn validate_repr_schema(schema: &PilotSchemaDocument, path: &Path) -> Result<Loa
         }
     }
 
-    if let Some(semantic_tokens) = &repr.syntax.semantic_tokens {
-        for (target, kind) in semantic_tokens {
-            if kind.trim().is_empty() {
-                return Err(format!(
-                    "expected {} semantic_tokens.{target} to be non-empty",
-                    path.display()
-                ));
-            }
-            if !semantic_token_target_exists(repr, target) {
-                return Err(format!(
-                    "expected {} semantic_tokens.{target} to target a declared literal, field, or variant",
-                    path.display()
-                ));
-            }
-        }
-    }
-
     Ok(LoadedRepr {
         doc: schema.repr.doc.clone(),
         body: ReprBody {
@@ -406,7 +383,6 @@ fn validate_repr_schema(schema: &PilotSchemaDocument, path: &Path) -> Result<Loa
                 tokens: repr.syntax.tokens.clone(),
                 rules: repr.syntax.rules.clone(),
                 canonical_print: repr.syntax.canonical_print.clone(),
-                semantic_tokens: repr.syntax.semantic_tokens.clone(),
             },
             common: repr.common.clone(),
             support: repr.support.clone(),
@@ -427,17 +403,11 @@ pub(crate) fn rule_named_parts(named: &RuleNamed) -> (&str, &RuleExpr) {
     (named.0.0.as_str(), &named.0.1)
 }
 
-pub(crate) fn rule_literal_text(rule: &RuleExpr) -> Option<&str> {
-    match rule {
-        RuleExpr::Literal(Some(text)) => Some(text.as_str()),
-        _ => None,
-    }
-}
-
 fn collect_rule_refs<'a>(rule: &'a RuleExpr, out: &mut Vec<&'a str>) {
     match rule {
         RuleExpr::Seq(items)
         | RuleExpr::Choice(items)
+        | RuleExpr::Semantic(items)
         | RuleExpr::Optional(items)
         | RuleExpr::Repeat(items) => {
             for item in items {
@@ -448,7 +418,7 @@ fn collect_rule_refs<'a>(rule: &'a RuleExpr, out: &mut Vec<&'a str>) {
             collect_rule_refs(&named.0.1, out);
         }
         RuleExpr::Ref(names) => out.extend(names.iter().map(String::as_str)),
-        RuleExpr::Token(_) | RuleExpr::Literal(_) => {}
+        RuleExpr::Token(_) | RuleExpr::Tag(_) | RuleExpr::Literal(_) => {}
     }
 }
 
@@ -456,6 +426,7 @@ fn collect_rule_tokens<'a>(rule: &'a RuleExpr, out: &mut Vec<&'a str>) {
     match rule {
         RuleExpr::Seq(items)
         | RuleExpr::Choice(items)
+        | RuleExpr::Semantic(items)
         | RuleExpr::Optional(items)
         | RuleExpr::Repeat(items) => {
             for item in items {
@@ -466,7 +437,7 @@ fn collect_rule_tokens<'a>(rule: &'a RuleExpr, out: &mut Vec<&'a str>) {
             collect_rule_tokens(&named.0.1, out);
         }
         RuleExpr::Token(names) => out.extend(names.iter().map(String::as_str)),
-        RuleExpr::Ref(_) | RuleExpr::Literal(_) => {}
+        RuleExpr::Ref(_) | RuleExpr::Tag(_) | RuleExpr::Literal(_) => {}
     }
 }
 
@@ -516,79 +487,4 @@ fn type_decl_exists(repr: &ReprBody, target: &str) -> bool {
             .support
             .as_ref()
             .is_some_and(|support| support.keys().any(|name| documented_name(name) == target))
-}
-
-fn semantic_token_target_exists(repr: &ReprBody, target: &str) -> bool {
-    let Some(nodes) = &repr.nodes else {
-        return false;
-    };
-
-    if let Some(literal_text) = target.strip_prefix("literal.") {
-        return !literal_text.is_empty();
-    }
-
-    if let Some(path) = target.strip_prefix("field.") {
-        let parts = path.split('.').collect::<Vec<_>>();
-        return match parts.as_slice() {
-            [type_name, field_name] => nodes.iter().any(|(name, decl)| {
-                documented_name(name) == *type_name
-                    && match decl {
-                        NodeDecl::Node(fields)
-                        | NodeDecl::Struct(fields)
-                        | NodeDecl::Entity(fields)
-                        | NodeDecl::Slot(fields) => fields
-                            .fields
-                            .keys()
-                            .any(|field| documented_name(field) == *field_name),
-                        NodeDecl::Enum(_) | NodeDecl::Other { .. } => false,
-                    }
-            }),
-            [type_name, variant_name, field_name] => nodes.iter().any(|(name, decl)| {
-                documented_name(name) == *type_name
-                    && match decl {
-                        NodeDecl::Enum(variants) => {
-                            variants.variants.iter().any(|(variant, decl)| {
-                                documented_name(variant) == *variant_name
-                                    && match decl {
-                                        NodeDecl::Node(fields)
-                                        | NodeDecl::Struct(fields)
-                                        | NodeDecl::Entity(fields)
-                                        | NodeDecl::Slot(fields) => fields
-                                            .fields
-                                            .keys()
-                                            .any(|field| documented_name(field) == *field_name),
-                                        NodeDecl::Enum(_) | NodeDecl::Other { .. } => false,
-                                    }
-                            })
-                        }
-                        NodeDecl::Node(_)
-                        | NodeDecl::Struct(_)
-                        | NodeDecl::Entity(_)
-                        | NodeDecl::Slot(_)
-                        | NodeDecl::Other { .. } => false,
-                    }
-            }),
-            _ => false,
-        };
-    }
-
-    if let Some(path) = target.strip_prefix("variant.") {
-        let parts = path.split('.').collect::<Vec<_>>();
-        return match parts.as_slice() {
-            [type_name, variant_name] => nodes.iter().any(|(name, decl)| {
-                documented_name(name) == *type_name
-                    && matches!(
-                        decl,
-                        NodeDecl::Enum(variants)
-                            if variants
-                                .variants
-                                .keys()
-                                .any(|variant| documented_name(variant) == *variant_name)
-                    )
-            }),
-            _ => false,
-        };
-    }
-
-    false
 }

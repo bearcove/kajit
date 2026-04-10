@@ -486,65 +486,6 @@ repr @module{
             IntrinsicRef.Address "{value}"
         }
 
-        /// Semantic highlighting hints for the pilot subset.
-        semantic_tokens {
-            literal.cfg_program keyword
-            literal.cfg_func keyword
-            literal.block keyword
-            literal.inst keyword
-            literal.term keyword
-            literal.edge keyword
-            literal.return keyword
-            literal.branch keyword
-            literal.branch_if keyword
-            literal.branch_if_zero keyword
-            literal.jump_table keyword
-            literal.data_args keyword
-            literal.data_results keyword
-            literal.const keyword
-            literal.data_addr keyword
-            literal.extern_addr keyword
-            literal.copy keyword
-            literal.stack_alloc keyword
-            literal.store_addr keyword
-            literal.load_addr keyword
-            literal.write_slot keyword
-            literal.read_slot keyword
-            literal.call_intrinsic keyword
-            literal.call_pure keyword
-            literal.call_effect keyword
-            literal.call_lambda keyword
-
-            field.Program.vreg_count number
-            field.Program.slot_count number
-            field.Function.lambda_id number
-            field.Function.function_id number
-            field.Function.entry label
-            field.DataArgsLine.args variable
-            field.DataResultsLine.results variable
-            field.Block.id label
-            field.Block.term label
-            field.Edge.id label
-            field.Edge.from label
-            field.Edge.to label
-            field.Inst.id label
-            field.InstOp.Const.value number
-            field.InstOp.DataAddr.blob_id number
-            field.InstOp.CallLambda.target number
-            field.Terminator.Branch.edge label
-            field.Terminator.BranchIf.taken label
-            field.Terminator.BranchIf.fallthrough label
-            field.Terminator.BranchIfZero.taken label
-            field.Terminator.BranchIfZero.fallthrough label
-            field.Terminator.JumpTable.targets label
-            field.Terminator.JumpTable.default label
-            field.EdgeArg.Identity.vreg variable
-            field.EdgeArg.Mapped.target variable
-            field.EdgeArg.Mapped.source variable
-            field.ConstRef.Value.value number
-            field.IntrinsicRef.Address.value number
-            field.Operand.vreg variable
-        }
     }
 
     /// Shared scalar-ish building blocks reused by multiple nodes.

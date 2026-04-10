@@ -43,45 +43,57 @@ repr @module{
 
         /// Grammar rules for the currently supported pilot subset.
         rules {
+            ModuleKw @semantic(keyword @tag("module"))
+            FnKw @semantic(keyword @tag("fn"))
+            ReturnKw @semantic(keyword @tag("return"))
+            CallKw @semantic(keyword @tag("call"))
+            LBrace @semantic(operator @tag("{"))
+            RBrace @semantic(operator @tag("}"))
+            LParen @semantic(operator @tag("("))
+            RParen @semantic(operator @tag(")"))
+            Comma @semantic(operator @tag(","))
+            Colon @semantic(operator @tag(":"))
+            Arrow @semantic(operator @tag("->"))
+
             /// A module with a flat list of functions.
             Module @seq(
-                "module"
-                "{"
+                @ref(ModuleKw)
+                @ref(LBrace)
                 @field(functions @repeat(@ref(Function)))
-                "}"
+                @ref(RBrace)
             )
 
             /// A function signature plus structured body.
             Function @seq(
-                "fn"
-                @field(name @token(ident))
-                "("
-                @field(params @repeat(@ref(Param) {sep ","}))
-                ")"
-                "->"
-                @field(return_type @token(ident))
+                @ref(FnKw)
+                @semantic(function @field(name @token(ident)))
+                @ref(LParen)
+                @field(params @repeat(@ref(Param) {sep Comma}))
+                @ref(RParen)
+                @ref(Arrow)
+                @semantic(type @field(return_type @token(ident)))
                 @field(body @ref(Block))
             )
 
             /// A single function parameter.
             Param @seq(
-                @field(name @token(ident))
-                ":"
-                @field(ty @token(ident))
+                @semantic(parameter @field(name @token(ident)))
+                @ref(Colon)
+                @semantic(type @field(ty @token(ident)))
             )
 
             /// A braced statement block.
             Block @seq(
-                "{"
+                @ref(LBrace)
                 @field(statements @repeat(@ref(Stmt)))
-                "}"
+                @ref(RBrace)
             )
 
             /// Statement forms supported by the pilot parser.
             Stmt @choice(
                 /// A return statement with an optional value.
                 @variant(Return @seq(
-                    "return"
+                    @ref(ReturnKw)
                     @field(value @optional(@ref(Expr)))
                 ))
                 /// A bare expression used as a statement.
@@ -94,16 +106,16 @@ repr @module{
             Expr @choice(
                 /// A symbolic function call.
                 @variant(Call @seq(
-                    "call"
-                    @field(callee @token(symbol))
-                    "("
-                    @field(args @repeat(@ref(Expr) {sep ","}))
-                    ")"
+                    @ref(CallKw)
+                    @semantic(function @field(callee @token(symbol)))
+                    @ref(LParen)
+                    @field(args @repeat(@ref(Expr) {sep Comma}))
+                    @ref(RParen)
                 ))
                 /// A local value reference.
-                @variant(Local @field(name @token(ident)))
+                @variant(Local @semantic(variable @field(name @token(ident))))
                 /// A decimal integer literal.
-                @variant(Literal @field(value @token(int)))
+                @variant(Literal @semantic(number @field(value @token(int))))
             )
         }
 
@@ -129,23 +141,6 @@ repr @module{
             Expr.Call "call {callee}({args:, })"
         }
 
-        semantic_tokens {
-            literal.module keyword
-            literal.fn keyword
-            literal.return keyword
-            literal.call keyword
-
-            field.Function.name function
-            field.Function.return_type type
-            field.Param.name parameter
-            field.Param.ty type
-            field.Local.name variable
-            field.Local.ty type
-            field.TypeDef.name type
-            field.Expr.Call.callee function
-            field.Expr.Local.name variable
-            field.Expr.Literal.value number
-        }
     }
 
     /// Shared scalar-ish building blocks reused by multiple nodes.

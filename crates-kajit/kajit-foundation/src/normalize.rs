@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::schema::{
     NodeDecl, NodeFields, ReprBody, RuleExpr, SupportDecl, SupportVariantDecl, TypeUse,
-    documented_doc, documented_name, rule_literal_text, rule_named_parts,
+    documented_doc, documented_name, rule_named_parts,
 };
 
 #[derive(Debug, Clone)]
@@ -15,6 +15,11 @@ pub(crate) struct SyntaxRuleNamed {
 pub(crate) enum SyntaxRule {
     Seq(Vec<SyntaxRule>),
     Choice(Vec<SyntaxRule>),
+    Semantic {
+        kind: String,
+        inner: Box<SyntaxRule>,
+    },
+    Tag(String),
     Field(SyntaxRuleNamed),
     Variant(SyntaxRuleNamed),
     Ref {
@@ -28,9 +33,15 @@ pub(crate) enum SyntaxRule {
     },
     Repeat {
         item: Box<SyntaxRule>,
-        sep: Option<String>,
+        sep: Option<SyntaxRepeatSeparator>,
     },
     Literal(String),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum SyntaxRepeatSeparator {
+    Literal(String),
+    RuleRef(String),
 }
 
 #[derive(Debug, Clone)]
@@ -243,6 +254,24 @@ pub(crate) fn normalize_rule(rule: &RuleExpr) -> Result<SyntaxRule, String> {
                 .map(normalize_rule)
                 .collect::<Result<Vec<_>, _>>()?,
         )),
+        RuleExpr::Semantic(items) if items.len() == 2 => {
+            let kind = match &items[0] {
+                RuleExpr::Literal(Some(text)) if !text.trim().is_empty() => text.clone(),
+                _ => {
+                    return Err(
+                        "semantic rule kind must be a non-empty literal (for example keyword)"
+                            .to_owned(),
+                    );
+                }
+            };
+            Ok(SyntaxRule::Semantic {
+                kind,
+                inner: Box::new(normalize_rule(&items[1])?),
+            })
+        }
+        RuleExpr::Tag(items) if items.len() == 1 && !items[0].trim().is_empty() => {
+            Ok(SyntaxRule::Tag(items[0].clone()))
+        }
         RuleExpr::Field(named) => {
             let (name, inner) = rule_named_parts(named);
             Ok(SyntaxRule::Field(SyntaxRuleNamed {
@@ -268,7 +297,27 @@ pub(crate) fn normalize_rule(rule: &RuleExpr) -> Result<SyntaxRule, String> {
         }),
         RuleExpr::Repeat(items) if !items.is_empty() => {
             let sep = if items.len() >= 2 {
-                rule_literal_text(&items[1]).map(str::to_owned)
+                match &items[1] {
+                    RuleExpr::Literal(Some(text))
+                        if !text.is_empty()
+                            && text
+                                .chars()
+                                .all(|ch| ch == '_' || ch.is_ascii_alphanumeric()) =>
+                    {
+                        Some(SyntaxRepeatSeparator::RuleRef(text.clone()))
+                    }
+                    RuleExpr::Literal(Some(text)) => {
+                        Some(SyntaxRepeatSeparator::Literal(text.clone()))
+                    }
+                    RuleExpr::Ref(names) if names.len() == 1 => {
+                        Some(SyntaxRepeatSeparator::RuleRef(names[0].clone()))
+                    }
+                    _ => {
+                        return Err(
+                            "repeat separator must be a literal token text or rule name".to_owned()
+                        );
+                    }
+                }
             } else {
                 None
             };
@@ -280,9 +329,69 @@ pub(crate) fn normalize_rule(rule: &RuleExpr) -> Result<SyntaxRule, String> {
         RuleExpr::Literal(Some(text)) => Ok(SyntaxRule::Literal(text.clone())),
         RuleExpr::Ref(_) => Err("ref rule must have exactly one target".to_owned()),
         RuleExpr::Token(_) => Err("token rule must have exactly one token name".to_owned()),
+        RuleExpr::Semantic(_) => {
+            Err("semantic rule must have exactly kind and wrapped rule".to_owned())
+        }
+        RuleExpr::Tag(_) => Err("tag rule must have exactly one non-empty literal".to_owned()),
         RuleExpr::Optional(_) => Err("optional rule must have exactly one item".to_owned()),
         RuleExpr::Repeat(_) => Err("repeat rule must have at least one item".to_owned()),
         RuleExpr::Literal(None) => Err("literal rule missing text".to_owned()),
+    }
+}
+
+fn collect_inline_semantic_tokens(
+    out: &mut HashMap<String, String>,
+    type_name: &str,
+    variant_name: Option<&str>,
+    rule: &SyntaxRule,
+    active_kind: Option<&str>,
+) {
+    match rule {
+        SyntaxRule::Semantic { kind, inner } => {
+            collect_inline_semantic_tokens(out, type_name, variant_name, inner, Some(kind));
+        }
+        SyntaxRule::Tag(text) | SyntaxRule::Literal(text) => {
+            if let Some(kind) = active_kind {
+                out.insert(format!("literal.{text}"), kind.to_owned());
+            }
+        }
+        SyntaxRule::Field(named) => {
+            if let Some(kind) = active_kind {
+                let target = match variant_name {
+                    Some(variant) => format!("field.{type_name}.{variant}.{}", named.name),
+                    None => format!("field.{type_name}.{}", named.name),
+                };
+                out.insert(target, kind.to_owned());
+            }
+            collect_inline_semantic_tokens(out, type_name, variant_name, &named.inner, active_kind);
+        }
+        SyntaxRule::Variant(named) => {
+            if let Some(kind) = active_kind {
+                out.insert(
+                    format!("variant.{type_name}.{}", named.name),
+                    kind.to_owned(),
+                );
+            }
+            collect_inline_semantic_tokens(
+                out,
+                type_name,
+                Some(&named.name),
+                &named.inner,
+                active_kind,
+            );
+        }
+        SyntaxRule::Seq(items) | SyntaxRule::Choice(items) => {
+            for item in items {
+                collect_inline_semantic_tokens(out, type_name, variant_name, item, active_kind);
+            }
+        }
+        SyntaxRule::Optional { inner } => {
+            collect_inline_semantic_tokens(out, type_name, variant_name, inner, active_kind);
+        }
+        SyntaxRule::Repeat { item, .. } => {
+            collect_inline_semantic_tokens(out, type_name, variant_name, item, active_kind);
+        }
+        SyntaxRule::Ref { .. } | SyntaxRule::Token { .. } => {}
     }
 }
 
@@ -390,6 +499,19 @@ pub(crate) fn normalize_repr(repr: &ReprBody) -> Result<NormalizedRepr, String> 
         .map(|(name, rule)| Ok((name.clone(), normalize_rule(rule)?)))
         .collect::<Result<HashMap<_, _>, String>>()?;
 
+    let mut semantic_tokens = HashMap::new();
+    let mut rule_names = rules.keys().cloned().collect::<Vec<_>>();
+    rule_names.sort();
+    for rule_name in rule_names {
+        collect_inline_semantic_tokens(
+            &mut semantic_tokens,
+            &rule_name,
+            None,
+            &rules[&rule_name],
+            None,
+        );
+    }
+
     for (name, decl) in &mut support {
         let NormalizedSupportDecl::Enum(variants) = &mut decl.value else {
             continue;
@@ -468,7 +590,7 @@ pub(crate) fn normalize_repr(repr: &ReprBody) -> Result<NormalizedRepr, String> 
             token_specs,
             rules,
             canonical_print: repr.syntax.canonical_print.clone(),
-            semantic_tokens: repr.syntax.semantic_tokens.clone().unwrap_or_default(),
+            semantic_tokens,
         },
         common,
         support,

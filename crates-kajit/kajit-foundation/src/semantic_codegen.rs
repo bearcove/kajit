@@ -38,7 +38,7 @@ fn collect_annotated_literals(
     out: &mut Vec<(String, String)>,
 ) {
     match rule {
-        SyntaxRule::Literal(text) => {
+        SyntaxRule::Tag(text) | SyntaxRule::Literal(text) => {
             let key = format!("literal.{text}");
             if let Some(kind) = semantic_tokens.get(&key) {
                 out.push((text.clone(), kind.clone()));
@@ -48,6 +48,9 @@ fn collect_annotated_literals(
             for item in items {
                 collect_annotated_literals(item, semantic_tokens, out);
             }
+        }
+        SyntaxRule::Semantic { inner, .. } => {
+            collect_annotated_literals(inner, semantic_tokens, out);
         }
         SyntaxRule::Field(named) | SyntaxRule::Variant(named) => {
             collect_annotated_literals(named.inner.as_ref(), semantic_tokens, out);

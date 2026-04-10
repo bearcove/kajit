@@ -272,51 +272,6 @@ repr @module{
             X64Item.Jmp "{op} {target}"
         }
 
-        semantic_tokens {
-            field.Program.AArch64.keyword keyword
-            field.Program.AArch64.dialect keyword
-            field.Program.X86_64.keyword keyword
-            field.Program.X86_64.dialect keyword
-
-            field.A64Item.Ret.op keyword
-            field.A64Item.Nop.op keyword
-            field.A64Item.Movz.op keyword
-            field.A64Item.Mov.op keyword
-            field.A64Item.AddImm.op keyword
-            field.A64Item.AddReg.op keyword
-            field.A64Item.SubReg.op keyword
-            field.A64Item.B.op keyword
-
-            field.X64Item.Ret.op keyword
-            field.X64Item.Nop.op keyword
-            field.X64Item.MovImm.op keyword
-            field.X64Item.MovReg.op keyword
-            field.X64Item.AddImm.op keyword
-            field.X64Item.AddReg.op keyword
-            field.X64Item.SubReg.op keyword
-            field.X64Item.Jmp.op keyword
-
-            field.A64Item.Label.name label
-            field.A64Item.B.target label
-            field.A64Item.Movz.imm number
-            field.A64Item.AddImm.imm number
-            field.X64Item.Label.name label
-            field.X64Item.Jmp.target label
-            field.X64Item.MovImm.imm number
-            field.X64Item.AddImm.imm number
-
-            variant.A64Reg.X0 enumMember
-            variant.A64Reg.X1 enumMember
-            variant.A64Reg.X2 enumMember
-            variant.A64Reg.X3 enumMember
-            variant.A64Reg.Sp enumMember
-            variant.X64Reg.Rax enumMember
-            variant.X64Reg.Rbx enumMember
-            variant.X64Reg.Rcx enumMember
-            variant.X64Reg.Rdx enumMember
-            variant.X64Reg.Rsp enumMember
-            variant.X64Reg.Rbp enumMember
-        }
     }
 
     /// Shared scalar-ish building blocks reused by multiple nodes.
