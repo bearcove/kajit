@@ -7,25 +7,6 @@ file_ext .k-hir
 /// High-level purpose of this representation.
 description "Human-semantic structured IR; canonical print round-trip with required provenance."
 
-/// Hard conventions for this representation family.
-///
-/// These are fixed by foundation-crate policy and intentionally not
-/// parameterizable in-schema.
-conventions {
-    /// AST structure is derived from `rules` only.
-    ast_source rules
-    /// Every generated struct implicitly carries provenance.
-    implicit_struct_field "prov @Prov"
-    /// Variant structs are discovered from `Type.Variant @struct`.
-    enum_variants "dotted-variant-structs"
-    /// Fields are discovered from `{name @Type}` bindings in `syntax`.
-    field_source "syntax-bindings"
-    /// Leading doc comments (`///`) are captured by convention.
-    docs_capture "leading-triple-slash"
-    /// Docs are retained for top-level declarations only.
-    docs_on (Module TypeDef Function)
-}
-
 /// Grammar rules for the currently supported pilot subset.
 rules {
     keyword @group{
