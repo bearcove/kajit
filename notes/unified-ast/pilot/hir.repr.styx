@@ -7,6 +7,25 @@ file_ext .k-hir
 /// High-level purpose of this representation.
 description "Human-semantic structured IR; canonical print round-trip with required provenance."
 
+/// Hard conventions for this representation family.
+///
+/// These are fixed by foundation-crate policy and intentionally not
+/// parameterizable in-schema.
+conventions {
+    /// AST structure is derived from `rules` only.
+    ast_source rules
+    /// Every generated struct implicitly carries provenance.
+    implicit_struct_field "prov @Prov"
+    /// Variant structs are discovered from `Type.Variant @struct`.
+    enum_variants "dotted-variant-structs"
+    /// Fields are discovered from `{name @Type}` bindings in `syntax`.
+    field_source "syntax-bindings"
+    /// Leading doc comments (`///`) are captured by convention.
+    docs_capture "leading-triple-slash"
+    /// Docs are retained for top-level declarations only.
+    docs_on (Module TypeDef Function)
+}
+
 /// Grammar rules for the currently supported pilot subset.
 rules {
     keyword @group{
@@ -47,15 +66,15 @@ rules {
         TypeName {syntax @Ident}
     }
 
-    paramName @group{
+    parameter @group{
         ParamName {syntax @Ident}
     }
 
-    localName @group{
+    variable @group{
         LocalName {syntax @Ident}
     }
 
-    intLiteral @group{
+    number @group{
         IntLiteral {syntax @Int}
     }
 
@@ -148,252 +167,5 @@ rules {
     Expr.Literal @struct{
         syntax ({value @IntLiteral})
         format "{value}"
-    }
-}
-
-/// Shared scalar-ish building blocks reused by multiple nodes.
-common {
-    /// Node provenance payload.
-    provenance @Prov
-
-    /// Symbolic identifier payload.
-    symbol @Symbol
-
-    /// Free-form doc block payload collected from leading `///` comments,
-    /// including module-level doc comments before `module`.
-    docs @DocBlock
-}
-
-/// Semantic support types that are not themselves structural nodes.
-support {
-    /// A named type reference in HIR.
-    Type @string
-    /// A literal value in canonical HIR text.
-    Literal @int
-    /// A binary operator.
-    BinaryOp @enum{
-        /// Integer addition.
-        Add @unit
-        /// Integer subtraction.
-        Sub @unit
-    }
-    /// A generic parameter name.
-    GenericParam @string
-    /// The kind of local binding.
-    LocalKind @enum{
-        /// A named source-level local.
-        Local @unit
-        /// A compiler-introduced temporary.
-        Temp @unit
-    }
-    /// The kind of type definition.
-    TypeDefKind @enum{
-        /// A struct type definition.
-        Struct @unit
-        /// An enum type definition.
-        Enum @unit
-        /// A type alias definition.
-        Alias @unit
-    }
-}
-
-/// Structural AST nodes for the wider HIR surface.
-nodes {
-    /// The root HIR module.
-    Module @node{
-        /// Source provenance for the module.
-        prov @Prov
-        /// Optional module-level docs collected from leading `///`
-        /// comments before the `module` declaration.
-        docs @optional(@DocBlock)
-        /// Type definitions declared in the module.
-        type_defs @seq(@TypeDef)
-        /// Top-level functions declared in the module.
-        functions @seq(@Function)
-    }
-
-    /// A type definition declared at module scope.
-    TypeDef @node{
-        /// Source provenance for the definition.
-        prov @Prov
-        /// Optional docs attached to the definition.
-        docs @optional(@DocBlock)
-        /// Type definition name.
-        name @Symbol
-        /// Generic parameters introduced by the type definition.
-        params @seq(@GenericParam)
-        /// Kind of type definition.
-        kind @TypeDefKind
-    }
-
-    /// A lowered function body.
-    Function @node{
-        /// Source provenance for the function.
-        prov @Prov
-        /// Optional function docs.
-        docs @optional(@DocBlock)
-        /// Symbolic function name.
-        name @Symbol
-        /// Ordered function parameters.
-        params @seq(@Param)
-        /// Declared return type.
-        return_type @Type
-        /// Local bindings declared in the function.
-        locals @seq(@Local)
-        /// Structured function body.
-        body @Block
-    }
-
-    /// A function parameter.
-    Param @node{
-        /// Source provenance for the parameter.
-        prov @Prov
-        /// Parameter name.
-        name @Symbol
-        /// Parameter type.
-        ty @Type
-    }
-
-    /// A local binding introduced inside a function.
-    Local @node{
-        /// Source provenance for the local.
-        prov @Prov
-        /// Local name.
-        name @Symbol
-        /// Local type.
-        ty @Type
-        /// Classification of the local.
-        kind @LocalKind
-    }
-
-    /// A sequence of statements with shared provenance.
-    Block @node{
-        /// Source provenance for the block.
-        prov @Prov
-        /// Statements in execution order.
-        statements @seq(@Stmt)
-    }
-
-    /// A statement in structured HIR.
-    Stmt @enum{
-        /// Initialize a place for the first time.
-        Init @struct{
-            /// Source provenance for the statement.
-            prov @Prov
-            /// Destination place being initialized.
-            place @Place
-            /// Initial value expression.
-            value @Expr
-        }
-
-        /// Assign a new value to an existing place.
-        Assign @struct{
-            /// Source provenance for the statement.
-            prov @Prov
-            /// Destination place being assigned to.
-            place @Place
-            /// Value being assigned.
-            value @Expr
-        }
-
-        /// Evaluate an expression for its effects or result discard.
-        Expr @struct{
-            /// Source provenance for the statement.
-            prov @Prov
-            /// Expression to evaluate.
-            value @Expr
-        }
-
-        /// Structured conditional statement.
-        If @struct{
-            /// Source provenance for the conditional.
-            prov @Prov
-            /// Condition expression.
-            condition @Expr
-            /// Then-branch body.
-            then @Block
-            /// Optional else-branch body.
-            else @optional(@Block)
-        }
-
-        /// Return from the current function.
-        Return @struct{
-            /// Source provenance for the return.
-            prov @Prov
-            /// Optional returned expression.
-            value @optional(@Expr)
-        }
-    }
-
-    /// An expression in structured HIR.
-    Expr @enum{
-        /// Read a local value by name.
-        Local @struct{
-            /// Source provenance for the expression.
-            prov @Prov
-            /// Referenced local name.
-            name @Symbol
-        }
-
-        /// An inline literal.
-        Literal @struct{
-            /// Source provenance for the expression.
-            prov @Prov
-            /// Literal payload.
-            value @Literal
-        }
-
-        /// A symbolic call.
-        Call @struct{
-            /// Source provenance for the expression.
-            prov @Prov
-            /// Symbolic callee name.
-            callee @Symbol
-            /// Positional call arguments.
-            args @seq(@Expr)
-        }
-
-        /// Access a field of a base expression.
-        Field @struct{
-            /// Source provenance for the expression.
-            prov @Prov
-            /// Base value being projected from.
-            base @Expr
-            /// Selected field name.
-            field @Symbol
-        }
-
-        /// Apply a binary operator to two operands.
-        Binary @struct{
-            /// Source provenance for the expression.
-            prov @Prov
-            /// Operator being applied.
-            op @BinaryOp
-            /// Left-hand operand.
-            lhs @Expr
-            /// Right-hand operand.
-            rhs @Expr
-        }
-    }
-
-    /// A writeable place expression.
-    Place @enum{
-        /// A local storage location.
-        Local @struct{
-            /// Source provenance for the place.
-            prov @Prov
-            /// Local name referenced by the place.
-            name @Symbol
-        }
-
-        /// A field projection from another place.
-        Field @struct{
-            /// Source provenance for the place.
-            prov @Prov
-            /// Base place being projected from.
-            base @Place
-            /// Selected field name.
-            field @Symbol
-        }
     }
 }
