@@ -80,28 +80,29 @@ rules {
 
     /// A module with a flat list of functions.
     Module @struct{
-        syntax (
-            @ModuleKw
-            @LBrace
-            {functions @many(@Function)}
-            @RBrace
+        syntax @brace_block(
+            prefix (
+                @ModuleKw
+                @soft_space
+            )
+            body {functions @many(@Function @newline)}
         )
-        format "module {\n{functions}\n}"
     }
 
     /// A function signature plus structured body.
     Function @struct{
         syntax (
             @FnKw
+            @soft_space
             {name @FunctionName}
-            @LParen
-            {params @separated_by(@Param ",")}
-            @RParen
+            {params @paren_list(@Param ",")}
+            @soft_space
             @Arrow
+            @soft_space
             {return_type @TypeName}
+            @soft_space
             {body @Block}
         )
-        format "fn {name}({params:, }) -> {return_type} {body}"
     }
 
     /// A single function parameter.
@@ -109,19 +110,16 @@ rules {
         syntax (
             {name @ParamName}
             @Colon
+            @soft_space
             {ty @TypeName}
         )
-        format "{name}: {ty}"
     }
 
     /// A braced statement block.
     Block @struct{
-        syntax (
-            @LBrace
-            {statements @many(@Stmt)}
-            @RBrace
+        syntax @brace_block(
+            body {statements @many(@Stmt @newline)}
         )
-        format "{\n{statements}\n}"
     }
 
     /// Statement forms supported by the pilot parser.
@@ -131,15 +129,16 @@ rules {
     Stmt.Return @struct{
         syntax (
             @ReturnKw
-            @optional({value @Expr})
+            @optional(
+                @soft_space
+                {value @Expr}
+            )
         )
-        format "return{value? :  {value}}"
     }
 
     /// A bare expression used as a statement.
     Stmt.Expr @struct{
         syntax ({value @Expr})
-        format "{value}"
     }
 
     /// Expression forms supported by the pilot parser.
@@ -149,23 +148,19 @@ rules {
     Expr.Call @struct{
         syntax (
             @CallKw
+            @soft_space
             {callee @Callee}
-            @LParen
-            {args @separated_by(@Expr ",")}
-            @RParen
+            {args @paren_list(@Expr ",")}
         )
-        format "call {callee}({args:, })"
     }
 
     /// A local value reference.
     Expr.Local @struct{
         syntax ({name @LocalName})
-        format "{name}"
     }
 
     /// A decimal integer literal.
     Expr.Literal @struct{
         syntax ({value @IntLiteral})
-        format "{value}"
     }
 }
