@@ -5,31 +5,38 @@ use super::*;
 
 #[derive(Default)]
 struct ValidationContext {}
-fn validate_a64_item(
-    value: &A64Item,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_a64_item(value: &A64Item, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     match value {
-        A64Item::AddImm { imm, op, prov, rd, rn, .. } => {
+        A64Item::AddImm {
+            imm,
+            op,
+            prov,
+            rd,
+            rn,
+            ..
+        } => {
             validate_add_keyword(&op, ctx, errors);
             validate_a64_reg(&rd, ctx, errors);
             validate_a64_reg(&rn, ctx, errors);
         }
-        A64Item::B { op, prov, target, .. } => {
+        A64Item::B {
+            op, prov, target, ..
+        } => {
             validate_b_keyword(&op, ctx, errors);
         }
         A64Item::Label { name, prov, .. } => {
             let _ = (ctx, errors);
         }
-        A64Item::Mov { op, prov, rd, rm, .. } => {
+        A64Item::Mov {
+            op, prov, rd, rm, ..
+        } => {
             validate_mov_keyword(&op, ctx, errors);
             validate_a64_reg(&rd, ctx, errors);
             validate_a64_reg(&rm, ctx, errors);
         }
-        A64Item::Movz { imm, op, prov, rd, .. } => {
+        A64Item::Movz {
+            imm, op, prov, rd, ..
+        } => {
             validate_movz_keyword(&op, ctx, errors);
             validate_a64_reg(&rd, ctx, errors);
         }
@@ -41,13 +48,7 @@ fn validate_a64_item(
         }
     }
 }
-fn validate_a64_reg(
-    value: &A64Reg,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_a64_reg(value: &A64Reg, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     match value {
         A64Reg::Sp(_inner) => {
             let _ = (ctx, errors);
@@ -75,49 +76,19 @@ fn validate_a_arch64_dialect_keyword(
 ) {
     let _ = (value, ctx, errors);
 }
-fn validate_add_keyword(
-    value: &AddKeyword,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_add_keyword(value: &AddKeyword, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     let _ = (value, ctx, errors);
 }
-fn validate_asm_keyword(
-    value: &AsmKeyword,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_asm_keyword(value: &AsmKeyword, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     let _ = (value, ctx, errors);
 }
-fn validate_b_keyword(
-    value: &BKeyword,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_b_keyword(value: &BKeyword, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     let _ = (value, ctx, errors);
 }
-fn validate_jmp_keyword(
-    value: &JmpKeyword,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_jmp_keyword(value: &JmpKeyword, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     let _ = (value, ctx, errors);
 }
-fn validate_mov_keyword(
-    value: &MovKeyword,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_mov_keyword(value: &MovKeyword, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     let _ = (value, ctx, errors);
 }
 fn validate_movz_keyword(
@@ -129,24 +100,19 @@ fn validate_movz_keyword(
 ) {
     let _ = (value, ctx, errors);
 }
-fn validate_nop_keyword(
-    value: &NopKeyword,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_nop_keyword(value: &NopKeyword, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     let _ = (value, ctx, errors);
 }
-fn validate_program(
-    value: &Program,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_program(value: &Program, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     match value {
-        Program::AArch64 { dialect, docs, items, keyword, prov, .. } => {
+        Program::AArch64 {
+            dialect,
+            docs,
+            items,
+            keyword,
+            prov,
+            ..
+        } => {
             validate_a_arch64_dialect_keyword(&dialect, ctx, errors);
             if let Some(value) = docs.as_ref() {}
             for value in items.iter() {
@@ -154,7 +120,14 @@ fn validate_program(
             }
             validate_asm_keyword(&keyword, ctx, errors);
         }
-        Program::X86_64 { dialect, docs, items, keyword, prov, .. } => {
+        Program::X86_64 {
+            dialect,
+            docs,
+            items,
+            keyword,
+            prov,
+            ..
+        } => {
             validate_x86_64_dialect_keyword(&dialect, ctx, errors);
             if let Some(value) = docs.as_ref() {}
             for value in items.iter() {
@@ -164,38 +137,34 @@ fn validate_program(
         }
     }
 }
-fn validate_ret_keyword(
-    value: &RetKeyword,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_ret_keyword(value: &RetKeyword, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     let _ = (value, ctx, errors);
 }
-fn validate_x64_item(
-    value: &X64Item,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_x64_item(value: &X64Item, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     match value {
-        X64Item::AddImm { imm, op, prov, rd, .. } => {
+        X64Item::AddImm {
+            imm, op, prov, rd, ..
+        } => {
             validate_add_keyword(&op, ctx, errors);
             validate_x64_reg(&rd, ctx, errors);
         }
-        X64Item::Jmp { op, prov, target, .. } => {
+        X64Item::Jmp {
+            op, prov, target, ..
+        } => {
             validate_jmp_keyword(&op, ctx, errors);
         }
         X64Item::Label { name, prov, .. } => {
             let _ = (ctx, errors);
         }
-        X64Item::MovImm { imm, op, prov, rd, .. } => {
+        X64Item::MovImm {
+            imm, op, prov, rd, ..
+        } => {
             validate_mov_keyword(&op, ctx, errors);
             validate_x64_reg(&rd, ctx, errors);
         }
-        X64Item::MovReg { op, prov, rd, rm, .. } => {
+        X64Item::MovReg {
+            op, prov, rd, rm, ..
+        } => {
             validate_mov_keyword(&op, ctx, errors);
             validate_x64_reg(&rd, ctx, errors);
             validate_x64_reg(&rm, ctx, errors);
@@ -208,13 +177,7 @@ fn validate_x64_item(
         }
     }
 }
-fn validate_x64_reg(
-    value: &X64Reg,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_x64_reg(value: &X64Reg, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     match value {
         X64Reg::Rax(_inner) => {
             let _ = (ctx, errors);
@@ -249,7 +212,11 @@ pub fn validate_root(root: &Program) -> Result<(), String> {
     let mut ctx = ValidationContext::default();
     let mut errors = Vec::new();
     validate_program(root, &mut ctx, &mut errors);
-    if errors.is_empty() { Ok(()) } else { Err(errors.join("\n")) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("\n"))
+    }
 }
 pub fn validate_root_text(source: &str) -> Result<(), String> {
     let root = parse_root_text(source)?;

@@ -2,7 +2,6 @@
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TokenSpec {
-
     pub name: &'static str,
 
     pub kind: &'static str,
@@ -10,7 +9,6 @@ pub struct TokenSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuleSpec {
-
     pub name: &'static str,
 
     pub kind: &'static str,
@@ -18,7 +16,6 @@ pub struct RuleSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TypeUseSpec {
-
     pub name: &'static str,
 
     pub kind: &'static str,
@@ -26,7 +23,6 @@ pub struct TypeUseSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FieldSpec {
-
     pub owner: &'static str,
 
     pub field: &'static str,
@@ -36,7 +32,6 @@ pub struct FieldSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PoolSpec {
-
     pub owner: &'static str,
 
     pub field: &'static str,
@@ -48,7 +43,6 @@ pub struct PoolSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RefSpec {
-
     pub owner: &'static str,
 
     pub field: &'static str,
@@ -60,7 +54,6 @@ pub struct RefSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeSpec {
-
     pub name: &'static str,
 
     pub kind: &'static str,
@@ -68,7 +61,6 @@ pub struct NodeSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PrintSpec {
-
     pub name: &'static str,
 
     pub template: &'static str,
@@ -88,15 +80,10 @@ pub const REPR_PROVENANCE: &str = "required";
 
 pub static REPR_CANONICAL_IDENTITIES: &[&str] = &[
     "function-id",
-
     "block-id",
-
     "inst-id",
-
     "term-id",
-
     "edge-id",
-
     "vreg-id",
 ];
 

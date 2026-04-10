@@ -14,52 +14,51 @@ pub use kajit_types::{Prov, Span};
 /// The binary-op family used by the pilot text format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BinOpKind {
-
-    /// Integer subtraction.
+    /// Integer addition.
     #[default]
-    Sub,
+    Add,
 
     /// Bitwise AND.
     And,
 
-    /// Less-than-or-equal comparison.
-    CmpLe,
+    /// Logical right shift.
+    Shr,
 
     /// Greater-than-or-equal comparison.
     CmpGe,
 
-    /// Logical right shift.
-    Shr,
-
-    /// Bitwise OR.
-    Or,
-
-    /// Inequality comparison.
-    CmpNe,
+    /// Less-than comparison.
+    CmpLt,
 
     /// Greater-than comparison.
     CmpGt,
 
+    /// Bitwise OR.
+    Or,
+
     /// Arithmetic right shift.
     Sar,
+
+    /// Logical left shift.
+    Shl,
 
     /// Integer multiplication.
     Mul,
 
+    /// Integer subtraction.
+    Sub,
+
     /// Equality comparison.
     CmpEq,
 
-    /// Less-than comparison.
-    CmpLt,
+    /// Less-than-or-equal comparison.
+    CmpLe,
 
-    /// Integer addition.
-    Add,
+    /// Inequality comparison.
+    CmpNe,
 
     /// Bitwise XOR.
     Xor,
-
-    /// Logical left shift.
-    Shl,
 }
 
 /// An embedded data blob identifier.
@@ -91,16 +90,15 @@ impl BlockId {
 /// Named clobber groups printed after `!`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ClobberKind {
+    /// Caller-saved GPRs are clobbered.
+    #[default]
+    Gpr,
 
     /// Caller-saved SIMD registers are clobbered.
-    #[default]
     Simd,
 
     /// Both caller-saved GPR and SIMD registers are clobbered.
     Both,
-
-    /// Caller-saved GPRs are clobbered.
-    Gpr,
 }
 
 /// A control-flow edge identifier.
@@ -158,7 +156,6 @@ impl LambdaId {
 /// A plain non-negative integer literal/count.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Nat {
-
     pub prov: Prov,
 
     pub value: u64,
@@ -167,13 +164,12 @@ pub struct Nat {
 /// Required register class for an operand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RegClass {
+    /// General-purpose registers.
+    #[default]
+    Gpr,
 
     /// SIMD/vector registers.
-    #[default]
     Simd,
-
-    /// General-purpose registers.
-    Gpr,
 }
 
 /// A stack slot identifier.
@@ -205,7 +201,6 @@ impl StackAllocId {
 /// A bare symbolic identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Symbol {
-
     pub prov: Prov,
 
     pub text: String,
@@ -246,10 +241,9 @@ impl VReg {
 /// A scalar width used by loads, stores, and sign extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Width {
-
-    /// One byte.
+    /// Eight bytes.
     #[default]
-    W1,
+    W8,
 
     /// Two bytes.
     W2,
@@ -257,8 +251,8 @@ pub enum Width {
     /// Four bytes.
     W4,
 
-    /// Eight bytes.
-    W8,
+    /// One byte.
+    W1,
 }
 
 /// A live basic block.
@@ -267,7 +261,6 @@ pub enum Width {
 /// of the canonical text form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
-
     /// Optional docs attached to the block.
     pub docs: Option<DocBlock>,
 
@@ -298,7 +291,6 @@ impl EntityNode for Block {}
 /// A symbolic constant reference used by `const(...)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConstRef {
-
     /// A named constant.
     Named { name: Symbol, prov: Prov },
 
@@ -309,7 +301,6 @@ pub enum ConstRef {
 /// The `data_args` header line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataArgsLine {
-
     /// Data arguments available at the function entry.
     pub args: super::super::Order<VReg>,
 
@@ -325,7 +316,6 @@ impl SlotNode for DataArgsLine {}
 /// The `data_results` header line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataResultsLine {
-
     /// Optional docs attached to the line.
     pub docs: Option<DocBlock>,
 
@@ -341,7 +331,6 @@ impl SlotNode for DataResultsLine {}
 /// A control-flow edge between two blocks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Edge {
-
     /// Arguments passed along the edge.
     pub args: super::super::Order<EdgeArg>,
 
@@ -366,18 +355,20 @@ impl EntityNode for Edge {}
 /// A single edge-argument binding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EdgeArg {
-
     /// Identity mapping: the same vreg flows through unchanged.
     Identity { prov: Prov, vreg: VReg },
 
     /// Explicit source-to-target mapping for a successor parameter.
-    Mapped { prov: Prov, source: VReg, target: VReg },
+    Mapped {
+        prov: Prov,
+        source: VReg,
+        target: VReg,
+    },
 }
 
 /// A fixed-register constraint attached to an operand.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FixedReg {
-
     /// An ABI argument register.
     AbiArg { index: Nat, prov: Prov },
 
@@ -391,7 +382,6 @@ pub enum FixedReg {
 /// A lowered lambda/function in canonical CFG-MIR form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
-
     /// Live blocks in canonical order.
     pub blocks: super::super::Pool<Block>,
 
@@ -431,7 +421,6 @@ impl EntityNode for Function {}
 /// A single non-terminator instruction in CFG-MIR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Inst {
-
     /// Optional caller-saved clobber marker.
     pub clobbers: Option<ClobberKind>,
 
@@ -460,13 +449,11 @@ impl EntityNode for Inst {}
 /// Copy a value between virtual registers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Copy {
-
     pub prov: Prov,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstOp {
-
     /// Execute a binary arithmetic or comparison op.
     BinOp { op: BinOpKind, prov: Prov },
 
@@ -492,7 +479,10 @@ pub enum InstOp {
     DataAddr { blob_id: BlobId, prov: Prov },
 
     /// Load the address of an external symbol.
-    ExternAddr { prov: Prov, symbol: Box<IntrinsicRef> },
+    ExternAddr {
+        prov: Prov,
+        symbol: Box<IntrinsicRef>,
+    },
 
     /// Load a scalar value from memory.
     LoadFromAddr { prov: Prov, width: Width },
@@ -516,7 +506,6 @@ pub enum InstOp {
 /// A named or raw function-pointer reference used by call forms.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntrinsicRef {
-
     /// A raw address reference.
     Address { prov: Prov, value: Nat },
 
@@ -527,7 +516,6 @@ pub enum IntrinsicRef {
 /// A register operand used by an instruction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Operand {
-
     /// The required register class.
     pub class: RegClass,
 
@@ -546,7 +534,6 @@ impl SlotNode for Operand {}
 /// The root CFG-MIR program.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
-
     /// Optional program-level docs.
     pub docs: Option<DocBlock>,
 
@@ -566,12 +553,21 @@ pub struct Program {
 /// A block terminator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Terminator {
-
     /// Unconditional branch to a single edge.
-    Branch { edge: EdgeId, id: TermId, prov: Prov },
+    Branch {
+        edge: EdgeId,
+        id: TermId,
+        prov: Prov,
+    },
 
     /// Branch if the condition is nonzero.
-    BranchIf { cond: VReg, fallthrough: EdgeId, id: TermId, prov: Prov, taken: EdgeId },
+    BranchIf {
+        cond: VReg,
+        fallthrough: EdgeId,
+        id: TermId,
+        prov: Prov,
+        taken: EdgeId,
+    },
 
     /// Branch if the condition is zero.
     BranchIfZero {
@@ -598,7 +594,6 @@ pub enum Terminator {
 /// Unary-op payloads used by the pilot text format.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnaryOp {
-
     /// Sign-extend from a source width to 64 bits.
     SignExtend { from_width: Width, prov: Prov },
 }

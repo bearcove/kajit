@@ -16,7 +16,6 @@ impl std::fmt::Display for Program {
 }
 const INDENT_WIDTH: usize = 4;
 struct Writer {
-
     out: String,
 
     indent: usize,
@@ -62,7 +61,9 @@ pub fn format_a64_item(node: &A64Item) -> String {
 }
 fn write_a64_item(w: &mut Writer, node: &A64Item) {
     match node {
-        A64Item::AddImm { imm, op, rd, rn, .. } => {
+        A64Item::AddImm {
+            imm, op, rd, rn, ..
+        } => {
             write_add_keyword(w, &op);
             w.text(" ");
             write_a64_reg(w, &rd);
@@ -197,7 +198,12 @@ pub fn format_program(node: &Program) -> String {
 }
 fn write_program(w: &mut Writer, node: &Program) {
     match node {
-        Program::AArch64 { dialect, items, keyword, .. } => {
+        Program::AArch64 {
+            dialect,
+            items,
+            keyword,
+            ..
+        } => {
             write_asm_keyword(w, &keyword);
             w.text(" ");
             write_a_arch64_dialect_keyword(w, &dialect);
@@ -214,7 +220,12 @@ fn write_program(w: &mut Writer, node: &Program) {
             }
             w.text("\n}");
         }
-        Program::X86_64 { dialect, items, keyword, .. } => {
+        Program::X86_64 {
+            dialect,
+            items,
+            keyword,
+            ..
+        } => {
             write_asm_keyword(w, &keyword);
             w.text(" ");
             write_x86_64_dialect_keyword(w, &dialect);

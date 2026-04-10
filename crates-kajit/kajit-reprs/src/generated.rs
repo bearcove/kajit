@@ -4,7 +4,6 @@ use crate::{asm, hir, mir};
 
 #[derive(Clone, Copy)]
 pub struct ReprSpec {
-
     pub name: &'static str,
 
     pub file_ext: &'static str,
@@ -22,7 +21,6 @@ pub struct ReprSpec {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SemanticToken {
-
     pub start: u32,
 
     pub end: u32,
@@ -32,7 +30,6 @@ pub struct SemanticToken {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HoverEntry {
-
     pub start: u32,
 
     pub end: u32,
@@ -44,7 +41,6 @@ pub struct HoverEntry {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolKind {
-
     Function,
 
     Type,
@@ -54,7 +50,6 @@ pub enum SymbolKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolDef {
-
     pub name: String,
 
     pub kind: SymbolKind,
@@ -70,7 +65,6 @@ pub struct SymbolDef {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolRef {
-
     pub name: String,
 
     pub kind: SymbolKind,
@@ -82,7 +76,6 @@ pub struct SymbolRef {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedRef {
-
     pub reference: SymbolRef,
 
     pub target: Option<usize>,
@@ -90,7 +83,6 @@ pub struct ResolvedRef {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ResolutionSet {
-
     pub definitions: Vec<SymbolDef>,
 
     pub references: Vec<ResolvedRef>,

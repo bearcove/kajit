@@ -16,7 +16,6 @@ impl std::fmt::Display for Module {
 }
 const INDENT_WIDTH: usize = 4;
 struct Writer {
-
     out: String,
 
     indent: usize,

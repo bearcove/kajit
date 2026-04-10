@@ -121,7 +121,12 @@ pub fn walk_stmt<V: ?Sized + Visit>(v: &mut V, node: &Stmt) {
         Stmt::Expr { value, .. } => {
             v.visit_expr(value);
         }
-        Stmt::If { condition, r#else, then, .. } => {
+        Stmt::If {
+            condition,
+            r#else,
+            then,
+            ..
+        } => {
             v.visit_expr(condition);
             if let Some(value) = r#else {
                 v.visit_block(value);
@@ -199,7 +204,12 @@ pub fn walk_stmt_mut<V: ?Sized + VisitMut>(v: &mut V, node: &mut Stmt) {
         Stmt::Expr { value, .. } => {
             v.visit_expr_mut(value);
         }
-        Stmt::If { condition, r#else, then, .. } => {
+        Stmt::If {
+            condition,
+            r#else,
+            then,
+            ..
+        } => {
             v.visit_expr_mut(condition);
             if let Some(value) = r#else {
                 v.visit_block_mut(value);

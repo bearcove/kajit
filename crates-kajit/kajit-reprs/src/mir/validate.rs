@@ -5,7 +5,6 @@ use super::*;
 
 #[derive(Default)]
 struct ValidationContext {
-
     block_ids: Vec<std::collections::BTreeSet<BlockId>>,
 
     edge_ids: Vec<std::collections::BTreeSet<EdgeId>>,
@@ -41,55 +40,42 @@ fn validate_block(value: &Block, ctx: &mut ValidationContext, errors: &mut Vec<S
     if let Some(value) = value.docs.as_ref() {}
     for value in value.insts.iter() {
         if !ctx.inst_ids.iter().rev().any(|ids| ids.contains(&value)) {
-            errors
-                .push(
-                    format!(
-                        "Block.insts references {:?} but no live Inst pool in scope contains it",
-                        value
-                    ),
-                );
+            errors.push(format!(
+                "Block.insts references {:?} but no live Inst pool in scope contains it",
+                value
+            ));
         }
     }
     for value in value.params.iter() {}
     for value in value.preds.iter() {
         if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(&value)) {
-            errors
-                .push(
-                    format!(
-                        "Block.preds references {:?} but no live Edge pool in scope contains it",
-                        value
-                    ),
-                );
+            errors.push(format!(
+                "Block.preds references {:?} but no live Edge pool in scope contains it",
+                value
+            ));
         }
     }
     for value in value.succs.iter() {
         if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(&value)) {
-            errors
-                .push(
-                    format!(
-                        "Block.succs references {:?} but no live Edge pool in scope contains it",
-                        value
-                    ),
-                );
+            errors.push(format!(
+                "Block.succs references {:?} but no live Edge pool in scope contains it",
+                value
+            ));
         }
     }
-    if !ctx.terminator_ids.iter().rev().any(|ids| ids.contains(&value.term)) {
-        errors
-            .push(
-                format!(
-                    "Block.term references {:?} but no live Terminator pool in scope contains it",
-                    value.term
-                ),
-            );
+    if !ctx
+        .terminator_ids
+        .iter()
+        .rev()
+        .any(|ids| ids.contains(&value.term))
+    {
+        errors.push(format!(
+            "Block.term references {:?} but no live Terminator pool in scope contains it",
+            value.term
+        ));
     }
 }
-fn validate_const_ref(
-    value: &ConstRef,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_const_ref(value: &ConstRef, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     match value {
         ConstRef::Named { name, prov, .. } => {
             let _ = (ctx, errors);
@@ -124,48 +110,45 @@ fn validate_edge(value: &Edge, ctx: &mut ValidationContext, errors: &mut Vec<Str
         validate_edge_arg(&value, ctx, errors);
     }
     if let Some(value) = value.docs.as_ref() {}
-    if !ctx.block_ids.iter().rev().any(|ids| ids.contains(&value.from)) {
-        errors
-            .push(
-                format!(
-                    "Edge.from references {:?} but no live Block pool in scope contains it",
-                    value.from
-                ),
-            );
+    if !ctx
+        .block_ids
+        .iter()
+        .rev()
+        .any(|ids| ids.contains(&value.from))
+    {
+        errors.push(format!(
+            "Edge.from references {:?} but no live Block pool in scope contains it",
+            value.from
+        ));
     }
-    if !ctx.block_ids.iter().rev().any(|ids| ids.contains(&value.to)) {
-        errors
-            .push(
-                format!(
-                    "Edge.to references {:?} but no live Block pool in scope contains it",
-                    value.to
-                ),
-            );
+    if !ctx
+        .block_ids
+        .iter()
+        .rev()
+        .any(|ids| ids.contains(&value.to))
+    {
+        errors.push(format!(
+            "Edge.to references {:?} but no live Block pool in scope contains it",
+            value.to
+        ));
     }
 }
-fn validate_edge_arg(
-    value: &EdgeArg,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_edge_arg(value: &EdgeArg, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     match value {
         EdgeArg::Identity { prov, vreg, .. } => {
             let _ = (ctx, errors);
         }
-        EdgeArg::Mapped { prov, source, target, .. } => {
+        EdgeArg::Mapped {
+            prov,
+            source,
+            target,
+            ..
+        } => {
             let _ = (ctx, errors);
         }
     }
 }
-fn validate_fixed_reg(
-    value: &FixedReg,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_fixed_reg(value: &FixedReg, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     match value {
         FixedReg::AbiArg { index, prov, .. } => {
             let _ = (ctx, errors);
@@ -178,17 +161,15 @@ fn validate_fixed_reg(
         }
     }
 }
-fn validate_function(
-    value: &Function,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
-    ctx.block_ids.push(value.blocks.iter().map(key_of_block).collect());
-    ctx.edge_ids.push(value.edges.iter().map(key_of_edge).collect());
-    ctx.inst_ids.push(value.insts.iter().map(key_of_inst).collect());
-    ctx.terminator_ids.push(value.terms.iter().map(key_of_terminator).collect());
+fn validate_function(value: &Function, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+    ctx.block_ids
+        .push(value.blocks.iter().map(key_of_block).collect());
+    ctx.edge_ids
+        .push(value.edges.iter().map(key_of_edge).collect());
+    ctx.inst_ids
+        .push(value.insts.iter().map(key_of_inst).collect());
+    ctx.terminator_ids
+        .push(value.terms.iter().map(key_of_terminator).collect());
     for value in value.blocks.iter() {
         validate_block(&value, ctx, errors);
     }
@@ -198,14 +179,16 @@ fn validate_function(
     for value in value.edges.iter() {
         validate_edge(&value, ctx, errors);
     }
-    if !ctx.block_ids.iter().rev().any(|ids| ids.contains(&value.entry)) {
-        errors
-            .push(
-                format!(
-                    "Function.entry references {:?} but no live Block pool in scope contains it",
-                    value.entry
-                ),
-            );
+    if !ctx
+        .block_ids
+        .iter()
+        .rev()
+        .any(|ids| ids.contains(&value.entry))
+    {
+        errors.push(format!(
+            "Function.entry references {:?} but no live Block pool in scope contains it",
+            value.entry
+        ));
     }
     for value in value.insts.iter() {
         validate_inst(&value, ctx, errors);
@@ -233,13 +216,7 @@ fn validate_inst(value: &Inst, ctx: &mut ValidationContext, errors: &mut Vec<Str
         }
     }
 }
-fn validate_inst_op(
-    value: &InstOp,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_inst_op(value: &InstOp, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     match value {
         InstOp::BinOp { op, prov, .. } => {
             let _ = (ctx, errors);
@@ -304,38 +281,21 @@ fn validate_intrinsic_ref(
         }
     }
 }
-fn validate_operand(
-    value: &Operand,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_operand(value: &Operand, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     if let Some(value) = value.fixed.as_ref() {
         validate_fixed_reg(&value, ctx, errors);
     }
 }
-fn validate_program(
-    value: &Program,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
-    ctx.function_ids.push(value.functions.iter().map(key_of_function).collect());
+fn validate_program(value: &Program, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+    ctx.function_ids
+        .push(value.functions.iter().map(key_of_function).collect());
     if let Some(value) = value.docs.as_ref() {}
     for value in value.functions.iter() {
         validate_function(&value, ctx, errors);
     }
     ctx.function_ids.pop();
 }
-fn validate_terminator(
-    value: &Terminator,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_terminator(value: &Terminator, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     match value {
         Terminator::Branch { edge, id, prov, .. } => {
             if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(&edge)) {
@@ -348,8 +308,20 @@ fn validate_terminator(
                     );
             }
         }
-        Terminator::BranchIf { cond, fallthrough, id, prov, taken, .. } => {
-            if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(&fallthrough)) {
+        Terminator::BranchIf {
+            cond,
+            fallthrough,
+            id,
+            prov,
+            taken,
+            ..
+        } => {
+            if !ctx
+                .edge_ids
+                .iter()
+                .rev()
+                .any(|ids| ids.contains(&fallthrough))
+            {
                 errors
                     .push(
                         format!(
@@ -368,8 +340,20 @@ fn validate_terminator(
                     );
             }
         }
-        Terminator::BranchIfZero { cond, fallthrough, id, prov, taken, .. } => {
-            if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(&fallthrough)) {
+        Terminator::BranchIfZero {
+            cond,
+            fallthrough,
+            id,
+            prov,
+            taken,
+            ..
+        } => {
+            if !ctx
+                .edge_ids
+                .iter()
+                .rev()
+                .any(|ids| ids.contains(&fallthrough))
+            {
                 errors
                     .push(
                         format!(
@@ -388,7 +372,14 @@ fn validate_terminator(
                     );
             }
         }
-        Terminator::JumpTable { default, id, predicate, prov, targets, .. } => {
+        Terminator::JumpTable {
+            default,
+            id,
+            predicate,
+            prov,
+            targets,
+            ..
+        } => {
             if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(&default)) {
                 errors
                     .push(
@@ -415,15 +406,11 @@ fn validate_terminator(
         }
     }
 }
-fn validate_unary_op(
-    value: &UnaryOp,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_unary_op(value: &UnaryOp, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     match value {
-        UnaryOp::SignExtend { from_width, prov, .. } => {
+        UnaryOp::SignExtend {
+            from_width, prov, ..
+        } => {
             let _ = (ctx, errors);
         }
     }
@@ -432,7 +419,11 @@ pub fn validate_root(root: &Program) -> Result<(), String> {
     let mut ctx = ValidationContext::default();
     let mut errors = Vec::new();
     validate_program(root, &mut ctx, &mut errors);
-    if errors.is_empty() { Ok(()) } else { Err(errors.join("\n")) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("\n"))
+    }
 }
 pub fn validate_root_text(source: &str) -> Result<(), String> {
     let root = parse_root_text(source)?;

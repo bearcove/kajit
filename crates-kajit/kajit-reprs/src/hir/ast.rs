@@ -13,7 +13,6 @@ pub use kajit_types::{Prov, Span};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Symbol {
-
     pub prov: Prov,
 
     pub text: String,
@@ -28,19 +27,17 @@ impl Symbol {
 /// A binary operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BinaryOp {
+    /// Integer addition.
+    #[default]
+    Add,
 
     /// Integer subtraction.
-    #[default]
     Sub,
-
-    /// Integer addition.
-    Add,
 }
 
 /// A generic parameter name.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GenericParam {
-
     pub prov: Prov,
 
     pub text: String,
@@ -55,7 +52,6 @@ impl GenericParam {
 /// A literal value in canonical HIR text.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Literal {
-
     pub prov: Prov,
 
     pub value: u64,
@@ -64,7 +60,6 @@ pub struct Literal {
 /// The kind of local binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LocalKind {
-
     /// A compiler-introduced temporary.
     #[default]
     Temp,
@@ -76,7 +71,6 @@ pub enum LocalKind {
 /// A named type reference in HIR.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Type {
-
     pub prov: Prov,
 
     pub text: String,
@@ -91,22 +85,20 @@ impl Type {
 /// The kind of type definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TypeDefKind {
-
-    /// A struct type definition.
+    /// A type alias definition.
     #[default]
-    Struct,
+    Alias,
 
     /// An enum type definition.
     Enum,
 
-    /// A type alias definition.
-    Alias,
+    /// A struct type definition.
+    Struct,
 }
 
 /// A sequence of statements with shared provenance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
-
     /// Source provenance for the block.
     pub prov: Prov,
 
@@ -117,7 +109,6 @@ pub struct Block {
 /// An expression in structured HIR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
-
     /// Apply a binary operator to two operands.
     Binary {
         /// Left-hand operand.
@@ -179,7 +170,6 @@ pub enum Expr {
 /// A lowered function body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
-
     /// Structured function body.
     pub body: Box<Block>,
 
@@ -205,7 +195,6 @@ pub struct Function {
 /// A local binding introduced inside a function.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Local {
-
     /// Classification of the local.
     pub kind: LocalKind,
 
@@ -222,7 +211,6 @@ pub struct Local {
 /// The root HIR module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Module {
-
     /// Optional module-level docs collected from leading `///`
     /// comments before the `module` declaration.
     pub docs: Option<DocBlock>,
@@ -240,7 +228,6 @@ pub struct Module {
 /// A function parameter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Param {
-
     /// Parameter name.
     pub name: Symbol,
 
@@ -254,7 +241,6 @@ pub struct Param {
 /// A writeable place expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Place {
-
     /// A field projection from another place.
     Field {
         /// Base place being projected from.
@@ -280,7 +266,6 @@ pub enum Place {
 /// A statement in structured HIR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
-
     /// Assign a new value to an existing place.
     Assign {
         /// Destination place being assigned to.
@@ -342,7 +327,6 @@ pub enum Stmt {
 /// A type definition declared at module scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDef {
-
     /// Optional docs attached to the definition.
     pub docs: Option<DocBlock>,
 

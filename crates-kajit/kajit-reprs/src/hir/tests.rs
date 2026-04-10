@@ -7,10 +7,10 @@ fn parse_module_smoke() {
     assert_eq!(module.functions.len(), 1);
     assert_eq!(module.functions[0].name.text, "main");
     assert_eq!(module.functions[0].return_type.text, "Value");
-    assert!(
-        matches!(module.functions[0].body.statements.as_slice(), [Stmt::Return { value :
-        None, .. }])
-    );
+    assert!(matches!(
+        module.functions[0].body.statements.as_slice(),
+        [Stmt::Return { value: None, .. }]
+    ));
 }
 #[test]
 fn format_module_smoke() {
@@ -18,7 +18,8 @@ fn format_module_smoke() {
     let module = parse_root_text(text).unwrap();
     let formatted = format_root_text(&module);
     assert_eq!(
-        formatted, "module {\n    fn main() -> Value {\n        return\n    }\n}"
+        formatted,
+        "module {\n    fn main() -> Value {\n        return\n    }\n}"
     );
     let reparsed = parse_root_text(&formatted).unwrap();
     assert_eq!(reparsed, module);

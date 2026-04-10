@@ -222,16 +222,8 @@ pub fn walk_const_ref_mut<V: ?Sized + VisitMut>(v: &mut V, node: &mut ConstRef) 
         ConstRef::Value { .. } => {}
     }
 }
-pub fn walk_data_args_line_mut<V: ?Sized + VisitMut>(
-    _v: &mut V,
-
-    _node: &mut DataArgsLine,
-) {}
-pub fn walk_data_results_line_mut<V: ?Sized + VisitMut>(
-    _v: &mut V,
-
-    _node: &mut DataResultsLine,
-) {}
+pub fn walk_data_args_line_mut<V: ?Sized + VisitMut>(_v: &mut V, _node: &mut DataArgsLine) {}
+pub fn walk_data_results_line_mut<V: ?Sized + VisitMut>(_v: &mut V, _node: &mut DataResultsLine) {}
 pub fn walk_edge_mut<V: ?Sized + VisitMut>(v: &mut V, node: &mut Edge) {
     for value in node.args.iter_mut() {
         v.visit_edge_arg_mut(value);

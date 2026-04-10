@@ -14,7 +14,6 @@ pub use kajit_types::{Prov, Span};
 /// A decimal immediate value in canonical ASM text.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Imm {
-
     pub prov: Prov,
 
     pub value: u64,
@@ -23,7 +22,6 @@ pub struct Imm {
 /// A symbolic label name.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LabelName {
-
     pub prov: Prov,
 
     pub text: String,
@@ -38,7 +36,6 @@ impl LabelName {
 /// AArch64 labels and instructions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum A64Item {
-
     /// Add an immediate to a register.
     AddImm {
         /// Immediate value.
@@ -131,41 +128,35 @@ pub enum A64Item {
 /// Stack pointer register.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sp {
-
     pub prov: Prov,
 }
 
 /// General-purpose register x0.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct X0 {
-
     pub prov: Prov,
 }
 
 /// General-purpose register x1.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct X1 {
-
     pub prov: Prov,
 }
 
 /// General-purpose register x2.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct X2 {
-
     pub prov: Prov,
 }
 
 /// General-purpose register x3.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct X3 {
-
     pub prov: Prov,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum A64Reg {
-
     /// Stack pointer register.
     Sp(Sp),
 
@@ -185,63 +176,54 @@ pub enum A64Reg {
 /// The AArch64 dialect tag in the header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AArch64DialectKeyword {
-
     pub prov: Prov,
 }
 
 /// Add an operand to a destination register.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddKeyword {
-
     pub prov: Prov,
 }
 
 /// The fixed leading keyword in an ASM document header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AsmKeyword {
-
     pub prov: Prov,
 }
 
 /// Branch to a label in AArch64.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BKeyword {
-
     pub prov: Prov,
 }
 
 /// Jump to a label in x86-64.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JmpKeyword {
-
     pub prov: Prov,
 }
 
 /// Move data between registers or operands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MovKeyword {
-
     pub prov: Prov,
 }
 
 /// Move a zero-extended immediate into a register.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MovzKeyword {
-
     pub prov: Prov,
 }
 
 /// Perform no operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NopKeyword {
-
     pub prov: Prov,
 }
 
 /// The root ASM program, with an explicit in-file dialect.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Program {
-
     /// An AArch64 assembly unit.
     AArch64 {
         /// Dialect tag from the header.
@@ -282,14 +264,12 @@ pub enum Program {
 /// Return from the current function.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetKeyword {
-
     pub prov: Prov,
 }
 
 /// x86-64 labels and instructions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum X64Item {
-
     /// Add an immediate to a register.
     AddImm {
         /// Immediate value.
@@ -379,48 +359,41 @@ pub enum X64Item {
 /// Return-value and accumulator register.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rax {
-
     pub prov: Prov,
 }
 
 /// Base/frame pointer register.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rbp {
-
     pub prov: Prov,
 }
 
 /// Callee-saved general-purpose register.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rbx {
-
     pub prov: Prov,
 }
 
 /// Count register.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rcx {
-
     pub prov: Prov,
 }
 
 /// Data register.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rdx {
-
     pub prov: Prov,
 }
 
 /// Stack pointer register.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rsp {
-
     pub prov: Prov,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum X64Reg {
-
     /// Return-value and accumulator register.
     Rax(Rax),
 
@@ -443,6 +416,5 @@ pub enum X64Reg {
 /// The x86-64 dialect tag in the header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct X86_64DialectKeyword {
-
     pub prov: Prov,
 }

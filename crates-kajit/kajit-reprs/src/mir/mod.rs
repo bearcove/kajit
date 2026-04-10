@@ -8,6 +8,7 @@ pub mod parse;
 pub mod provenance;
 pub mod resolve;
 pub mod semantic;
+pub mod storage;
 pub mod validate;
 pub mod visit;
 
@@ -26,6 +27,8 @@ pub use provenance::*;
 pub use resolve::*;
 
 pub use semantic::*;
+
+pub use storage::*;
 
 pub use validate::*;
 

@@ -29,7 +29,7 @@ pub(crate) fn render_repr_poc_files(reprs: &[NormalizedRepr]) -> Vec<GeneratedMo
         files.extend([
             GeneratedModuleFile {
                 relative_path: format!("{module_dir}/mod.rs"),
-                contents: render_repr_mod_file(repr.name == "HIR"),
+                contents: render_repr_mod_file(repr.name == "HIR", repr.name == "MIR"),
             },
             GeneratedModuleFile {
                 relative_path: format!("{module_dir}/meta.rs"),
@@ -1353,11 +1353,21 @@ pub static REPRS: &[ReprSpec] = &[
     ))
 }
 
-fn render_repr_mod_file(include_tests: bool) -> String {
+fn render_repr_mod_file(include_tests: bool, include_storage: bool) -> String {
     let tests_row = if include_tests {
         "\n#[cfg(test)]\nmod tests;\n"
     } else {
         "\n"
+    };
+    let storage_mod_row = if include_storage {
+        "pub mod storage;\n"
+    } else {
+        ""
+    };
+    let storage_use_row = if include_storage {
+        "pub use storage::*;\n"
+    } else {
+        ""
     };
     format_generated_file(format!(
         r#"
@@ -1369,6 +1379,7 @@ pub mod parse;
 pub mod provenance;
 pub mod resolve;
 pub mod semantic;
+{storage_mod_row}
 pub mod validate;
 pub mod visit;
 
@@ -1380,6 +1391,7 @@ pub use parse::*;
 pub use provenance::*;
 pub use resolve::*;
 pub use semantic::*;
+{storage_use_row}
 pub use validate::*;
 pub use visit::*;
 {tests_row}"#

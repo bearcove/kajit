@@ -12,16 +12,22 @@ fn validate_block(value: &Block, ctx: &mut ValidationContext, errors: &mut Vec<S
 }
 fn validate_expr(value: &Expr, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     match value {
-        Expr::Binary { lhs, op, prov, rhs, .. } => {
+        Expr::Binary {
+            lhs, op, prov, rhs, ..
+        } => {
             validate_expr(&lhs, ctx, errors);
             validate_expr(&rhs, ctx, errors);
         }
-        Expr::Call { args, callee, prov, .. } => {
+        Expr::Call {
+            args, callee, prov, ..
+        } => {
             for value in args.iter() {
                 validate_expr(&value, ctx, errors);
             }
         }
-        Expr::Field { base, field, prov, .. } => {
+        Expr::Field {
+            base, field, prov, ..
+        } => {
             validate_expr(&base, ctx, errors);
         }
         Expr::Literal { prov, value, .. } => {
@@ -32,13 +38,7 @@ fn validate_expr(value: &Expr, ctx: &mut ValidationContext, errors: &mut Vec<Str
         }
     }
 }
-fn validate_function(
-    value: &Function,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_function(value: &Function, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     validate_block(&value.body, ctx, errors);
     if let Some(value) = value.docs.as_ref() {}
     for value in value.locals.iter() {
@@ -51,13 +51,7 @@ fn validate_function(
 fn validate_local(value: &Local, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     let _ = (value, ctx, errors);
 }
-fn validate_module(
-    value: &Module,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_module(value: &Module, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     if let Some(value) = value.docs.as_ref() {}
     for value in value.functions.iter() {
         validate_function(&value, ctx, errors);
@@ -71,7 +65,9 @@ fn validate_param(value: &Param, ctx: &mut ValidationContext, errors: &mut Vec<S
 }
 fn validate_place(value: &Place, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     match value {
-        Place::Field { base, field, prov, .. } => {
+        Place::Field {
+            base, field, prov, ..
+        } => {
             validate_place(&base, ctx, errors);
         }
         Place::Local { name, prov, .. } => {
@@ -81,21 +77,31 @@ fn validate_place(value: &Place, ctx: &mut ValidationContext, errors: &mut Vec<S
 }
 fn validate_stmt(value: &Stmt, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     match value {
-        Stmt::Assign { place, prov, value, .. } => {
+        Stmt::Assign {
+            place, prov, value, ..
+        } => {
             validate_place(&place, ctx, errors);
             validate_expr(&value, ctx, errors);
         }
         Stmt::Expr { prov, value, .. } => {
             validate_expr(&value, ctx, errors);
         }
-        Stmt::If { condition, r#else, prov, then, .. } => {
+        Stmt::If {
+            condition,
+            r#else,
+            prov,
+            then,
+            ..
+        } => {
             validate_expr(&condition, ctx, errors);
             if let Some(value) = r#else.as_ref() {
                 validate_block(&value, ctx, errors);
             }
             validate_block(&then, ctx, errors);
         }
-        Stmt::Init { place, prov, value, .. } => {
+        Stmt::Init {
+            place, prov, value, ..
+        } => {
             validate_place(&place, ctx, errors);
             validate_expr(&value, ctx, errors);
         }
@@ -106,13 +112,7 @@ fn validate_stmt(value: &Stmt, ctx: &mut ValidationContext, errors: &mut Vec<Str
         }
     }
 }
-fn validate_type_def(
-    value: &TypeDef,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_type_def(value: &TypeDef, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     if let Some(value) = value.docs.as_ref() {}
     for value in value.params.iter() {}
 }
@@ -120,7 +120,11 @@ pub fn validate_root(root: &Module) -> Result<(), String> {
     let mut ctx = ValidationContext::default();
     let mut errors = Vec::new();
     validate_module(root, &mut ctx, &mut errors);
-    if errors.is_empty() { Ok(()) } else { Err(errors.join("\n")) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("\n"))
+    }
 }
 pub fn validate_root_text(source: &str) -> Result<(), String> {
     let root = parse_root_text(source)?;

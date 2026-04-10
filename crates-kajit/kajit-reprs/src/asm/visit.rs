@@ -135,11 +135,8 @@ pub fn walk_a64_reg<V: ?Sized + Visit>(v: &mut V, node: &A64Reg) {
         A64Reg::X3(..) => {}
     }
 }
-pub fn walk_a_arch64_dialect_keyword<V: ?Sized + Visit>(
-    _v: &mut V,
-
-    _node: &AArch64DialectKeyword,
-) {}
+pub fn walk_a_arch64_dialect_keyword<V: ?Sized + Visit>(_v: &mut V, _node: &AArch64DialectKeyword) {
+}
 pub fn walk_add_keyword<V: ?Sized + Visit>(_v: &mut V, _node: &AddKeyword) {}
 pub fn walk_asm_keyword<V: ?Sized + Visit>(_v: &mut V, _node: &AsmKeyword) {}
 pub fn walk_b_keyword<V: ?Sized + Visit>(_v: &mut V, _node: &BKeyword) {}
@@ -149,14 +146,24 @@ pub fn walk_movz_keyword<V: ?Sized + Visit>(_v: &mut V, _node: &MovzKeyword) {}
 pub fn walk_nop_keyword<V: ?Sized + Visit>(_v: &mut V, _node: &NopKeyword) {}
 pub fn walk_program<V: ?Sized + Visit>(v: &mut V, node: &Program) {
     match node {
-        Program::AArch64 { dialect, items, keyword, .. } => {
+        Program::AArch64 {
+            dialect,
+            items,
+            keyword,
+            ..
+        } => {
             v.visit_a_arch64_dialect_keyword(dialect);
             for value in items.iter() {
                 v.visit_a64_item(value);
             }
             v.visit_asm_keyword(keyword);
         }
-        Program::X86_64 { dialect, items, keyword, .. } => {
+        Program::X86_64 {
+            dialect,
+            items,
+            keyword,
+            ..
+        } => {
             v.visit_x86_64_dialect_keyword(dialect);
             for value in items.iter() {
                 v.visit_x64_item(value);
@@ -203,11 +210,7 @@ pub fn walk_x64_reg<V: ?Sized + Visit>(v: &mut V, node: &X64Reg) {
         X64Reg::Rsp(..) => {}
     }
 }
-pub fn walk_x86_64_dialect_keyword<V: ?Sized + Visit>(
-    _v: &mut V,
-
-    _node: &X86_64DialectKeyword,
-) {}
+pub fn walk_x86_64_dialect_keyword<V: ?Sized + Visit>(_v: &mut V, _node: &X86_64DialectKeyword) {}
 pub fn walk_a64_item_mut<V: ?Sized + VisitMut>(v: &mut V, node: &mut A64Item) {
     match node {
         A64Item::AddImm { op, rd, rn, .. } => {
@@ -249,7 +252,8 @@ pub fn walk_a_arch64_dialect_keyword_mut<V: ?Sized + VisitMut>(
     _v: &mut V,
 
     _node: &mut AArch64DialectKeyword,
-) {}
+) {
+}
 pub fn walk_add_keyword_mut<V: ?Sized + VisitMut>(_v: &mut V, _node: &mut AddKeyword) {}
 pub fn walk_asm_keyword_mut<V: ?Sized + VisitMut>(_v: &mut V, _node: &mut AsmKeyword) {}
 pub fn walk_b_keyword_mut<V: ?Sized + VisitMut>(_v: &mut V, _node: &mut BKeyword) {}
@@ -259,14 +263,24 @@ pub fn walk_movz_keyword_mut<V: ?Sized + VisitMut>(_v: &mut V, _node: &mut MovzK
 pub fn walk_nop_keyword_mut<V: ?Sized + VisitMut>(_v: &mut V, _node: &mut NopKeyword) {}
 pub fn walk_program_mut<V: ?Sized + VisitMut>(v: &mut V, node: &mut Program) {
     match node {
-        Program::AArch64 { dialect, items, keyword, .. } => {
+        Program::AArch64 {
+            dialect,
+            items,
+            keyword,
+            ..
+        } => {
             v.visit_a_arch64_dialect_keyword_mut(dialect);
             for value in items.iter_mut() {
                 v.visit_a64_item_mut(value);
             }
             v.visit_asm_keyword_mut(keyword);
         }
-        Program::X86_64 { dialect, items, keyword, .. } => {
+        Program::X86_64 {
+            dialect,
+            items,
+            keyword,
+            ..
+        } => {
             v.visit_x86_64_dialect_keyword_mut(dialect);
             for value in items.iter_mut() {
                 v.visit_x64_item_mut(value);
@@ -317,4 +331,5 @@ pub fn walk_x86_64_dialect_keyword_mut<V: ?Sized + VisitMut>(
     _v: &mut V,
 
     _node: &mut X86_64DialectKeyword,
-) {}
+) {
+}

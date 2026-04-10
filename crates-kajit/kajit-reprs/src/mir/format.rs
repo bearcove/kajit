@@ -16,7 +16,6 @@ impl std::fmt::Display for Program {
 }
 const INDENT_WIDTH: usize = 4;
 struct Writer {
-
     out: String,
 
     indent: usize,
@@ -435,7 +434,13 @@ fn write_terminator(w: &mut Writer, node: &Terminator) {
             w.text(": branch e");
             w.text(&edge.0.to_string());
         }
-        Terminator::BranchIf { cond, fallthrough, id, taken, .. } => {
+        Terminator::BranchIf {
+            cond,
+            fallthrough,
+            id,
+            taken,
+            ..
+        } => {
             w.text("term t");
             w.text(&id.0.to_string());
             w.text(": branch_if ");
@@ -445,7 +450,13 @@ fn write_terminator(w: &mut Writer, node: &Terminator) {
             w.text(", fallthrough e");
             w.text(&fallthrough.0.to_string());
         }
-        Terminator::BranchIfZero { cond, fallthrough, id, taken, .. } => {
+        Terminator::BranchIfZero {
+            cond,
+            fallthrough,
+            id,
+            taken,
+            ..
+        } => {
             w.text("term t");
             w.text(&id.0.to_string());
             w.text(": branch_if_zero ");
@@ -455,7 +466,13 @@ fn write_terminator(w: &mut Writer, node: &Terminator) {
             w.text(", fallthrough e");
             w.text(&fallthrough.0.to_string());
         }
-        Terminator::JumpTable { default, id, predicate, targets, .. } => {
+        Terminator::JumpTable {
+            default,
+            id,
+            predicate,
+            targets,
+            ..
+        } => {
             w.text("term t");
             w.text(&id.0.to_string());
             w.text(": jump_table ");
