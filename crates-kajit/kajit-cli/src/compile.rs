@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use kajit_asm::repr::FinalizedReprEmission;
+use kajit_mir::lower;
 use kajit_reprs::{self as reprs, ResolutionSet};
 use kajit_wares::{ObjectInput, PrintMainExecutableInput, TargetArch};
 
@@ -18,6 +19,20 @@ pub(crate) fn cmd_compile(path: &Path) -> Result<(), String> {
         let program = reprs::asm::parse_root_text(&source)
             .map_err(|err| format!("{}:\n{err}", path.display()))?;
         kajit_asm::repr::assemble_repr_program(&program, &source)?
+    } else if path_matches_ext(path, reprs::mir::REPR_FILE_EXT) {
+        let mut graph = reprs::mir::Graph::new();
+        let handle = reprs::mir::parse_root_into_graph(&mut graph, &source)
+            .map_err(|err| format!("{}:\n{err}", path.display()))?;
+        let program = graph
+            .root(handle)
+            .ok_or_else(|| format!("{}:\nfailed to load MIR root", path.display()))?;
+
+        let lowered = lower::lower_program_to_asm(&graph, program)
+            .map_err(|err| format!("{}:\n{err}", path.display()))?;
+        let resolutions = reprs::asm::resolve(&lowered.source)
+            .map_err(|err| format!("{}:\n{err}", path.display()))?;
+        ensure_all_references_resolved(path, &lowered.source, &resolutions)?;
+        kajit_asm::repr::assemble_repr_program(&lowered.program, &lowered.source)?
     } else {
         return match path.extension().and_then(|ext| ext.to_str()) {
             Some(other) => Err(format!(
@@ -158,5 +173,36 @@ mod tests {
             .expect_err("expected unresolved label error");
         assert!(err.contains("unresolved Label reference `missing`"));
         assert!(err.contains("/tmp/broken.k-asm:1:"));
+    }
+
+    #[test]
+    fn compiles_pilot_mir_const_ret_to_host_asm() {
+        let source = r#"
+cfg_program vregs=1 slots=0 {
+    cfg_func @0 f0 entry=b0 {
+        data_args: []
+        data_results: [0]
+        block b0 params=[] insts=[0] term=t0 preds=[] succs=[]
+        inst i0: v0:gpr/ret0 = const(42)
+        term t0: return
+    }
+}
+"#;
+
+        let mut graph = reprs::mir::Graph::new();
+        let handle = reprs::mir::parse_root_into_graph(&mut graph, source).expect("parse MIR");
+        let program = graph.root(handle).expect("root");
+        let lowered = lower::lower_program_to_asm(&graph, program).expect("lower");
+        let output = kajit_asm::repr::assemble_repr_program(&lowered.program, &lowered.source)
+            .expect("assemble");
+
+        if cfg!(target_arch = "aarch64") {
+            assert!(matches!(output, FinalizedReprEmission::AArch64(_)));
+        } else if cfg!(target_arch = "x86_64") {
+            assert!(matches!(output, FinalizedReprEmission::X64(_)));
+        } else {
+            // If the host arch isn't supported, the lowerer should've errored.
+            unreachable!("unexpected host arch in tests");
+        }
     }
 }

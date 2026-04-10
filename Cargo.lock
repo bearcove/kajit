@@ -1094,6 +1094,7 @@ dependencies = [
  "facet",
  "figue",
  "kajit-asm",
+ "kajit-mir",
  "kajit-reprs",
  "kajit-wares",
  "tokio",
