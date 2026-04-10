@@ -30,8 +30,6 @@ conventions {
 rules {
     keyword @group{
         AsmKw "asm"
-        AArch64Dialect "aarch64"
-        X86_64Dialect "x86_64"
         RetKw "ret"
         NopKw "nop"
         MovKw "mov"
@@ -41,6 +39,9 @@ rules {
         BKw "b"
         JmpKw "jmp"
     }
+
+    AArch64Dialect "aarch64"
+    X86_64Dialect "x86_64"
 
     operator @group{
         LBrace "{"
@@ -63,6 +64,73 @@ rules {
 
     number @group{
         Imm {syntax @Int}
+    }
+
+    templates {
+        ZeroOperand {
+            syntax @template{
+                params (
+                    { mnemonic @Rule }
+                )
+                body (
+                    @mnemonic
+                )
+            }
+        }
+
+        Unary {
+            syntax @template{
+                params (
+                    { mnemonic @Rule }
+                    { target @Any }
+                )
+                body (
+                    @mnemonic
+                    @soft_space
+                    @target
+                )
+            }
+        }
+
+        Binary {
+            syntax @template{
+                params (
+                    { mnemonic @Rule }
+                    { lhs @Any }
+                    { rhs @Any }
+                )
+                body (
+                    @mnemonic
+                    @soft_space
+                    @lhs
+                    @Comma
+                    @soft_space
+                    @rhs
+                )
+            }
+        }
+
+        Ternary {
+            syntax @template{
+                params (
+                    { mnemonic @Rule }
+                    { first @Any }
+                    { second @Any }
+                    { third @Any }
+                )
+                body (
+                    @mnemonic
+                    @soft_space
+                    @first
+                    @Comma
+                    @soft_space
+                    @second
+                    @Comma
+                    @soft_space
+                    @third
+                )
+            }
+        }
     }
 
     A64Reg @enum
@@ -121,90 +189,42 @@ rules {
 
     /// Return from the current function.
     A64Item.Ret @struct{
-        syntax (@RetKw)
+        syntax @ZeroOperand(@RetKw)
     }
 
     /// A no-op instruction.
     A64Item.Nop @struct{
-        syntax (@NopKw)
+        syntax @ZeroOperand(@NopKw)
     }
 
     /// Move an immediate into a register.
     A64Item.Movz @struct{
-        syntax (
-            @MovzKw
-            @soft_space
-            {rd @A64Reg}
-            @Comma
-            @soft_space
-            {imm @Imm}
-        )
+        syntax @Binary(@MovzKw {rd @A64Reg} {imm @Imm})
     }
 
     /// Move a register into another register.
     A64Item.Mov @struct{
-        syntax (
-            @MovKw
-            @soft_space
-            {rd @A64Reg}
-            @Comma
-            @soft_space
-            {rm @A64Reg}
-        )
+        syntax @Binary(@MovKw {rd @A64Reg} {rm @A64Reg})
     }
 
     /// Add an immediate to a register.
     A64Item.AddImm @struct{
-        syntax (
-            @AddKw
-            @soft_space
-            {rd @A64Reg}
-            @Comma
-            @soft_space
-            {rn @A64Reg}
-            @Comma
-            @soft_space
-            {imm @Imm}
-        )
+        syntax @Ternary(@AddKw {rd @A64Reg} {rn @A64Reg} {imm @Imm})
     }
 
     /// Add a register to a register.
     A64Item.AddReg @struct{
-        syntax (
-            @AddKw
-            @soft_space
-            {rd @A64Reg}
-            @Comma
-            @soft_space
-            {rn @A64Reg}
-            @Comma
-            @soft_space
-            {rm @A64Reg}
-        )
+        syntax @Ternary(@AddKw {rd @A64Reg} {rn @A64Reg} {rm @A64Reg})
     }
 
     /// Subtract a register from a register.
     A64Item.SubReg @struct{
-        syntax (
-            @SubKw
-            @soft_space
-            {rd @A64Reg}
-            @Comma
-            @soft_space
-            {rn @A64Reg}
-            @Comma
-            @soft_space
-            {rm @A64Reg}
-        )
+        syntax @Ternary(@SubKw {rd @A64Reg} {rn @A64Reg} {rm @A64Reg})
     }
 
     /// Branch to a label.
     A64Item.B @struct{
-        syntax (
-            @BKw
-            @soft_space
-            {target @LabelName}
-        )
+        syntax @Unary(@BKw {target @LabelName})
     }
 
     /// x86-64 labels and instructions.
@@ -217,80 +237,41 @@ rules {
 
     /// Return from the current function.
     X64Item.Ret @struct{
-        syntax (@RetKw)
+        syntax @ZeroOperand(@RetKw)
     }
 
     /// A no-op instruction.
     X64Item.Nop @struct{
-        syntax (@NopKw)
+        syntax @ZeroOperand(@NopKw)
     }
 
     /// Move an immediate into a register.
     X64Item.MovImm @struct{
-        syntax (
-            @MovKw
-            @soft_space
-            {rd @X64Reg}
-            @Comma
-            @soft_space
-            {imm @Imm}
-        )
+        syntax @Binary(@MovKw {rd @X64Reg} {imm @Imm})
     }
 
     /// Move a register into another register.
     X64Item.MovReg @struct{
-        syntax (
-            @MovKw
-            @soft_space
-            {rd @X64Reg}
-            @Comma
-            @soft_space
-            {rm @X64Reg}
-        )
+        syntax @Binary(@MovKw {rd @X64Reg} {rm @X64Reg})
     }
 
     /// Add an immediate to a register.
     X64Item.AddImm @struct{
-        syntax (
-            @AddKw
-            @soft_space
-            {rd @X64Reg}
-            @Comma
-            @soft_space
-            {imm @Imm}
-        )
+        syntax @Binary(@AddKw {rd @X64Reg} {imm @Imm})
     }
 
     /// Add a register to a register.
     X64Item.AddReg @struct{
-        syntax (
-            @AddKw
-            @soft_space
-            {rd @X64Reg}
-            @Comma
-            @soft_space
-            {rm @X64Reg}
-        )
+        syntax @Binary(@AddKw {rd @X64Reg} {rm @X64Reg})
     }
 
     /// Subtract a register from a register.
     X64Item.SubReg @struct{
-        syntax (
-            @SubKw
-            @soft_space
-            {rd @X64Reg}
-            @Comma
-            @soft_space
-            {rm @X64Reg}
-        )
+        syntax @Binary(@SubKw {rd @X64Reg} {rm @X64Reg})
     }
 
     /// Jump to a label.
     X64Item.Jmp @struct{
-        syntax (
-            @JmpKw
-            @soft_space
-            {target @LabelName}
-        )
+        syntax @Unary(@JmpKw {target @LabelName})
     }
 }
