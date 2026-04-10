@@ -1129,6 +1129,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kajit-mir"
+version = "0.1.0"
+dependencies = [
+ "kajit-reprs",
+ "kajit-types",
+ "tracing",
+]
+
+[[package]]
 name = "kajit-reprs"
 version = "0.1.0"
 dependencies = [

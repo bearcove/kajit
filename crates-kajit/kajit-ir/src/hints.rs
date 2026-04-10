@@ -23,7 +23,7 @@ use std::collections::HashMap;
 
 use kajit_reprs::ir::{IrFunc, NodeId, NodeKind, RegionId};
 
-/// Spill cost hint (matches kajit-mir::regalloc3::hints::SpillCost)
+/// Spill cost hint (matches `kajit-mir-legacy::regalloc3::hints::SpillCost`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SpillCost {
     Low,    // Not loop-carried

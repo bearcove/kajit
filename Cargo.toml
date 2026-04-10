@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates-kajit/kajit-asm",
+  "crates-kajit/kajit-mir",
   "crates-kajit/kajit-wares",
   "crates-kajit/kajit-hir",
   "crates-kajit/kajit-cli",
@@ -15,7 +16,7 @@ members = [
   # "crates-kajit/kajit",
   # "crates-kajit/kajit-ir",
   # "crates-kajit/kajit-lir",
-  # "crates-kajit/kajit-mir",
+  # "crates-kajit/kajit-mir-legacy",
   # "crates-kafe/kafe",
   # "crates-kafe/kafe-malum",
   # "crates-kafe/kafe-postcard",
@@ -25,7 +26,7 @@ exclude = [
   "crates-kajit/kajit",
   "crates-kajit/kajit-ir",
   "crates-kajit/kajit-lir",
-  "crates-kajit/kajit-mir",
+  "crates-kajit/kajit-mir-legacy",
   "crates-kafe/kafe",
   "crates-kafe/kafe-malum",
   "crates-kafe/kafe-postcard",

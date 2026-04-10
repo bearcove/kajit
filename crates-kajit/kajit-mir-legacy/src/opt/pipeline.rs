@@ -1,8 +1,10 @@
 //! MIR optimization helpers that operate over whole programs.
 //!
 //! These passes were previously embedded in the canonical MIR definition.
-//! They belong in `kajit-mir`, not in `kajit-reprs`, even if some of them still
-//! need finer-grained re-homing later.
+//! They belong in the (new) `kajit-mir`, not in `kajit-reprs`, even if some of
+//! them still need finer-grained re-homing later.
+//!
+//! For now they live in `kajit-mir-legacy` as a reference implementation.
 
 use std::collections::{HashMap, HashSet};
 

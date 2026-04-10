@@ -1333,4 +1333,4 @@ fn push_def(out: &mut Vec<Operand>, v: VReg, fixed: Option<FixedReg>) {
     });
 }
 
-// Lowering, optimization, and regalloc integration live in `kajit-mir`.
+// Lowering, optimization, and regalloc integration live in `kajit-mir-legacy`.

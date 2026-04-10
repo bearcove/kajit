@@ -24,7 +24,7 @@ serde_json = "1"
 zmij = "1"
 kajit-ir = { path = "../kajit-ir" }
 kajit-lir = { path = "../kajit-lir" }
-kajit-mir = { path = "../kajit-mir" }
+kajit-mir-legacy = { path = "../kajit-mir-legacy" }
 kajit-asm = { path = "../kajit-asm" }
 kajit-wares = { path = "../kajit-wares" }
 kajit-reprs = { path = "../kajit-reprs" }

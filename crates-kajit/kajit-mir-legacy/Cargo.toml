@@ -1,5 +1,5 @@
 [package]
-name = "kajit-mir"
+name = "kajit-mir-legacy"
 version = "0.1.0"
 edition = "2024"
 
@@ -9,7 +9,13 @@ edition = "2024"
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
+kajit-ir = { path = "../kajit-ir" }
+kajit-lir = { path = "../kajit-lir" }
 kajit-reprs = { path = "../kajit-reprs" }
 kajit-types = { path = "../kajit-types" }
-tracing = { workspace = true }
+indexmap = "2"
+tracing = "0.1"
 
+[dev-dependencies]
+facet = "0.44"
+kajit-reprs = { path = "../kajit-reprs" }
