@@ -29,14 +29,14 @@ pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> 
         reprs.push(normalize::with_module_doc(repr, loaded.doc));
     }
 
-    let out_dir = workspace_root.join("crates-kajit/kajit-reprs/src/schema_poc");
+    let out_dir = workspace_root.join("crates-kajit/kajit-reprs/src");
     fs::create_dir_all(&out_dir)
         .map_err(|e| format!("failed to create {}: {e}", out_dir.display()))?;
 
-    let old_hir_path = out_dir.join("hir.rs");
-    if old_hir_path.exists() {
-        fs::remove_file(&old_hir_path)
-            .map_err(|e| format!("failed to remove {}: {e}", old_hir_path.display()))?;
+    let old_generated_dir = out_dir.join("schema_poc");
+    if old_generated_dir.exists() {
+        fs::remove_dir_all(&old_generated_dir)
+            .map_err(|e| format!("failed to remove {}: {e}", old_generated_dir.display()))?;
     }
 
     let mut written = Vec::new();

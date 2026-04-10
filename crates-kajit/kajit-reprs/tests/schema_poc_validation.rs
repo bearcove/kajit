@@ -1,4 +1,4 @@
-use kajit_reprs::schema_poc::mir::validate_root_text;
+use kajit_reprs::mir::validate_root_text;
 
 #[test]
 fn mir_validation_accepts_resolved_storage_relationships() {

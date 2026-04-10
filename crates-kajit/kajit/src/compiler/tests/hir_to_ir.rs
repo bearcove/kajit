@@ -1,6 +1,6 @@
 use facet_testhelpers::test;
 use kajit_hir as hir;
-use kajit_reprs::hir::parse::parse_hir;
+use kajit_reprs::hir_legacy::parse::parse_hir;
 
 use super::lower_hir_module;
 

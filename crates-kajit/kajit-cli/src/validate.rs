@@ -1,10 +1,10 @@
 use std::fs;
 use std::path::Path;
 
-use kajit_reprs::schema_poc;
+use kajit_reprs::REPRS;
 
 pub(crate) fn cmd_validate(path: &Path) -> Result<(), String> {
-    let Some(handler) = schema_poc::REPRS
+    let Some(handler) = REPRS
         .iter()
         .find(|repr| path_matches_ext(path, repr.file_ext))
     else {
@@ -38,7 +38,7 @@ mod tests {
     fn validates_pilot_hir_text() {
         let path = Path::new("/tmp/example.k-hir");
         let source = "module { fn main() -> Value { return 42 } }";
-        let result = schema_poc::REPRS
+        let result = REPRS
             .iter()
             .find(|repr| path_matches_ext(path, repr.file_ext))
             .map(|repr| (repr.validate)(source))
@@ -50,7 +50,7 @@ mod tests {
     fn validates_pilot_asm_text() {
         let path = Path::new("/tmp/example.k-asm");
         let source = "asm aarch64 { start: movz x0, 42 ret }";
-        let result = schema_poc::REPRS
+        let result = REPRS
             .iter()
             .find(|repr| path_matches_ext(path, repr.file_ext))
             .map(|repr| (repr.validate)(source))

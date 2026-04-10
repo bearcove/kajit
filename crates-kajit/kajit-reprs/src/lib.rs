@@ -1,13 +1,15 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use chumsky::prelude::Rich;
 
+pub mod asm;
+mod generated;
 pub mod hir;
-pub mod schema_poc;
+pub mod hir_legacy;
+pub mod mir;
+
+pub use generated::*;
 
 /// Format chumsky `Rich` parse errors with ariadne for readable diagnostics.
-///
-/// This is the first shared helper moved up from `kajit-parse-util` so the
-/// representation crate can own parse/display support over time.
 pub fn format_rich_errors(source: &str, errs: Vec<Rich<char>>) -> String {
     let mut buf = Vec::new();
     for e in errs {

@@ -3,9 +3,9 @@ use std::fs;
 use std::sync::Arc;
 
 use chumsky::error::Rich;
-use kajit_reprs::schema_poc::asm::{self as schema_asm, Program as AsmProgram};
-use kajit_reprs::schema_poc::hir::{self as schema_hir, Module};
-use kajit_reprs::schema_poc::{
+use kajit_reprs::asm::{self as schema_asm, Program as AsmProgram};
+use kajit_reprs::hir::{self as schema_hir, Module};
+use kajit_reprs::{
     ResolutionSet, ResolvedRef, SemanticToken as GeneratedSemanticToken, SymbolDef,
     SymbolKind as ResolvedSymbolKind,
 };

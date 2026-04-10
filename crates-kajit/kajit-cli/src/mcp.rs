@@ -11,7 +11,7 @@ use kajit::lockstep::{JitDebugger, LockstepSession, LockstepSessionStatus};
 use kajit_mir::ir::BlockId;
 use kajit_mir::{DebuggerSession, DebuggerState, RunUntilTarget, StepEvent};
 #[cfg(feature = "lldb")]
-use kajit_reprs::hir::parse::parse_hir;
+use kajit_reprs::hir_legacy::parse::parse_hir;
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::mcp_server::{McpServerOptions, ServerHandler, server_runtime};
 use rust_mcp_sdk::schema::{

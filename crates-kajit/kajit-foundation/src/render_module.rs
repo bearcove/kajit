@@ -19,7 +19,7 @@ pub(crate) struct GeneratedModuleFile {
 pub(crate) fn render_repr_poc_files(reprs: &[NormalizedRepr]) -> Vec<GeneratedModuleFile> {
     let mut files = Vec::new();
     files.push(GeneratedModuleFile {
-        relative_path: "mod.rs".to_owned(),
+        relative_path: "generated.rs".to_owned(),
         contents: render_root_mod_file(reprs),
     });
 
@@ -1110,11 +1110,11 @@ fn render_root_mod_file(reprs: &[NormalizedRepr]) -> String {
         .map(|repr| snake_case(&repr.name))
         .collect::<Vec<_>>();
     module_names.sort();
-    let mod_rows = module_names
-        .iter()
-        .map(|name| format!("pub mod {name};"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let module_use_rows = if module_names.is_empty() {
+        String::new()
+    } else {
+        format!("use crate::{{{}}};\n", module_names.join(", "))
+    };
     let helper_rows = reprs
         .iter()
         .map(|repr| {
@@ -1167,7 +1167,7 @@ fn resolve_{module_name}(source: &str) -> Result<ResolutionSet, String> {{
 
     format_generated_file(format!(
         r#"
-{mod_rows}
+{module_use_rows}
 
 #[derive(Clone, Copy)]
 pub struct ReprSpec {{
@@ -1605,7 +1605,7 @@ fn render_semantic_file(parts: &RenderParts) -> String {
 use kajit_types::Prov;
 
 use super::*;
-use crate::schema_poc::SemanticToken;
+use crate::SemanticToken;
 use super::provenance::HasProvenance;
 
 {semantic_rows}
@@ -1622,7 +1622,7 @@ fn render_hover_file(parts: &RenderParts) -> String {
 use kajit_types::Prov;
 
 use super::*;
-use crate::schema_poc::HoverEntry;
+use crate::HoverEntry;
 use super::provenance::HasProvenance;
 
 {hover_rows}
@@ -1671,7 +1671,7 @@ fn format_module_smoke() {
 pub(crate) fn render_default_resolve_file() -> String {
     format_generated_file(
         r#"
-use crate::schema_poc::ResolutionSet;
+use crate::ResolutionSet;
 
 pub fn resolve(_source: &str) -> Result<ResolutionSet, String> {
     Ok(ResolutionSet::default())

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use kajit_reprs::schema_poc::asm::{A64Item, A64Reg, Imm, LabelName, Program, X64Item, X64Reg};
+use kajit_reprs::asm::{A64Item, A64Reg, Imm, LabelName, Program, X64Item, X64Reg};
 use kajit_types::{Prov, SourceLocation};
 
 pub enum FinalizedSchemaPocEmission {
