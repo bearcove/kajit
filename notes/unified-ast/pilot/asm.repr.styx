@@ -1,582 +1,296 @@
-meta {
-    /// Stable identifier for this pilot schema document.
-    id kajit:repr-schema/asm-pilot
-    /// Schema revision for the pilot format itself.
-    version 1
-    /// Human summary of the pilot's purpose.
-    description "Pilot representation schema for Kajit ASM"
+/// Human-facing representation name.
+name ASM
+
+/// Canonical text file extension for ASM documents.
+file_ext .k-asm
+
+/// High-level purpose of this representation.
+description "Symbolic architecture-specific assembly with canonical print round-trip and required provenance."
+
+/// Hard conventions for this representation family.
+///
+/// These are fixed by foundation-crate policy and intentionally not
+/// parameterizable in-schema.
+conventions {
+    /// AST structure is derived from `rules` only.
+    ast_source rules
+    /// Every generated struct implicitly carries provenance.
+    implicit_struct_field "prov @Prov"
+    /// Variant structs are discovered from `Type.Variant @struct`.
+    enum_variants "dotted-variant-structs"
+    /// Fields are discovered from `{name @Type}` bindings in `syntax`.
+    field_source "syntax-bindings"
+    /// Leading doc comments (`///`) are captured by convention.
+    docs_capture "leading-triple-slash"
+    /// Docs are retained for top-level declarations only.
+    docs_on (Program.AArch64 Program.X86_64)
 }
 
-/// Pilot schema for the ASM representation family.
-repr @module{
-    /// Human-facing representation name.
-    name ASM
-    /// Canonical text file extension for ASM documents.
-    file_ext .k-asm
-
-    /// High-level stage contract for ASM.
-    contract {
-        /// What this stage is for in the pipeline.
-        purpose "Symbolic architecture-specific assembly"
-        /// Names/identities that remain canonical in printed ASM.
-        canonical_identities (dialect label-name register-name)
-        /// Required round-trip guarantee for the stage text format.
-        round_trip canonical-print
-        /// Provenance expectation for nodes at this stage.
-        provenance required
+/// Grammar rules for the currently supported pilot subset.
+rules {
+    keyword @group{
+        AsmKw "asm"
+        AArch64Dialect "aarch64"
+        X86_64Dialect "x86_64"
+        RetKw "ret"
+        NopKw "nop"
+        MovKw "mov"
+        MovzKw "movz"
+        AddKw "add"
+        SubKw "sub"
+        BKw "b"
+        JmpKw "jmp"
     }
 
-    /// Text-format description for the pilot ASM subset.
-    syntax {
-        /// Root rule and root AST node for parsed ASM documents.
-        root Program
-
-        /// Token classes used by the pilot parser.
-        tokens {
-            /// A bare identifier used for labels.
-            ident @regex("[A-Za-z_][A-Za-z0-9_]*")
-            /// A decimal integer literal token.
-            int @regex("[0-9]+")
-        }
-
-        /// Grammar rules for the currently supported pilot subset.
-        rules {
-            /// The fixed `asm` header keyword.
-            AsmKeyword @seq("asm")
-
-            /// The AArch64 dialect tag named in the header.
-            AArch64DialectKeyword @seq("aarch64")
-
-            /// The x86-64 dialect tag named in the header.
-            X86_64DialectKeyword @seq("x86_64")
-
-            RetKeyword @seq("ret")
-            NopKeyword @seq("nop")
-            MovKeyword @seq("mov")
-            MovzKeyword @seq("movz")
-            AddKeyword @seq("add")
-            SubKeyword @seq("sub")
-            BKeyword @seq("b")
-            JmpKeyword @seq("jmp")
-
-            /// A whole assembly program, disambiguated by dialect header.
-            Program @choice(
-                /// An AArch64 assembly unit.
-                @variant(AArch64 @seq(
-                    @field(keyword @ref(AsmKeyword))
-                    @field(dialect @ref(AArch64DialectKeyword))
-                    "{"
-                    @field(items @repeat(@ref(A64Item)))
-                    "}"
-                ))
-                /// An x86-64 assembly unit.
-                @variant(X86_64 @seq(
-                    @field(keyword @ref(AsmKeyword))
-                    @field(dialect @ref(X86_64DialectKeyword))
-                    "{"
-                    @field(items @repeat(@ref(X64Item)))
-                    "}"
-                ))
-            )
-
-            /// The AArch64 register subset supported by the pilot.
-            A64Reg @choice(
-                @variant(X0 @seq("x0"))
-                @variant(X1 @seq("x1"))
-                @variant(X2 @seq("x2"))
-                @variant(X3 @seq("x3"))
-                @variant(Sp @seq("sp"))
-            )
-
-            /// AArch64 labels and instructions.
-            A64Item @choice(
-                /// A symbolic label definition.
-                @variant(Label @seq(
-                    @field(name @token(ident))
-                    ":"
-                ))
-                /// Return from the current function.
-                @variant(Ret @seq(
-                    @field(op @ref(RetKeyword))
-                ))
-                /// A no-op instruction.
-                @variant(Nop @seq(
-                    @field(op @ref(NopKeyword))
-                ))
-                /// Move an immediate into a register.
-                @variant(Movz @seq(
-                    @field(op @ref(MovzKeyword))
-                    @field(rd @ref(A64Reg))
-                    ","
-                    @field(imm @token(int))
-                ))
-                /// Move a register into another register.
-                @variant(Mov @seq(
-                    @field(op @ref(MovKeyword))
-                    @field(rd @ref(A64Reg))
-                    ","
-                    @field(rm @ref(A64Reg))
-                ))
-                /// Add an immediate to a register.
-                @variant(AddImm @seq(
-                    @field(op @ref(AddKeyword))
-                    @field(rd @ref(A64Reg))
-                    ","
-                    @field(rn @ref(A64Reg))
-                    ","
-                    @field(imm @token(int))
-                ))
-                /// Add a register to a register.
-                @variant(AddReg @seq(
-                    @field(op @ref(AddKeyword))
-                    @field(rd @ref(A64Reg))
-                    ","
-                    @field(rn @ref(A64Reg))
-                    ","
-                    @field(rm @ref(A64Reg))
-                ))
-                /// Subtract a register from a register.
-                @variant(SubReg @seq(
-                    @field(op @ref(SubKeyword))
-                    @field(rd @ref(A64Reg))
-                    ","
-                    @field(rn @ref(A64Reg))
-                    ","
-                    @field(rm @ref(A64Reg))
-                ))
-                /// Branch to a label.
-                @variant(B @seq(
-                    @field(op @ref(BKeyword))
-                    @field(target @token(ident))
-                ))
-            )
-
-            /// The x86-64 register subset supported by the pilot.
-            X64Reg @choice(
-                @variant(Rax @seq("rax"))
-                @variant(Rbx @seq("rbx"))
-                @variant(Rcx @seq("rcx"))
-                @variant(Rdx @seq("rdx"))
-                @variant(Rsp @seq("rsp"))
-                @variant(Rbp @seq("rbp"))
-            )
-
-            /// x86-64 labels and instructions.
-            X64Item @choice(
-                /// A symbolic label definition.
-                @variant(Label @seq(
-                    @field(name @token(ident))
-                    ":"
-                ))
-                /// Return from the current function.
-                @variant(Ret @seq(
-                    @field(op @ref(RetKeyword))
-                ))
-                /// A no-op instruction.
-                @variant(Nop @seq(
-                    @field(op @ref(NopKeyword))
-                ))
-                /// Move an immediate into a register.
-                @variant(MovImm @seq(
-                    @field(op @ref(MovKeyword))
-                    @field(rd @ref(X64Reg))
-                    ","
-                    @field(imm @token(int))
-                ))
-                /// Move a register into another register.
-                @variant(MovReg @seq(
-                    @field(op @ref(MovKeyword))
-                    @field(rd @ref(X64Reg))
-                    ","
-                    @field(rm @ref(X64Reg))
-                ))
-                /// Add an immediate to a register.
-                @variant(AddImm @seq(
-                    @field(op @ref(AddKeyword))
-                    @field(rd @ref(X64Reg))
-                    ","
-                    @field(imm @token(int))
-                ))
-                /// Add a register to a register.
-                @variant(AddReg @seq(
-                    @field(op @ref(AddKeyword))
-                    @field(rd @ref(X64Reg))
-                    ","
-                    @field(rm @ref(X64Reg))
-                ))
-                /// Subtract a register from a register.
-                @variant(SubReg @seq(
-                    @field(op @ref(SubKeyword))
-                    @field(rd @ref(X64Reg))
-                    ","
-                    @field(rm @ref(X64Reg))
-                ))
-                /// Jump to a label.
-                @variant(Jmp @seq(
-                    @field(op @ref(JmpKeyword))
-                    @field(target @token(ident))
-                ))
-            )
-        }
-
-        /// Canonical printer templates for the pilot subset.
-        canonical_print {
-            AsmKeyword "asm"
-            AArch64DialectKeyword "aarch64"
-            X86_64DialectKeyword "x86_64"
-            RetKeyword "ret"
-            NopKeyword "nop"
-            MovKeyword "mov"
-            MovzKeyword "movz"
-            AddKeyword "add"
-            SubKeyword "sub"
-            BKeyword "b"
-            JmpKeyword "jmp"
-
-            /// Canonical AArch64 program layout.
-            Program.AArch64 "{keyword} {dialect} {\n{items}\n}"
-            /// Canonical x86-64 program layout.
-            Program.X86_64 "{keyword} {dialect} {\n{items}\n}"
-
-            A64Reg.X0 "x0"
-            A64Reg.X1 "x1"
-            A64Reg.X2 "x2"
-            A64Reg.X3 "x3"
-            A64Reg.Sp "sp"
-
-            A64Item.Label "{name}:"
-            A64Item.Ret "{op}"
-            A64Item.Nop "{op}"
-            A64Item.Movz "{op} {rd}, {imm}"
-            A64Item.Mov "{op} {rd}, {rm}"
-            A64Item.AddImm "{op} {rd}, {rn}, {imm}"
-            A64Item.AddReg "{op} {rd}, {rn}, {rm}"
-            A64Item.SubReg "{op} {rd}, {rn}, {rm}"
-            A64Item.B "{op} {target}"
-
-            X64Reg.Rax "rax"
-            X64Reg.Rbx "rbx"
-            X64Reg.Rcx "rcx"
-            X64Reg.Rdx "rdx"
-            X64Reg.Rsp "rsp"
-            X64Reg.Rbp "rbp"
-
-            X64Item.Label "{name}:"
-            X64Item.Ret "{op}"
-            X64Item.Nop "{op}"
-            X64Item.MovImm "{op} {rd}, {imm}"
-            X64Item.MovReg "{op} {rd}, {rm}"
-            X64Item.AddImm "{op} {rd}, {imm}"
-            X64Item.AddReg "{op} {rd}, {rm}"
-            X64Item.SubReg "{op} {rd}, {rm}"
-            X64Item.Jmp "{op} {target}"
-        }
-
+    operator @group{
+        LBrace "{"
+        RBrace "}"
+        Colon ":"
+        Comma ","
     }
 
-    /// Shared scalar-ish building blocks reused by multiple nodes.
-    common {
-        /// Node provenance payload.
-        provenance @Prov
-        /// Free-form doc block payload collected from leading `///` comments.
-        docs @DocBlock
+    Ident {
+        syntax @regex("[A-Za-z_][A-Za-z0-9_]*")
     }
 
-    /// Semantic support types that are not themselves structural nodes.
-    support {
-        /// A symbolic label name.
-        LabelName @string
-        /// A decimal immediate value in canonical ASM text.
-        Imm @int
+    Int {
+        syntax @regex("[0-9]+")
     }
 
-    /// Structural AST nodes for the pilot ASM surface.
-    nodes {
-        /// The root ASM program, with an explicit in-file dialect.
-        Program @enum{
-            /// An AArch64 assembly unit.
-            AArch64 @struct{
-                /// Leading `asm` keyword.
-                keyword @AsmKeyword
-                /// Dialect tag from the header.
-                dialect @AArch64DialectKeyword
-                /// Source provenance for the program.
-                prov @Prov
-                /// Optional program-level docs.
-                docs @optional(@DocBlock)
-                /// Ordered labels and instructions.
-                items @seq(@A64Item)
-            }
+    label @group{
+        LabelName {syntax @Ident}
+    }
 
-            /// An x86-64 assembly unit.
-            X86_64 @struct{
-                /// Leading `asm` keyword.
-                keyword @AsmKeyword
-                /// Dialect tag from the header.
-                dialect @X86_64DialectKeyword
-                /// Source provenance for the program.
-                prov @Prov
-                /// Optional program-level docs.
-                docs @optional(@DocBlock)
-                /// Ordered labels and instructions.
-                items @seq(@X64Item)
-            }
-        }
+    number @group{
+        Imm {syntax @Int}
+    }
 
-        /// The fixed leading keyword in an ASM document header.
-        AsmKeyword @struct{ prov @Prov }
+    A64Reg @enum
 
-        /// The AArch64 dialect tag in the header.
-        AArch64DialectKeyword @struct{ prov @Prov }
+    A64Reg.X0 "x0"
+    A64Reg.X1 "x1"
+    A64Reg.X2 "x2"
+    A64Reg.X3 "x3"
+    A64Reg.Sp "sp"
 
-        /// The x86-64 dialect tag in the header.
-        X86_64DialectKeyword @struct{ prov @Prov }
+    X64Reg @enum
 
-        /// Return from the current function.
-        RetKeyword @struct{ prov @Prov }
-        /// Perform no operation.
-        NopKeyword @struct{ prov @Prov }
-        /// Move data between registers or operands.
-        MovKeyword @struct{ prov @Prov }
-        /// Move a zero-extended immediate into a register.
-        MovzKeyword @struct{ prov @Prov }
-        /// Add an operand to a destination register.
-        AddKeyword @struct{ prov @Prov }
-        /// Subtract an operand from a destination register.
-        SubKeyword @struct{ prov @Prov }
-        /// Branch to a label in AArch64.
-        BKeyword @struct{ prov @Prov }
-        /// Jump to a label in x86-64.
-        JmpKeyword @struct{ prov @Prov }
+    X64Reg.Rax "rax"
+    X64Reg.Rbx "rbx"
+    X64Reg.Rcx "rcx"
+    X64Reg.Rdx "rdx"
+    X64Reg.Rsp "rsp"
+    X64Reg.Rbp "rbp"
 
-        /// The AArch64 register subset supported by the pilot.
-        A64Reg @enum{
-            /// General-purpose register x0.
-            X0 @struct{ prov @Prov }
-            /// General-purpose register x1.
-            X1 @struct{ prov @Prov }
-            /// General-purpose register x2.
-            X2 @struct{ prov @Prov }
-            /// General-purpose register x3.
-            X3 @struct{ prov @Prov }
-            /// Stack pointer register.
-            Sp @struct{ prov @Prov }
-        }
+    /// A whole assembly program, disambiguated by dialect header.
+    Program @enum
 
-        /// AArch64 labels and instructions.
-        A64Item @enum{
-            /// A symbolic label definition.
-            Label @struct{
-                /// Source provenance for the item.
-                prov @Prov
-                /// Label name.
-                name @LabelName
-            }
+    /// An AArch64 assembly unit.
+    Program.AArch64 @struct{
+        syntax @brace_block(
+            prefix (
+                @AsmKw
+                @soft_space
+                @AArch64Dialect
+                @soft_space
+            )
+            body {items @many(@A64Item @newline)}
+        )
+    }
 
-            /// A return instruction.
-            Ret @struct{
-                /// Opcode keyword.
-                op @RetKeyword
-                /// Source provenance for the item.
-                prov @Prov
-            }
+    /// An x86-64 assembly unit.
+    Program.X86_64 @struct{
+        syntax @brace_block(
+            prefix (
+                @AsmKw
+                @soft_space
+                @X86_64Dialect
+                @soft_space
+            )
+            body {items @many(@X64Item @newline)}
+        )
+    }
 
-            /// A no-op instruction.
-            Nop @struct{
-                /// Opcode keyword.
-                op @NopKeyword
-                /// Source provenance for the item.
-                prov @Prov
-            }
+    /// AArch64 labels and instructions.
+    A64Item @enum
 
-            /// Move an immediate into a register.
-            Movz @struct{
-                /// Opcode keyword.
-                op @MovzKeyword
-                /// Source provenance for the item.
-                prov @Prov
-                /// Destination register.
-                rd @A64Reg
-                /// Immediate value.
-                imm @Imm
-            }
+    /// A symbolic label definition.
+    A64Item.Label @struct{
+        syntax ({name @LabelName} @Colon)
+    }
 
-            /// Move a register into another register.
-            Mov @struct{
-                /// Opcode keyword.
-                op @MovKeyword
-                /// Source provenance for the item.
-                prov @Prov
-                /// Destination register.
-                rd @A64Reg
-                /// Source register.
-                rm @A64Reg
-            }
+    /// Return from the current function.
+    A64Item.Ret @struct{
+        syntax (@RetKw)
+    }
 
-            /// Add an immediate to a register.
-            AddImm @struct{
-                /// Opcode keyword.
-                op @AddKeyword
-                /// Source provenance for the item.
-                prov @Prov
-                /// Destination register.
-                rd @A64Reg
-                /// Base register.
-                rn @A64Reg
-                /// Immediate value.
-                imm @Imm
-            }
+    /// A no-op instruction.
+    A64Item.Nop @struct{
+        syntax (@NopKw)
+    }
 
-            /// Add a register to a register.
-            AddReg @struct{
-                /// Opcode keyword.
-                op @AddKeyword
-                /// Source provenance for the item.
-                prov @Prov
-                /// Destination register.
-                rd @A64Reg
-                /// Left-hand operand register.
-                rn @A64Reg
-                /// Right-hand operand register.
-                rm @A64Reg
-            }
+    /// Move an immediate into a register.
+    A64Item.Movz @struct{
+        syntax (
+            @MovzKw
+            @soft_space
+            {rd @A64Reg}
+            @Comma
+            @soft_space
+            {imm @Imm}
+        )
+    }
 
-            /// Subtract a register from a register.
-            SubReg @struct{
-                /// Opcode keyword.
-                op @SubKeyword
-                /// Source provenance for the item.
-                prov @Prov
-                /// Destination register.
-                rd @A64Reg
-                /// Left-hand operand register.
-                rn @A64Reg
-                /// Right-hand operand register.
-                rm @A64Reg
-            }
+    /// Move a register into another register.
+    A64Item.Mov @struct{
+        syntax (
+            @MovKw
+            @soft_space
+            {rd @A64Reg}
+            @Comma
+            @soft_space
+            {rm @A64Reg}
+        )
+    }
 
-            /// Branch to a symbolic label.
-            B @struct{
-                /// Opcode keyword.
-                op @BKeyword
-                /// Source provenance for the item.
-                prov @Prov
-                /// Branch target label.
-                target @LabelName
-            }
-        }
+    /// Add an immediate to a register.
+    A64Item.AddImm @struct{
+        syntax (
+            @AddKw
+            @soft_space
+            {rd @A64Reg}
+            @Comma
+            @soft_space
+            {rn @A64Reg}
+            @Comma
+            @soft_space
+            {imm @Imm}
+        )
+    }
 
-        /// The x86-64 register subset supported by the pilot.
-        X64Reg @enum{
-            /// Return-value and accumulator register.
-            Rax @struct{ prov @Prov }
-            /// Callee-saved general-purpose register.
-            Rbx @struct{ prov @Prov }
-            /// Count register.
-            Rcx @struct{ prov @Prov }
-            /// Data register.
-            Rdx @struct{ prov @Prov }
-            /// Stack pointer register.
-            Rsp @struct{ prov @Prov }
-            /// Base/frame pointer register.
-            Rbp @struct{ prov @Prov }
-        }
+    /// Add a register to a register.
+    A64Item.AddReg @struct{
+        syntax (
+            @AddKw
+            @soft_space
+            {rd @A64Reg}
+            @Comma
+            @soft_space
+            {rn @A64Reg}
+            @Comma
+            @soft_space
+            {rm @A64Reg}
+        )
+    }
 
-        /// x86-64 labels and instructions.
-        X64Item @enum{
-            /// A symbolic label definition.
-            Label @struct{
-                /// Source provenance for the item.
-                prov @Prov
-                /// Label name.
-                name @LabelName
-            }
+    /// Subtract a register from a register.
+    A64Item.SubReg @struct{
+        syntax (
+            @SubKw
+            @soft_space
+            {rd @A64Reg}
+            @Comma
+            @soft_space
+            {rn @A64Reg}
+            @Comma
+            @soft_space
+            {rm @A64Reg}
+        )
+    }
 
-            /// A return instruction.
-            Ret @struct{
-                /// Opcode keyword.
-                op @RetKeyword
-                /// Source provenance for the item.
-                prov @Prov
-            }
+    /// Branch to a label.
+    A64Item.B @struct{
+        syntax (
+            @BKw
+            @soft_space
+            {target @LabelName}
+        )
+    }
 
-            /// A no-op instruction.
-            Nop @struct{
-                /// Opcode keyword.
-                op @NopKeyword
-                /// Source provenance for the item.
-                prov @Prov
-            }
+    /// x86-64 labels and instructions.
+    X64Item @enum
 
-            /// Move an immediate into a register.
-            MovImm @struct{
-                /// Opcode keyword.
-                op @MovKeyword
-                /// Source provenance for the item.
-                prov @Prov
-                /// Destination register.
-                rd @X64Reg
-                /// Immediate value.
-                imm @Imm
-            }
+    /// A symbolic label definition.
+    X64Item.Label @struct{
+        syntax ({name @LabelName} @Colon)
+    }
 
-            /// Move a register into another register.
-            MovReg @struct{
-                /// Opcode keyword.
-                op @MovKeyword
-                /// Source provenance for the item.
-                prov @Prov
-                /// Destination register.
-                rd @X64Reg
-                /// Source register.
-                rm @X64Reg
-            }
+    /// Return from the current function.
+    X64Item.Ret @struct{
+        syntax (@RetKw)
+    }
 
-            /// Add an immediate to a register.
-            AddImm @struct{
-                /// Opcode keyword.
-                op @AddKeyword
-                /// Source provenance for the item.
-                prov @Prov
-                /// Destination register.
-                rd @X64Reg
-                /// Immediate value.
-                imm @Imm
-            }
+    /// A no-op instruction.
+    X64Item.Nop @struct{
+        syntax (@NopKw)
+    }
 
-            /// Add a register to a register.
-            AddReg @struct{
-                /// Opcode keyword.
-                op @AddKeyword
-                /// Source provenance for the item.
-                prov @Prov
-                /// Destination register.
-                rd @X64Reg
-                /// Source register.
-                rm @X64Reg
-            }
+    /// Move an immediate into a register.
+    X64Item.MovImm @struct{
+        syntax (
+            @MovKw
+            @soft_space
+            {rd @X64Reg}
+            @Comma
+            @soft_space
+            {imm @Imm}
+        )
+    }
 
-            /// Subtract a register from a register.
-            SubReg @struct{
-                /// Opcode keyword.
-                op @SubKeyword
-                /// Source provenance for the item.
-                prov @Prov
-                /// Destination register.
-                rd @X64Reg
-                /// Source register.
-                rm @X64Reg
-            }
+    /// Move a register into another register.
+    X64Item.MovReg @struct{
+        syntax (
+            @MovKw
+            @soft_space
+            {rd @X64Reg}
+            @Comma
+            @soft_space
+            {rm @X64Reg}
+        )
+    }
 
-            /// Jump to a symbolic label.
-            Jmp @struct{
-                /// Opcode keyword.
-                op @JmpKeyword
-                /// Source provenance for the item.
-                prov @Prov
-                /// Jump target label.
-                target @LabelName
-            }
-        }
+    /// Add an immediate to a register.
+    X64Item.AddImm @struct{
+        syntax (
+            @AddKw
+            @soft_space
+            {rd @X64Reg}
+            @Comma
+            @soft_space
+            {imm @Imm}
+        )
+    }
+
+    /// Add a register to a register.
+    X64Item.AddReg @struct{
+        syntax (
+            @AddKw
+            @soft_space
+            {rd @X64Reg}
+            @Comma
+            @soft_space
+            {rm @X64Reg}
+        )
+    }
+
+    /// Subtract a register from a register.
+    X64Item.SubReg @struct{
+        syntax (
+            @SubKw
+            @soft_space
+            {rd @X64Reg}
+            @Comma
+            @soft_space
+            {rm @X64Reg}
+        )
+    }
+
+    /// Jump to a label.
+    X64Item.Jmp @struct{
+        syntax (
+            @JmpKw
+            @soft_space
+            {target @LabelName}
+        )
     }
 }
