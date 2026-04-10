@@ -1,390 +1,399 @@
-meta {
-    /// Stable identifier for this pilot schema document.
-    id kajit:repr-schema/hir-pilot
-    /// Schema revision for the pilot format itself.
-    version 1
-    /// Human summary of the pilot's purpose.
-    description "Pilot representation schema for Kajit HIR"
+/// Human-facing representation name.
+name HIR
+
+/// Canonical text file extension for HIR documents.
+file_ext .k-hir
+
+/// High-level purpose of this representation.
+description "Human-semantic structured IR; canonical print round-trip with required provenance."
+
+/// Grammar rules for the currently supported pilot subset.
+rules {
+    keyword @group{
+        ModuleKw "module"
+        FnKw "fn"
+        ReturnKw "return"
+        CallKw "call"
+    }
+
+    operator @group{
+        LBrace "{"
+        RBrace "}"
+        LParen "("
+        RParen ")"
+        Comma ","
+        Colon ":"
+        Arrow "->"
+    }
+
+    Ident {
+        syntax @regex("[A-Za-z_][A-Za-z0-9_]*")
+    }
+
+    Symbol {
+        syntax @regex("@[A-Za-z_][A-Za-z0-9_.]*")
+    }
+
+    Int {
+        syntax @regex("[0-9]+")
+    }
+
+    function @group{
+        FunctionName {syntax @Ident}
+        Callee {syntax @Symbol}
+    }
+
+    type @group{
+        TypeName {syntax @Ident}
+    }
+
+    paramName @group{
+        ParamName {syntax @Ident}
+    }
+
+    localName @group{
+        LocalName {syntax @Ident}
+    }
+
+    intLiteral @group{
+        IntLiteral {syntax @Int}
+    }
+
+    /// A module with a flat list of functions.
+    Module @struct{
+        syntax (
+            @ModuleKw
+            @LBrace
+            {functions @many(@Function)}
+            @RBrace
+        )
+        format "module {\n{functions}\n}"
+    }
+
+    /// A function signature plus structured body.
+    Function @struct{
+        syntax (
+            @FnKw
+            {name @FunctionName}
+            @LParen
+            {params @separated_by(@Param ",")}
+            @RParen
+            @Arrow
+            {return_type @TypeName}
+            {body @Block}
+        )
+        format "fn {name}({params:, }) -> {return_type} {body}"
+    }
+
+    /// A single function parameter.
+    Param @struct{
+        syntax (
+            {name @ParamName}
+            @Colon
+            {ty @TypeName}
+        )
+        format "{name}: {ty}"
+    }
+
+    /// A braced statement block.
+    Block @struct{
+        syntax (
+            @LBrace
+            {statements @many(@Stmt)}
+            @RBrace
+        )
+        format "{\n{statements}\n}"
+    }
+
+    /// Statement forms supported by the pilot parser.
+    Stmt @enum
+
+    /// A return statement with an optional value.
+    Stmt.Return @struct{
+        syntax (
+            @ReturnKw
+            @optional({value @Expr})
+        )
+        format "return{value? :  {value}}"
+    }
+
+    /// A bare expression used as a statement.
+    Stmt.Expr @struct{
+        syntax ({value @Expr})
+        format "{value}"
+    }
+
+    /// Expression forms supported by the pilot parser.
+    Expr @enum
+
+    /// A symbolic function call.
+    Expr.Call @struct{
+        syntax (
+            @CallKw
+            {callee @Callee}
+            @LParen
+            {args @separated_by(@Expr ",")}
+            @RParen
+        )
+        format "call {callee}({args:, })"
+    }
+
+    /// A local value reference.
+    Expr.Local @struct{
+        syntax ({name @LocalName})
+        format "{name}"
+    }
+
+    /// A decimal integer literal.
+    Expr.Literal @struct{
+        syntax ({value @IntLiteral})
+        format "{value}"
+    }
 }
 
-/// Pilot schema for the HIR representation family.
-repr @module{
-    /// Human-facing representation name.
-    name HIR
-    /// Canonical text file extension for HIR documents.
-    file_ext .k-hir
+/// Shared scalar-ish building blocks reused by multiple nodes.
+common {
+    /// Node provenance payload.
+    provenance @Prov
 
-    /// High-level stage contract for HIR.
-    contract {
-        /// What this stage is for in the pipeline.
-        purpose "Human-semantic structured IR"
-        /// Names/identities that remain canonical in printed HIR.
-        canonical_identities (symbol local-name type-name function-name)
-        /// Required round-trip guarantee for the stage text format.
-        round_trip canonical-print
-        /// Provenance expectation for nodes at this stage.
-        provenance required
+    /// Symbolic identifier payload.
+    symbol @Symbol
+
+    /// Free-form doc block payload collected from leading `///` comments,
+    /// including module-level doc comments before `module`.
+    docs @DocBlock
+}
+
+/// Semantic support types that are not themselves structural nodes.
+support {
+    /// A named type reference in HIR.
+    Type @string
+    /// A literal value in canonical HIR text.
+    Literal @int
+    /// A binary operator.
+    BinaryOp @enum{
+        /// Integer addition.
+        Add @unit
+        /// Integer subtraction.
+        Sub @unit
+    }
+    /// A generic parameter name.
+    GenericParam @string
+    /// The kind of local binding.
+    LocalKind @enum{
+        /// A named source-level local.
+        Local @unit
+        /// A compiler-introduced temporary.
+        Temp @unit
+    }
+    /// The kind of type definition.
+    TypeDefKind @enum{
+        /// A struct type definition.
+        Struct @unit
+        /// An enum type definition.
+        Enum @unit
+        /// A type alias definition.
+        Alias @unit
+    }
+}
+
+/// Structural AST nodes for the wider HIR surface.
+nodes {
+    /// The root HIR module.
+    Module @node{
+        /// Source provenance for the module.
+        prov @Prov
+        /// Optional module-level docs collected from leading `///`
+        /// comments before the `module` declaration.
+        docs @optional(@DocBlock)
+        /// Type definitions declared in the module.
+        type_defs @seq(@TypeDef)
+        /// Top-level functions declared in the module.
+        functions @seq(@Function)
     }
 
-    /// Text-format description for the pilot HIR subset.
-    syntax {
-        /// Root rule and root AST node for parsed HIR documents.
-        root Module
-
-        /// Token classes used by the pilot parser.
-        tokens {
-            /// A bare identifier used for local names and type names.
-            ident @regex("[A-Za-z_][A-Za-z0-9_]*")
-            /// A symbolic callee or external symbol reference.
-            symbol @regex("@[A-Za-z_][A-Za-z0-9_.]*")
-            /// A decimal integer literal token.
-            int @regex("[0-9]+")
-        }
-
-        /// Grammar rules for the currently supported pilot subset.
-        rules {
-            ModuleKw @semantic(keyword @tag("module"))
-            FnKw @semantic(keyword @tag("fn"))
-            ReturnKw @semantic(keyword @tag("return"))
-            CallKw @semantic(keyword @tag("call"))
-            LBrace @semantic(operator @tag("{"))
-            RBrace @semantic(operator @tag("}"))
-            LParen @semantic(operator @tag("("))
-            RParen @semantic(operator @tag(")"))
-            Comma @semantic(operator @tag(","))
-            Colon @semantic(operator @tag(":"))
-            Arrow @semantic(operator @tag("->"))
-
-            /// A module with a flat list of functions.
-            Module @seq(
-                @ref(ModuleKw)
-                @ref(LBrace)
-                @field(functions @repeat(@ref(Function)))
-                @ref(RBrace)
-            )
-
-            /// A function signature plus structured body.
-            Function @seq(
-                @ref(FnKw)
-                @semantic(function @field(name @token(ident)))
-                @ref(LParen)
-                @field(params @repeat(@ref(Param) {sep Comma}))
-                @ref(RParen)
-                @ref(Arrow)
-                @semantic(type @field(return_type @token(ident)))
-                @field(body @ref(Block))
-            )
-
-            /// A single function parameter.
-            Param @seq(
-                @semantic(parameter @field(name @token(ident)))
-                @ref(Colon)
-                @semantic(type @field(ty @token(ident)))
-            )
-
-            /// A braced statement block.
-            Block @seq(
-                @ref(LBrace)
-                @field(statements @repeat(@ref(Stmt)))
-                @ref(RBrace)
-            )
-
-            /// Statement forms supported by the pilot parser.
-            Stmt @choice(
-                /// A return statement with an optional value.
-                @variant(Return @seq(
-                    @ref(ReturnKw)
-                    @field(value @optional(@ref(Expr)))
-                ))
-                /// A bare expression used as a statement.
-                @variant(Expr @seq(
-                    @field(value @ref(Expr))
-                ))
-            )
-
-            /// Expression forms supported by the pilot parser.
-            Expr @choice(
-                /// A symbolic function call.
-                @variant(Call @seq(
-                    @ref(CallKw)
-                    @semantic(function @field(callee @token(symbol)))
-                    @ref(LParen)
-                    @field(args @repeat(@ref(Expr) {sep Comma}))
-                    @ref(RParen)
-                ))
-                /// A local value reference.
-                @variant(Local @semantic(variable @field(name @token(ident))))
-                /// A decimal integer literal.
-                @variant(Literal @semantic(number @field(value @token(int))))
-            )
-        }
-
-        /// Canonical printer templates for the pilot subset.
-        canonical_print {
-            /// Canonical module layout.
-            Module "module {\n{functions}\n}"
-            /// Canonical function layout.
-            Function "fn {name}({params:, }) -> {return_type} {body}"
-            /// Canonical parameter layout.
-            Param "{name}: {ty}"
-            /// Canonical block layout.
-            Block "{\n{statements}\n}"
-            /// Canonical return statement layout.
-            Stmt.Return "return{value? :  {value}}"
-            /// Canonical expression statement layout.
-            Stmt.Expr "{value}"
-            /// Canonical local expression layout.
-            Expr.Local "{name}"
-            /// Canonical literal expression layout.
-            Expr.Literal "{value}"
-            /// Canonical call expression layout.
-            Expr.Call "call {callee}({args:, })"
-        }
-
+    /// A type definition declared at module scope.
+    TypeDef @node{
+        /// Source provenance for the definition.
+        prov @Prov
+        /// Optional docs attached to the definition.
+        docs @optional(@DocBlock)
+        /// Type definition name.
+        name @Symbol
+        /// Generic parameters introduced by the type definition.
+        params @seq(@GenericParam)
+        /// Kind of type definition.
+        kind @TypeDefKind
     }
 
-    /// Shared scalar-ish building blocks reused by multiple nodes.
-    common {
-        /// Node provenance payload.
-        provenance @Prov
-        /// Symbolic identifier payload.
-        symbol @Symbol
-        /// Free-form doc block payload collected from leading `///` comments,
-        /// including module-level doc comments before `module`.
-        docs @DocBlock
+    /// A lowered function body.
+    Function @node{
+        /// Source provenance for the function.
+        prov @Prov
+        /// Optional function docs.
+        docs @optional(@DocBlock)
+        /// Symbolic function name.
+        name @Symbol
+        /// Ordered function parameters.
+        params @seq(@Param)
+        /// Declared return type.
+        return_type @Type
+        /// Local bindings declared in the function.
+        locals @seq(@Local)
+        /// Structured function body.
+        body @Block
     }
 
-    /// Semantic support types that are not themselves structural nodes.
-    support {
-        /// A named type reference in HIR.
-        Type @string
-        /// A literal value in canonical HIR text.
-        Literal @int
-        /// A binary operator.
-        BinaryOp @enum{
-            /// Integer addition.
-            Add @unit
-            /// Integer subtraction.
-            Sub @unit
+    /// A function parameter.
+    Param @node{
+        /// Source provenance for the parameter.
+        prov @Prov
+        /// Parameter name.
+        name @Symbol
+        /// Parameter type.
+        ty @Type
+    }
+
+    /// A local binding introduced inside a function.
+    Local @node{
+        /// Source provenance for the local.
+        prov @Prov
+        /// Local name.
+        name @Symbol
+        /// Local type.
+        ty @Type
+        /// Classification of the local.
+        kind @LocalKind
+    }
+
+    /// A sequence of statements with shared provenance.
+    Block @node{
+        /// Source provenance for the block.
+        prov @Prov
+        /// Statements in execution order.
+        statements @seq(@Stmt)
+    }
+
+    /// A statement in structured HIR.
+    Stmt @enum{
+        /// Initialize a place for the first time.
+        Init @struct{
+            /// Source provenance for the statement.
+            prov @Prov
+            /// Destination place being initialized.
+            place @Place
+            /// Initial value expression.
+            value @Expr
         }
-        /// A generic parameter name.
-        GenericParam @string
-        /// The kind of local binding.
-        LocalKind @enum{
-            /// A named source-level local.
-            Local @unit
-            /// A compiler-introduced temporary.
-            Temp @unit
+
+        /// Assign a new value to an existing place.
+        Assign @struct{
+            /// Source provenance for the statement.
+            prov @Prov
+            /// Destination place being assigned to.
+            place @Place
+            /// Value being assigned.
+            value @Expr
         }
-        /// The kind of type definition.
-        TypeDefKind @enum{
-            /// A struct type definition.
-            Struct @unit
-            /// An enum type definition.
-            Enum @unit
-            /// A type alias definition.
-            Alias @unit
+
+        /// Evaluate an expression for its effects or result discard.
+        Expr @struct{
+            /// Source provenance for the statement.
+            prov @Prov
+            /// Expression to evaluate.
+            value @Expr
+        }
+
+        /// Structured conditional statement.
+        If @struct{
+            /// Source provenance for the conditional.
+            prov @Prov
+            /// Condition expression.
+            condition @Expr
+            /// Then-branch body.
+            then @Block
+            /// Optional else-branch body.
+            else @optional(@Block)
+        }
+
+        /// Return from the current function.
+        Return @struct{
+            /// Source provenance for the return.
+            prov @Prov
+            /// Optional returned expression.
+            value @optional(@Expr)
         }
     }
 
-    /// Structural AST nodes for the wider HIR surface.
-    nodes {
-        /// The root HIR module.
-        Module @node{
-            /// Source provenance for the module.
+    /// An expression in structured HIR.
+    Expr @enum{
+        /// Read a local value by name.
+        Local @struct{
+            /// Source provenance for the expression.
             prov @Prov
-            /// Optional module-level docs collected from leading `///`
-            /// comments before the `module` declaration.
-            docs @optional(@DocBlock)
-            /// Type definitions declared in the module.
-            type_defs @seq(@TypeDef)
-            /// Top-level functions declared in the module.
-            functions @seq(@Function)
-        }
-
-        /// A type definition declared at module scope.
-        TypeDef @node{
-            /// Source provenance for the definition.
-            prov @Prov
-            /// Optional docs attached to the definition.
-            docs @optional(@DocBlock)
-            /// Type definition name.
+            /// Referenced local name.
             name @Symbol
-            /// Generic parameters introduced by the type definition.
-            params @seq(@GenericParam)
-            /// Kind of type definition.
-            kind @TypeDefKind
         }
 
-        /// A lowered function body.
-        Function @node{
-            /// Source provenance for the function.
+        /// An inline literal.
+        Literal @struct{
+            /// Source provenance for the expression.
             prov @Prov
-            /// Optional function docs.
-            docs @optional(@DocBlock)
-            /// Symbolic function name.
+            /// Literal payload.
+            value @Literal
+        }
+
+        /// A symbolic call.
+        Call @struct{
+            /// Source provenance for the expression.
+            prov @Prov
+            /// Symbolic callee name.
+            callee @Symbol
+            /// Positional call arguments.
+            args @seq(@Expr)
+        }
+
+        /// Access a field of a base expression.
+        Field @struct{
+            /// Source provenance for the expression.
+            prov @Prov
+            /// Base value being projected from.
+            base @Expr
+            /// Selected field name.
+            field @Symbol
+        }
+
+        /// Apply a binary operator to two operands.
+        Binary @struct{
+            /// Source provenance for the expression.
+            prov @Prov
+            /// Operator being applied.
+            op @BinaryOp
+            /// Left-hand operand.
+            lhs @Expr
+            /// Right-hand operand.
+            rhs @Expr
+        }
+    }
+
+    /// A writeable place expression.
+    Place @enum{
+        /// A local storage location.
+        Local @struct{
+            /// Source provenance for the place.
+            prov @Prov
+            /// Local name referenced by the place.
             name @Symbol
-            /// Ordered function parameters.
-            params @seq(@Param)
-            /// Declared return type.
-            return_type @Type
-            /// Local bindings declared in the function.
-            locals @seq(@Local)
-            /// Structured function body.
-            body @Block
         }
 
-        /// A function parameter.
-        Param @node{
-            /// Source provenance for the parameter.
+        /// A field projection from another place.
+        Field @struct{
+            /// Source provenance for the place.
             prov @Prov
-            /// Parameter name.
-            name @Symbol
-            /// Parameter type.
-            ty @Type
-        }
-
-        /// A local binding introduced inside a function.
-        Local @node{
-            /// Source provenance for the local.
-            prov @Prov
-            /// Local name.
-            name @Symbol
-            /// Local type.
-            ty @Type
-            /// Classification of the local.
-            kind @LocalKind
-        }
-
-        /// A sequence of statements with shared provenance.
-        Block @node{
-            /// Source provenance for the block.
-            prov @Prov
-            /// Statements in execution order.
-            statements @seq(@Stmt)
-        }
-
-        /// A statement in structured HIR.
-        Stmt @enum{
-            /// Initialize a place for the first time.
-            Init @struct{
-                /// Source provenance for the statement.
-                prov @Prov
-                /// Destination place being initialized.
-                place @Place
-                /// Initial value expression.
-                value @Expr
-            }
-
-            /// Assign a new value to an existing place.
-            Assign @struct{
-                /// Source provenance for the statement.
-                prov @Prov
-                /// Destination place being assigned to.
-                place @Place
-                /// Value being assigned.
-                value @Expr
-            }
-
-            /// Evaluate an expression for its effects or result discard.
-            Expr @struct{
-                /// Source provenance for the statement.
-                prov @Prov
-                /// Expression to evaluate.
-                value @Expr
-            }
-
-            /// Structured conditional statement.
-            If @struct{
-                /// Source provenance for the conditional.
-                prov @Prov
-                /// Condition expression.
-                condition @Expr
-                /// Then-branch body.
-                then @Block
-                /// Optional else-branch body.
-                else @optional(@Block)
-            }
-
-            /// Return from the current function.
-            Return @struct{
-                /// Source provenance for the return.
-                prov @Prov
-                /// Optional returned expression.
-                value @optional(@Expr)
-            }
-        }
-
-        /// An expression in structured HIR.
-        Expr @enum{
-            /// Read a local value by name.
-            Local @struct{
-                /// Source provenance for the expression.
-                prov @Prov
-                /// Referenced local name.
-                name @Symbol
-            }
-
-            /// An inline literal.
-            Literal @struct{
-                /// Source provenance for the expression.
-                prov @Prov
-                /// Literal payload.
-                value @Literal
-            }
-
-            /// A symbolic call.
-            Call @struct{
-                /// Source provenance for the expression.
-                prov @Prov
-                /// Symbolic callee name.
-                callee @Symbol
-                /// Positional call arguments.
-                args @seq(@Expr)
-            }
-
-            /// Access a field of a base expression.
-            Field @struct{
-                /// Source provenance for the expression.
-                prov @Prov
-                /// Base value being projected from.
-                base @Expr
-                /// Selected field name.
-                field @Symbol
-            }
-
-            /// Apply a binary operator to two operands.
-            Binary @struct{
-                /// Source provenance for the expression.
-                prov @Prov
-                /// Operator being applied.
-                op @BinaryOp
-                /// Left-hand operand.
-                lhs @Expr
-                /// Right-hand operand.
-                rhs @Expr
-            }
-        }
-
-        /// A writeable place expression.
-        Place @enum{
-            /// A local storage location.
-            Local @struct{
-                /// Source provenance for the place.
-                prov @Prov
-                /// Local name referenced by the place.
-                name @Symbol
-            }
-
-            /// A field projection from another place.
-            Field @struct{
-                /// Source provenance for the place.
-                prov @Prov
-                /// Base place being projected from.
-                base @Place
-                /// Selected field name.
-                field @Symbol
-            }
+            /// Base place being projected from.
+            base @Place
+            /// Selected field name.
+            field @Symbol
         }
     }
 }
