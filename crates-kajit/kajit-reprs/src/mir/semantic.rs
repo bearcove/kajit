@@ -6,11 +6,24 @@ use super::*;
 use crate::SemanticToken;
 use kajit_types::Prov;
 pub fn semantic_tokens(source: &str) -> Vec<SemanticToken> {
-    let Ok(root) = parse_root_text_rich(source, None) else {
+    let mut graph = Graph::new();
+    let Ok(handle) = parse_root_into_graph(&mut graph, source) else {
+        return Vec::new();
+    };
+    semantic_tokens_in_graph(source, &graph, handle)
+}
+pub fn semantic_tokens_in_graph(
+    source: &str,
+
+    graph: &Graph,
+
+    handle: ProgramHandle,
+) -> Vec<SemanticToken> {
+    let Some(root) = graph.root(handle) else {
         return Vec::new();
     };
     let mut out = Vec::new();
-    collect_program(source, &root, &mut out);
+    collect_program(source, root, &mut out);
     out.sort_by_key(|token| (token.start, token.end, token.kind));
     out.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.kind == b.kind);
     out
@@ -124,9 +137,6 @@ fn collect_function(source: &str, node: &Function, out: &mut Vec<SemanticToken>)
     collect_data_results_line(source, &node.data_results, out);
     for value in &node.edges {
         collect_edge(source, value, out);
-    }
-    for value in &node.insts {
-        collect_inst(source, value, out);
     }
     for value in &node.terms {
         collect_terminator(source, value, out);

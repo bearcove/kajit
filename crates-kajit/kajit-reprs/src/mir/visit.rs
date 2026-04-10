@@ -134,9 +134,6 @@ pub fn walk_function<V: ?Sized + Visit>(v: &mut V, node: &Function) {
     for value in node.edges.iter() {
         v.visit_edge(value);
     }
-    for value in node.insts.iter() {
-        v.visit_inst(value);
-    }
     for value in node.terms.iter() {
         v.visit_terminator(value);
     }
@@ -250,9 +247,6 @@ pub fn walk_function_mut<V: ?Sized + VisitMut>(v: &mut V, node: &mut Function) {
     v.visit_data_results_line_mut(&mut node.data_results);
     for value in node.edges.iter_mut() {
         v.visit_edge_mut(value);
-    }
-    for value in node.insts.iter_mut() {
-        v.visit_inst_mut(value);
     }
     for value in node.terms.iter_mut() {
         v.visit_terminator_mut(value);

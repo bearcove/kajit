@@ -82,9 +82,31 @@ fn recurse_calls_for_type(
                 )]
             }
         }
-        SyntaxTypeUse::Seq(inner)
-        | SyntaxTypeUse::Order(inner)
-        | SyntaxTypeUse::Arena { item: inner, .. } => {
+        SyntaxTypeUse::Seq(inner) | SyntaxTypeUse::Order(inner) => {
+            let inner_calls = recurse_calls_for_type(inner, "value", node_names, true);
+            if inner_calls.is_empty() {
+                Vec::new()
+            } else {
+                let iter_expr = if borrowed {
+                    expr.to_owned()
+                } else {
+                    format!("&{expr}")
+                };
+                vec![format!(
+                    "for value in {iter_expr} {{\n{}\n}}",
+                    inner_calls
+                        .into_iter()
+                        .map(|line| format!("    {line}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )]
+            }
+        }
+        SyntaxTypeUse::Arena { key: Some(_), .. } => Vec::new(),
+        SyntaxTypeUse::Arena {
+            item: inner,
+            key: None,
+        } => {
             let inner_calls = recurse_calls_for_type(inner, "value", node_names, true);
             if inner_calls.is_empty() {
                 Vec::new()
@@ -241,6 +263,7 @@ pub(crate) fn render_semantic_block(
     repr: &NormalizedRepr,
     node_names: &[String],
 ) -> Result<String, String> {
+    let graph_backed = has_keyed_arenas(repr);
     let mut variant_targets = std::collections::HashSet::new();
     for target in repr.syntax.semantic_tokens.keys() {
         if let Some((type_name, variant_name)) = parse_target(target)? {
@@ -442,9 +465,37 @@ pub(crate) fn render_semantic_block(
         ));
     }
 
-    Ok(format!(
-        r#"
-pub fn semantic_tokens(source: &str) -> Vec<SemanticToken> {{
+    let semantic_head = if graph_backed {
+        format!(
+            r#"pub fn semantic_tokens(source: &str) -> Vec<SemanticToken> {{
+    let mut graph = Graph::new();
+    let Ok(handle) = parse_root_into_graph(&mut graph, source) else {{
+        return Vec::new();
+    }};
+    semantic_tokens_in_graph(source, &graph, handle)
+}}
+
+pub fn semantic_tokens_in_graph(
+    source: &str,
+    graph: &Graph,
+    handle: {root_name}Handle,
+) -> Vec<SemanticToken> {{
+    let Some(root) = graph.root(handle) else {{
+        return Vec::new();
+    }};
+    let mut out = Vec::new();
+    collect_{root_method}(source, root, &mut out);
+    out.sort_by_key(|token| (token.start, token.end, token.kind));
+    out.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.kind == b.kind);
+    out
+}}
+"#,
+            root_name = root_name,
+            root_method = root_method
+        )
+    } else {
+        format!(
+            r#"pub fn semantic_tokens(source: &str) -> Vec<SemanticToken> {{
     let Ok(root) = parse_root_text_rich(source, None) else {{
         return Vec::new();
     }};
@@ -454,6 +505,14 @@ pub fn semantic_tokens(source: &str) -> Vec<SemanticToken> {{
     out.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.kind == b.kind);
     out
 }}
+"#,
+            root_method = root_method
+        )
+    };
+
+    Ok(format!(
+        r#"
+{semantic_head}
 
 fn emit_prov_token(prov: &Prov, kind: &'static str, out: &mut Vec<SemanticToken>) {{
     let Some(span) = prov.span.as_ref() else {{
@@ -499,7 +558,24 @@ fn emit_literal_token(
 
 {collector_rows}
 "#,
-        root_method = root_method,
+        semantic_head = semantic_head,
         collector_rows = collector_rows.join("\n\n"),
     ))
+}
+
+fn has_keyed_arenas(repr: &NormalizedRepr) -> bool {
+    repr.nodes.values().any(|decl| match &decl.value {
+        NormalizedNodeDecl::Record { fields, .. } => fields
+            .values()
+            .any(|field| matches!(field.value, SyntaxTypeUse::Arena { key: Some(_), .. })),
+        NormalizedNodeDecl::Enum(variants) => variants.values().any(|variant| {
+            matches!(
+                &variant.value,
+                NormalizedNodeDecl::Record { fields, .. }
+                    if fields.values().any(
+                        |field| matches!(field.value, SyntaxTypeUse::Arena { key: Some(_), .. })
+                    )
+            )
+        }),
+    })
 }

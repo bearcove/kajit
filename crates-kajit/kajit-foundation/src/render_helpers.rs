@@ -96,7 +96,11 @@ pub(crate) fn render_syntax_type_use(
         SyntaxTypeUse::Seq(inner) => {
             format!("Vec<{}>", render_syntax_type_use(inner, node_names, false))
         }
-        SyntaxTypeUse::Arena { item: inner, .. } => {
+        SyntaxTypeUse::Arena { key: Some(key), .. } => format!("super::super::Order<{key}>"),
+        SyntaxTypeUse::Arena {
+            item: inner,
+            key: None,
+        } => {
             format!(
                 "super::super::Arena<{}>",
                 render_syntax_type_use(inner, node_names, false)
@@ -351,7 +355,11 @@ pub(crate) fn render_visit_calls(
                 )]
             }
         }
-        SyntaxTypeUse::Arena { item: inner, .. } => {
+        SyntaxTypeUse::Arena { key: Some(_), .. } => Vec::new(),
+        SyntaxTypeUse::Arena {
+            item: inner,
+            key: None,
+        } => {
             let inner = render_visit_calls(inner, "value", node_names, mutable, true);
             if inner.is_empty() {
                 Vec::new()

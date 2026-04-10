@@ -20,11 +20,16 @@ impl ProgramHandle {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Graph {
     roots: Vec<Program>,
+
+    insts: super::super::ArenaStorage<InstId, Inst>,
 }
 
 impl Graph {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            roots: Vec::new(),
+            insts: super::super::ArenaStorage::new(),
+        }
     }
     pub fn insert_root(&mut self, root: Program) -> ProgramHandle {
         let handle = ProgramHandle::new(self.roots.len() as u32);
@@ -46,6 +51,23 @@ impl Graph {
     pub fn is_empty(&self) -> bool {
         self.roots.is_empty()
     }
+    pub fn insert_inst(&mut self, value: Inst) -> Result<InstId, String> {
+        let key = {
+            let value = &value;
+            value.id
+        };
+        self.insts.insert(key, value)?;
+        Ok(key)
+    }
+    pub fn inst(&self, handle: InstId) -> Option<&Inst> {
+        self.insts.get(handle)
+    }
+    pub fn inst_mut(&mut self, handle: InstId) -> Option<&mut Inst> {
+        self.insts.get_mut(handle)
+    }
+    pub fn all_inst(&self) -> impl Iterator<Item = &Inst> {
+        self.insts.values()
+    }
 }
 
 /// Preserved doc-comment lines collected from leading `///` comments.
@@ -61,29 +83,14 @@ pub enum BinOpKind {
     #[default]
     Add,
 
-    /// Bitwise AND.
-    And,
-
-    /// Equality comparison.
-    CmpEq,
-
-    /// Greater-than-or-equal comparison.
-    CmpGe,
-
-    /// Greater-than comparison.
-    CmpGt,
-
-    /// Less-than-or-equal comparison.
-    CmpLe,
-
-    /// Less-than comparison.
-    CmpLt,
-
-    /// Inequality comparison.
-    CmpNe,
+    /// Integer subtraction.
+    Sub,
 
     /// Integer multiplication.
     Mul,
+
+    /// Bitwise AND.
+    And,
 
     /// Bitwise OR.
     Or,
@@ -91,17 +98,32 @@ pub enum BinOpKind {
     /// Arithmetic right shift.
     Sar,
 
-    /// Logical left shift.
-    Shl,
-
     /// Logical right shift.
     Shr,
 
-    /// Integer subtraction.
-    Sub,
+    /// Logical left shift.
+    Shl,
 
     /// Bitwise XOR.
     Xor,
+
+    /// Equality comparison.
+    CmpEq,
+
+    /// Inequality comparison.
+    CmpNe,
+
+    /// Less-than comparison.
+    CmpLt,
+
+    /// Less-than-or-equal comparison.
+    CmpLe,
+
+    /// Greater-than comparison.
+    CmpGt,
+
+    /// Greater-than-or-equal comparison.
+    CmpGe,
 }
 
 /// An embedded data blob identifier.
@@ -133,15 +155,15 @@ impl BlockId {
 /// Named clobber groups printed after `!`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ClobberKind {
-    /// Both caller-saved GPR and SIMD registers are clobbered.
-    #[default]
-    Both,
-
     /// Caller-saved GPRs are clobbered.
+    #[default]
     Gpr,
 
     /// Caller-saved SIMD registers are clobbered.
     Simd,
+
+    /// Both caller-saved GPR and SIMD registers are clobbered.
+    Both,
 }
 
 /// A control-flow edge identifier.
@@ -447,7 +469,7 @@ pub struct Function {
     pub function_id: FunctionId,
 
     /// Non-terminator instructions in arena order.
-    pub insts: super::super::Arena<Inst>,
+    pub insts: super::super::Order<InstId>,
 
     /// Lowered lambda identifier.
     pub lambda_id: LambdaId,

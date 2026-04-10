@@ -6,11 +6,18 @@ use super::*;
 use crate::HoverEntry;
 use kajit_types::Prov;
 pub fn hover_entries(source: &str) -> Vec<HoverEntry> {
-    let Ok(root) = parse_root_text_rich(source, None) else {
+    let mut graph = Graph::new();
+    let Ok(handle) = parse_root_into_graph(&mut graph, source) else {
+        return Vec::new();
+    };
+    hover_entries_in_graph(&graph, handle)
+}
+pub fn hover_entries_in_graph(graph: &Graph, handle: ProgramHandle) -> Vec<HoverEntry> {
+    let Some(root) = graph.root(handle) else {
         return Vec::new();
     };
     let mut out = Vec::new();
-    collect_program(&root, &mut out);
+    collect_program(root, &mut out);
     out.sort_by_key(|entry| (entry.start, entry.end, entry.priority));
     out.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.markdown == b.markdown);
     out
@@ -155,9 +162,6 @@ fn collect_function(node: &Function, out: &mut Vec<HoverEntry>) {
     collect_data_results_line(&node.data_results, out);
     for value in &node.edges {
         collect_edge(value, out);
-    }
-    for value in &node.insts {
-        collect_inst(value, out);
     }
     for value in &node.terms {
         collect_terminator(value, out);

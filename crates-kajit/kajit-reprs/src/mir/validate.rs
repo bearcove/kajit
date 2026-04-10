@@ -166,8 +166,6 @@ fn validate_function(value: &Function, ctx: &mut ValidationContext, errors: &mut
         .push(value.blocks.iter().map(key_of_block).collect());
     ctx.edge_ids
         .push(value.edges.iter().map(key_of_edge).collect());
-    ctx.inst_ids
-        .push(value.insts.iter().map(key_of_inst).collect());
     ctx.terminator_ids
         .push(value.terms.iter().map(key_of_terminator).collect());
     for value in value.blocks.iter() {
@@ -190,14 +188,10 @@ fn validate_function(value: &Function, ctx: &mut ValidationContext, errors: &mut
             value.entry
         ));
     }
-    for value in value.insts.iter() {
-        validate_inst(&value, ctx, errors);
-    }
     for value in value.terms.iter() {
         validate_terminator(&value, ctx, errors);
     }
     ctx.terminator_ids.pop();
-    ctx.inst_ids.pop();
     ctx.edge_ids.pop();
     ctx.block_ids.pop();
 }
@@ -415,9 +409,17 @@ fn validate_unary_op(value: &UnaryOp, ctx: &mut ValidationContext, errors: &mut 
         }
     }
 }
-pub fn validate_root(root: &Program) -> Result<(), String> {
+pub fn validate_root_in_graph(graph: &Graph, handle: ProgramHandle) -> Result<(), String> {
+    let Some(root) = graph.root(handle) else {
+        return Err(format!("unknown root handle {:?}", handle));
+    };
     let mut ctx = ValidationContext::default();
     let mut errors = Vec::new();
+    ctx.inst_ids
+        .push(graph.all_inst().map(key_of_inst).collect());
+    for value in graph.all_inst() {
+        validate_inst(value, &mut ctx, &mut errors);
+    }
     validate_program(root, &mut ctx, &mut errors);
     if errors.is_empty() {
         Ok(())
@@ -426,6 +428,7 @@ pub fn validate_root(root: &Program) -> Result<(), String> {
     }
 }
 pub fn validate_root_text(source: &str) -> Result<(), String> {
-    let root = parse_root_text(source)?;
-    validate_root(&root)
+    let mut graph = Graph::new();
+    let handle = parse_root_into_graph(&mut graph, source)?;
+    validate_root_in_graph(&graph, handle)
 }

@@ -42,6 +42,11 @@ fn token_ident<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>>
 fn token_int<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> + Clone {
     text::int::<_, ParseExtra<'src>>(10).map(str::to_owned)
 }
+
+#[derive(Debug, Default)]
+struct ParseArenaCaptures {
+    arena_inst_values: Vec<Inst>,
+}
 fn prov_from_span(span: chumsky::span::SimpleSpan<usize>, file_id: Option<u32>) -> Prov {
     Prov {
         file_id,
@@ -55,7 +60,8 @@ fn parse_root_value_rich(
     source: &str,
 
     file_id: Option<u32>,
-) -> Result<Program, Vec<Rich<'_, char>>> {
+) -> Result<(Program, ParseArenaCaptures), Vec<Rich<'_, char>>> {
+    let arena_inst_values = std::rc::Rc::new(std::cell::RefCell::new(Vec::<Inst>::new()));
     let bin_op_kind_parser = choice((
         just("add").to(BinOpKind::Add),
         just("sub").to(BinOpKind::Sub),
@@ -659,9 +665,19 @@ fn parse_root_value_rich(
     .then(
         ((block_parser.clone()).repeated().collect::<Vec<_>>()).map(super::super::Pool::from),
     ))
-    .then(
-        ((inst_parser.clone()).repeated().collect::<Vec<_>>()).map(super::super::Arena::from),
-    ))
+    .then(((inst_parser.clone()).repeated().collect::<Vec<_>>()).map({
+        let arena_inst_values = arena_inst_values.clone();
+        move |values| {
+            let mut ids = Vec::with_capacity(values.len());
+            let mut arena = arena_inst_values.borrow_mut();
+            for value in values {
+                let id = value.id;
+                ids.push(id);
+                arena.push(value);
+            }
+            super::super::Order::from(ids)
+        }
+    })))
     .then(
         ((terminator_parser.clone()).repeated().collect::<Vec<_>>()).map(super::super::Pool::from),
     ))
@@ -751,20 +767,28 @@ fn parse_root_value_rich(
         },
     )
     .boxed();
-    program_parser
+    let root = program_parser
         .then_ignore(end())
         .parse(source)
-        .into_result()
+        .into_result()?;
+    Ok((
+        root,
+        ParseArenaCaptures {
+            arena_inst_values: std::mem::take(&mut *arena_inst_values.borrow_mut()),
+        },
+    ))
 }
 pub fn parse_root_text_rich(
     source: &str,
 
     file_id: Option<u32>,
 ) -> Result<Program, Vec<Rich<'_, char>>> {
-    parse_root_value_rich(source, file_id)
+    parse_root_value_rich(source, file_id).map(|(root, _)| root)
 }
 pub fn parse_root_text_with_file_id(source: &str, file_id: Option<u32>) -> Result<Program, String> {
-    parse_root_value_rich(source, file_id).map_err(|errs| crate::format_rich_errors(source, errs))
+    parse_root_value_rich(source, file_id)
+        .map(|(root, _)| root)
+        .map_err(|errs| crate::format_rich_errors(source, errs))
 }
 pub fn parse_root_text(source: &str) -> Result<Program, String> {
     parse_root_text_with_file_id(source, None)
@@ -793,7 +817,12 @@ pub fn parse_root_into_graph_rich<'src>(
 
     file_id: Option<u32>,
 ) -> Result<ProgramHandle, Vec<Rich<'src, char>>> {
-    let root = parse_root_value_rich(source, file_id)?;
+    let (root, captures) = parse_root_value_rich(source, file_id)?;
+    for value in captures.arena_inst_values {
+        graph
+            .insert_inst(value)
+            .map_err(|err| vec![Rich::custom(chumsky::span::SimpleSpan::new(0, 0), err)])?;
+    }
     Ok(graph.insert_root(root))
 }
 pub fn parse_root_into_graph_with_file_id(

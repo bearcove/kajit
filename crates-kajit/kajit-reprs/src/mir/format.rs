@@ -14,6 +14,15 @@ impl std::fmt::Display for Program {
         f.write_str(&format_root_text(self))
     }
 }
+pub fn format_root_in_graph(graph: &Graph, handle: ProgramHandle) -> Result<String, String> {
+    let Some(node) = graph.root(handle) else {
+        return Err(format!("unknown root handle {:?}", handle));
+    };
+    Ok(format_root_text(node))
+}
+pub fn format_program_in_graph(graph: &Graph, handle: ProgramHandle) -> Result<String, String> {
+    format_root_in_graph(graph, handle)
+}
 const INDENT_WIDTH: usize = 4;
 struct Writer {
     out: String,
@@ -231,9 +240,7 @@ fn write_function(w: &mut Writer, node: &Function) {
         if idx != 0 {
             w.text("\n");
         }
-        w.with_indent(|w| {
-            write_inst(w, &value);
-        });
+        w.text(&value.0.to_string());
     }
     w.text("\n");
     for (idx, value) in node.terms.iter().enumerate() {

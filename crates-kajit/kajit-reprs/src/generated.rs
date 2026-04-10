@@ -133,6 +133,49 @@ impl<'a, T> IntoIterator for &'a mut Pool<T> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArenaStorage<Id, T>
+where
+    Id: Ord + Copy + std::fmt::Debug,
+{
+    by_id: std::collections::BTreeMap<Id, T>,
+}
+impl<Id, T> Default for ArenaStorage<Id, T>
+where
+    Id: Ord + Copy + std::fmt::Debug,
+{
+    fn default() -> Self {
+        Self {
+            by_id: std::collections::BTreeMap::new(),
+        }
+    }
+}
+impl<Id, T> ArenaStorage<Id, T>
+where
+    Id: Ord + Copy + std::fmt::Debug,
+{
+    pub fn new() -> Self {
+        Self {
+            by_id: std::collections::BTreeMap::new(),
+        }
+    }
+    pub fn insert(&mut self, id: Id, value: T) -> Result<(), String> {
+        if self.by_id.insert(id, value).is_some() {
+            return Err(format!("duplicate arena id {id:?}"));
+        }
+        Ok(())
+    }
+    pub fn get(&self, id: Id) -> Option<&T> {
+        self.by_id.get(&id)
+    }
+    pub fn get_mut(&mut self, id: Id) -> Option<&mut T> {
+        self.by_id.get_mut(&id)
+    }
+    pub fn values(&self) -> impl Iterator<Item = &T> {
+        self.by_id.values()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Arena<T>(pub Vec<T>);
 impl<T> Arena<T> {
@@ -255,17 +298,28 @@ fn resolve_asm(source: &str) -> Result<ResolutionSet, String> {
     asm::resolve(source)
 }
 fn validate_mir(source: &str) -> Result<(), String> {
-    mir::validate_root_text(source)
+    let mut graph = mir::Graph::new();
+    let handle = mir::parse_root_into_graph(&mut graph, source)?;
+    mir::validate_root_in_graph(&graph, handle)
 }
 fn format_mir(source: &str) -> Result<String, String> {
-    let root = mir::parse_root_text(source)?;
-    Ok(mir::format_root_text(&root))
+    let mut graph = mir::Graph::new();
+    let handle = mir::parse_root_into_graph(&mut graph, source)?;
+    mir::format_root_in_graph(&graph, handle)
 }
 fn semantic_tokens_mir(source: &str) -> Vec<SemanticToken> {
-    mir::semantic_tokens(source)
+    let mut graph = mir::Graph::new();
+    let Ok(handle) = mir::parse_root_into_graph(&mut graph, source) else {
+        return Vec::new();
+    };
+    mir::semantic_tokens_in_graph(source, &graph, handle)
 }
 fn hover_entries_mir(source: &str) -> Vec<HoverEntry> {
-    mir::hover_entries(source)
+    let mut graph = mir::Graph::new();
+    let Ok(handle) = mir::parse_root_into_graph(&mut graph, source) else {
+        return Vec::new();
+    };
+    mir::hover_entries_in_graph(&graph, handle)
 }
 fn resolve_mir(source: &str) -> Result<ResolutionSet, String> {
     mir::resolve(source)

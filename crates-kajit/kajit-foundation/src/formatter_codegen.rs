@@ -23,6 +23,7 @@ pub(crate) fn render_formatter_block(
     repr: &NormalizedRepr,
     node_names: &[String],
 ) -> Result<String, String> {
+    let graph_backed = has_keyed_arenas(repr);
     let mut formatters = Vec::new();
     let root_name = &repr.syntax.root;
     let root_fn = snake_case(root_name);
@@ -56,6 +57,25 @@ pub(crate) fn render_formatter_block(
         }
     }
 
+    let graph_rows = if graph_backed {
+        format!(
+            r#"
+pub fn format_root_in_graph(graph: &Graph, handle: {root_name}Handle) -> Result<String, String> {{
+    let Some(node) = graph.root(handle) else {{
+        return Err(format!("unknown root handle {{:?}}", handle));
+    }};
+    Ok(format_root_text(node))
+}}
+
+pub fn format_{root_fn}_in_graph(graph: &Graph, handle: {root_name}Handle) -> Result<String, String> {{
+    format_root_in_graph(graph, handle)
+}}
+"#
+        )
+    } else {
+        String::new()
+    };
+
     Ok(format!(
         r#"
 pub fn format_root_text(node: &{root_name}) -> String {{
@@ -71,6 +91,8 @@ impl std::fmt::Display for {root_name} {{
         f.write_str(&format_root_text(self))
     }}
 }}
+
+{graph_rows}
 
 const INDENT_WIDTH: usize = 4;
 
@@ -120,8 +142,26 @@ impl Writer {{
 "#,
         root_name = root_name,
         root_fn = root_fn,
+        graph_rows = graph_rows,
         formatters = formatters.join("\n\n"),
     ))
+}
+
+fn has_keyed_arenas(repr: &NormalizedRepr) -> bool {
+    repr.nodes.values().any(|decl| match &decl.value {
+        NormalizedNodeDecl::Record { fields, .. } => fields
+            .values()
+            .any(|field| matches!(field.value, SyntaxTypeUse::Arena { key: Some(_), .. })),
+        NormalizedNodeDecl::Enum(variants) => variants.values().any(|variant| {
+            matches!(
+                &variant.value,
+                NormalizedNodeDecl::Record { fields, .. }
+                    if fields.values().any(
+                        |field| matches!(field.value, SyntaxTypeUse::Arena { key: Some(_), .. })
+                    )
+            )
+        }),
+    })
 }
 
 fn render_node_formatter(
@@ -384,9 +424,7 @@ fn render_value_write_lines(
         SyntaxTypeUse::Optional(_) => {
             Err("optional formatting must be handled by TemplatePart::Optional".to_owned())
         }
-        SyntaxTypeUse::Seq(inner)
-        | SyntaxTypeUse::Order(inner)
-        | SyntaxTypeUse::Arena { item: inner, .. } => {
+        SyntaxTypeUse::Seq(inner) | SyntaxTypeUse::Order(inner) => {
             let sep = joiner.unwrap_or("\n");
             let mut lines = vec![format!(
                 "    for (idx, value) in {expr}.iter().enumerate() {{"
@@ -427,6 +465,46 @@ fn render_value_write_lines(
                     .map(|line| format!("    {line}")),
                 );
             }
+            lines.push("    }".to_owned());
+            Ok(lines)
+        }
+        SyntaxTypeUse::Arena { key: Some(key), .. } => {
+            let sep = joiner.unwrap_or("\n");
+            let mut lines = vec![format!(
+                "    for (idx, value) in {expr}.iter().enumerate() {{"
+            )];
+            lines.push("        if idx != 0 {".to_owned());
+            lines.push(format!("            {writer_name}.text({sep:?});"));
+            lines.push("        }".to_owned());
+            lines.push(format!("        {writer_name}.text(&value.0.to_string());"));
+            lines.push("    }".to_owned());
+            let _ = key;
+            Ok(lines)
+        }
+        SyntaxTypeUse::Arena {
+            item: inner,
+            key: None,
+        } => {
+            let sep = joiner.unwrap_or("\n");
+            let mut lines = vec![format!(
+                "    for (idx, value) in {expr}.iter().enumerate() {{"
+            )];
+            lines.push("        if idx != 0 {".to_owned());
+            lines.push(format!("            {writer_name}.text({sep:?});"));
+            lines.push("        }".to_owned());
+            lines.extend(
+                render_value_write_lines(
+                    repr,
+                    writer_name,
+                    "value",
+                    inner,
+                    None,
+                    node_names,
+                    false,
+                )?
+                .into_iter()
+                .map(|line| format!("    {line}")),
+            );
             lines.push("    }".to_owned());
             Ok(lines)
         }

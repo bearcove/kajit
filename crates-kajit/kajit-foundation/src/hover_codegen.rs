@@ -48,9 +48,31 @@ fn recurse_calls_for_type(
                 )]
             }
         }
-        SyntaxTypeUse::Seq(inner)
-        | SyntaxTypeUse::Order(inner)
-        | SyntaxTypeUse::Arena { item: inner, .. } => {
+        SyntaxTypeUse::Seq(inner) | SyntaxTypeUse::Order(inner) => {
+            let inner_calls = recurse_calls_for_type(inner, "value", node_names, true);
+            if inner_calls.is_empty() {
+                Vec::new()
+            } else {
+                let iter_expr = if borrowed {
+                    expr.to_owned()
+                } else {
+                    format!("&{expr}")
+                };
+                vec![format!(
+                    "for value in {iter_expr} {{\n{}\n}}",
+                    inner_calls
+                        .into_iter()
+                        .map(|line| format!("    {line}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )]
+            }
+        }
+        SyntaxTypeUse::Arena { key: Some(_), .. } => Vec::new(),
+        SyntaxTypeUse::Arena {
+            item: inner,
+            key: None,
+        } => {
             let inner_calls = recurse_calls_for_type(inner, "value", node_names, true);
             if inner_calls.is_empty() {
                 Vec::new()
@@ -205,6 +227,7 @@ pub(crate) fn render_hover_block(
     repr: &NormalizedRepr,
     node_names: &[String],
 ) -> Result<String, String> {
+    let graph_backed = has_keyed_arenas(repr);
     let root_name = &repr.syntax.root;
     let root_method = snake_case(root_name);
     let mut collector_rows = Vec::new();
@@ -326,8 +349,32 @@ pub(crate) fn render_hover_block(
         ));
     }
 
-    Ok(format!(
-        r#"
+    let hover_head = if graph_backed {
+        format!(
+            r#"
+pub fn hover_entries(source: &str) -> Vec<HoverEntry> {{
+    let mut graph = Graph::new();
+    let Ok(handle) = parse_root_into_graph(&mut graph, source) else {{
+        return Vec::new();
+    }};
+    hover_entries_in_graph(&graph, handle)
+}}
+
+pub fn hover_entries_in_graph(graph: &Graph, handle: {root_name}Handle) -> Vec<HoverEntry> {{
+    let Some(root) = graph.root(handle) else {{
+        return Vec::new();
+    }};
+    let mut out = Vec::new();
+    collect_{root_method}(root, &mut out);
+    out.sort_by_key(|entry| (entry.start, entry.end, entry.priority));
+    out.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.markdown == b.markdown);
+    out
+}}
+"#
+        )
+    } else {
+        format!(
+            r#"
 pub fn hover_entries(source: &str) -> Vec<HoverEntry> {{
     let Ok(root) = parse_root_text_rich(source, None) else {{
         return Vec::new();
@@ -338,6 +385,13 @@ pub fn hover_entries(source: &str) -> Vec<HoverEntry> {{
     out.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.markdown == b.markdown);
     out
 }}
+"#
+        )
+    };
+
+    Ok(format!(
+        r#"
+{hover_head}
 
 fn emit_hover(prov: &Prov, markdown: &str, priority: u8, out: &mut Vec<HoverEntry>) {{
     let Some(span) = prov.span.as_ref() else {{
@@ -356,6 +410,24 @@ fn emit_hover(prov: &Prov, markdown: &str, priority: u8, out: &mut Vec<HoverEntr
 
 {collector_rows}
 "#,
+        hover_head = hover_head,
         collector_rows = collector_rows.join("\n\n"),
     ))
+}
+
+fn has_keyed_arenas(repr: &NormalizedRepr) -> bool {
+    repr.nodes.values().any(|decl| match &decl.value {
+        NormalizedNodeDecl::Record { fields, .. } => fields
+            .values()
+            .any(|field| matches!(field.value, SyntaxTypeUse::Arena { key: Some(_), .. })),
+        NormalizedNodeDecl::Enum(variants) => variants.values().any(|variant| {
+            matches!(
+                &variant.value,
+                NormalizedNodeDecl::Record { fields, .. }
+                    if fields.values().any(
+                        |field| matches!(field.value, SyntaxTypeUse::Arena { key: Some(_), .. })
+                    )
+            )
+        }),
+    })
 }

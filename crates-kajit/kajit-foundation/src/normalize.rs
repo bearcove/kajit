@@ -367,7 +367,7 @@ pub(crate) fn normalize_repr(repr: &ReprBody) -> Result<NormalizedRepr, String> 
         })
         .collect::<Result<HashMap<_, _>, String>>()?;
 
-    let support = repr
+    let mut support = repr
         .support
         .clone()
         .unwrap_or_default()
@@ -389,6 +389,48 @@ pub(crate) fn normalize_repr(repr: &ReprBody) -> Result<NormalizedRepr, String> 
         .iter()
         .map(|(name, rule)| Ok((name.clone(), normalize_rule(rule)?)))
         .collect::<Result<HashMap<_, _>, String>>()?;
+
+    for (name, decl) in &mut support {
+        let NormalizedSupportDecl::Enum(variants) = &mut decl.value else {
+            continue;
+        };
+        let mut ordered = Vec::new();
+        if let Some(SyntaxRule::Choice(items)) = rules.get(name) {
+            for item in items {
+                let SyntaxRule::Variant(named) = item else {
+                    continue;
+                };
+                if let Some(pos) = variants
+                    .iter()
+                    .position(|variant| variant.value == named.name)
+                {
+                    ordered.push(variants.remove(pos));
+                }
+            }
+        }
+        variants.sort_by(|a, b| a.value.cmp(&b.value));
+        ordered.extend(variants.drain(..));
+        for preset in [
+            ["Enum", "Struct", "Alias"].as_slice(),
+            ["Local", "Temp"].as_slice(),
+        ] {
+            if preset
+                .iter()
+                .all(|name| ordered.iter().any(|variant| variant.value == *name))
+            {
+                let mut prioritized = Vec::new();
+                for name in preset {
+                    if let Some(pos) = ordered.iter().position(|variant| variant.value == *name) {
+                        prioritized.push(ordered.remove(pos));
+                    }
+                }
+                prioritized.extend(ordered.drain(..));
+                ordered = prioritized;
+                break;
+            }
+        }
+        *variants = ordered;
+    }
 
     let token_specs = repr
         .syntax
@@ -446,7 +488,10 @@ pub(crate) fn render_default_value(ty: &SyntaxTypeUse, provenance_tag: &str) -> 
     match ty {
         SyntaxTypeUse::Optional(_) => Some("None".to_owned()),
         SyntaxTypeUse::Seq(_) => Some("Vec::new()".to_owned()),
-        SyntaxTypeUse::Arena { .. } => Some("super::super::Arena::default()".to_owned()),
+        SyntaxTypeUse::Arena { key: Some(_), .. } => {
+            Some("super::super::Order::default()".to_owned())
+        }
+        SyntaxTypeUse::Arena { key: None, .. } => Some("super::super::Arena::default()".to_owned()),
         SyntaxTypeUse::Pool { .. } => Some("super::super::Pool::default()".to_owned()),
         SyntaxTypeUse::Order(_) => Some("super::super::Order::default()".to_owned()),
         SyntaxTypeUse::RefTo { .. } => None,

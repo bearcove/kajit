@@ -1,4 +1,4 @@
-use kajit_reprs::mir::{FunctionId, ProgramStorage, StorageError, parse_root_text};
+use kajit_reprs::mir::{FunctionId, Graph, ProgramStorage, StorageError, parse_root_into_graph};
 
 #[test]
 fn mir_storage_resolves_entry_block_and_edges() {
@@ -15,8 +15,10 @@ edge e1: b0 -> b1 []
 }
 }"#;
 
-    let program = parse_root_text(source).expect("MIR should parse");
-    let storage = ProgramStorage::new(&program).expect("storage should build");
+    let mut graph = Graph::new();
+    let handle = parse_root_into_graph(&mut graph, source).expect("MIR should parse");
+    let program = graph.root(handle).expect("root should exist");
+    let storage = ProgramStorage::new(&graph, program).expect("storage should build");
     let function = storage
         .function_storage(FunctionId::new(0))
         .expect("function storage should build")
@@ -57,8 +59,10 @@ term t1: return
 }
 }"#;
 
-    let program = parse_root_text(source).expect("MIR should parse");
-    let storage = ProgramStorage::new(&program).expect("program storage should build");
+    let mut graph = Graph::new();
+    let handle = parse_root_into_graph(&mut graph, source).expect("MIR should parse");
+    let program = graph.root(handle).expect("root should exist");
+    let storage = ProgramStorage::new(&graph, program).expect("program storage should build");
     match storage.function_storage(FunctionId::new(0)) {
         Err(StorageError::DuplicateId {
             entity: "Block", ..

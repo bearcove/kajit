@@ -128,15 +128,15 @@ impl Type {
 /// The kind of type definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TypeDefKind {
-    /// A type alias definition.
-    #[default]
-    Alias,
-
     /// An enum type definition.
+    #[default]
     Enum,
 
     /// A struct type definition.
     Struct,
+
+    /// A type alias definition.
+    Alias,
 }
 
 /// A sequence of statements with shared provenance.

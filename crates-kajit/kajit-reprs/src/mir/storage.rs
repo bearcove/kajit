@@ -76,16 +76,18 @@ where
 }
 
 pub struct ProgramStorage<'a> {
+    graph: &'a Graph,
     program: &'a Program,
     functions_by_id: BTreeMap<FunctionId, &'a Function>,
 }
 
 impl<'a> ProgramStorage<'a> {
-    pub fn new(program: &'a Program) -> Result<Self, StorageError> {
+    pub fn new(graph: &'a Graph, program: &'a Program) -> Result<Self, StorageError> {
         let functions_by_id = index_pool("Function", program.functions.iter(), |function| {
             function.function_id
         })?;
         Ok(Self {
+            graph,
             program,
             functions_by_id,
         })
@@ -107,11 +109,14 @@ impl<'a> ProgramStorage<'a> {
         &self,
         id: FunctionId,
     ) -> Result<Option<FunctionStorage<'a>>, StorageError> {
-        self.function(id).map(FunctionStorage::new).transpose()
+        self.function(id)
+            .map(|function| FunctionStorage::new(self.graph, function))
+            .transpose()
     }
 }
 
 pub struct FunctionStorage<'a> {
+    graph: &'a Graph,
     function: &'a Function,
     blocks_by_id: BTreeMap<BlockId, &'a Block>,
     edges_by_id: BTreeMap<EdgeId, &'a Edge>,
@@ -120,12 +125,13 @@ pub struct FunctionStorage<'a> {
 }
 
 impl<'a> FunctionStorage<'a> {
-    pub fn new(function: &'a Function) -> Result<Self, StorageError> {
+    pub fn new(graph: &'a Graph, function: &'a Function) -> Result<Self, StorageError> {
         Ok(Self {
+            graph,
             function,
             blocks_by_id: index_pool("Block", function.blocks.iter(), |block| block.id)?,
             edges_by_id: index_pool("Edge", function.edges.iter(), |edge| edge.id)?,
-            insts_by_id: index_pool("Inst", function.insts.iter(), |inst| inst.id)?,
+            insts_by_id: index_pool("Inst", graph.all_inst(), |inst| inst.id)?,
             terms_by_id: index_pool("Terminator", function.terms.iter(), |term| match term {
                 Terminator::Branch { id, .. }
                 | Terminator::BranchIf { id, .. }
@@ -149,7 +155,10 @@ impl<'a> FunctionStorage<'a> {
     }
 
     pub fn insts(&self) -> impl Iterator<Item = &'a Inst> + '_ {
-        self.function.insts.iter()
+        self.function
+            .insts
+            .iter()
+            .filter_map(|id| self.graph.inst(*id))
     }
 
     pub fn terms(&self) -> impl Iterator<Item = &'a Terminator> + '_ {

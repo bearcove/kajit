@@ -111,12 +111,23 @@ struct RenderParts {
     semantic_rows: String,
     hover_rows: String,
     validate_rows: String,
+    graph_storage_field_rows: String,
+    graph_storage_init_rows: String,
+    graph_storage_method_rows: String,
 }
 
 #[derive(Clone)]
 struct PoolInfo {
     item: String,
     key: String,
+}
+
+#[derive(Clone)]
+struct ArenaGraphInfo {
+    item: String,
+    key: String,
+    storage_field: String,
+    key_accessor: String,
 }
 
 fn is_prov_only_struct(
@@ -274,6 +285,79 @@ fn collect_pool_infos(repr: &NormalizedRepr) -> std::collections::BTreeMap<Strin
     out
 }
 
+fn collect_arena_graph_infos(repr: &NormalizedRepr) -> Result<Vec<ArenaGraphInfo>, String> {
+    let mut infos = std::collections::BTreeMap::<String, ArenaGraphInfo>::new();
+
+    let mut collect_from_fields =
+        |fields: &std::collections::HashMap<String, DocumentedValue<SyntaxTypeUse>>| {
+            for ty in fields.values() {
+                if let SyntaxTypeUse::Arena {
+                    item: inner,
+                    key: Some(key),
+                } = &ty.value
+                    && let SyntaxTypeUse::Ref { name: item_name } = inner.as_ref()
+                {
+                    let decl = repr.nodes.get(item_name).ok_or_else(|| {
+                        format!("keyed arena item {item_name:?} must be a declared node")
+                    })?;
+                    let key_accessor = field_id_accessor(item_name, &decl.value, key)?;
+                    let storage_field = format!("{}s", snake_case(item_name));
+                    if let Some(existing) = infos.get(item_name) {
+                        if existing.key != *key {
+                            return Err(format!(
+                                "arena item {item_name} used with conflicting keys: {:?} vs {:?}",
+                                existing.key, key
+                            ));
+                        }
+                    } else {
+                        infos.insert(
+                            item_name.clone(),
+                            ArenaGraphInfo {
+                                item: item_name.clone(),
+                                key: key.clone(),
+                                storage_field,
+                                key_accessor,
+                            },
+                        );
+                    }
+                }
+            }
+            Ok::<(), String>(())
+        };
+
+    for decl in repr.nodes.values() {
+        match &decl.value {
+            NormalizedNodeDecl::Record { fields, .. } => collect_from_fields(fields)?,
+            NormalizedNodeDecl::Enum(variants) => {
+                for variant in variants.values() {
+                    if let NormalizedNodeDecl::Record { fields, .. } = &variant.value {
+                        collect_from_fields(fields)?;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(infos.into_values().collect())
+}
+
+fn repr_has_graph_arenas(repr: &NormalizedRepr) -> bool {
+    repr.nodes.values().any(|decl| match &decl.value {
+        NormalizedNodeDecl::Record { fields, .. } => fields
+            .values()
+            .any(|field| matches!(field.value, SyntaxTypeUse::Arena { key: Some(_), .. })),
+        NormalizedNodeDecl::Enum(variants) => variants.values().any(|variant| {
+            matches!(
+                &variant.value,
+                NormalizedNodeDecl::Record { fields, .. }
+                    if fields.values().any(
+                        |field| matches!(field.value, SyntaxTypeUse::Arena { key: Some(_), .. })
+                    )
+            )
+        }),
+    })
+}
+
 fn render_validate_ref_check(id_expr: &str, target: &str, owner: &str, field: &str) -> String {
     let ctx_name = format!("{}_ids", snake_case(target));
     format!(
@@ -306,8 +390,19 @@ fn render_validate_value(
         }
         SyntaxTypeUse::Seq(inner)
         | SyntaxTypeUse::Order(inner)
-        | SyntaxTypeUse::Arena { item: inner, .. }
         | SyntaxTypeUse::Pool { item: inner, .. } => {
+            let body =
+                render_validate_value("value", inner, owner, field, node_names, support_structs);
+            format!(
+                "for value in {expr}.iter() {{\n{}\n}}",
+                indent_block(&body, 4)
+            )
+        }
+        SyntaxTypeUse::Arena { key: Some(_), .. } => String::new(),
+        SyntaxTypeUse::Arena {
+            item: inner,
+            key: None,
+        } => {
             let body =
                 render_validate_value("value", inner, owner, field, node_names, support_structs);
             format!(
@@ -380,11 +475,7 @@ fn render_record_validate_body(
         } else {
             format!("value.{}", rust_ident(field_name))
         };
-        if let SyntaxTypeUse::Arena {
-            item: inner,
-            key: Some(_),
-        }
-        | SyntaxTypeUse::Pool {
+        if let SyntaxTypeUse::Pool {
             item: inner,
             key: Some(_),
         } = ty
@@ -518,6 +609,8 @@ fn render_support_validate_fn(
 
 fn render_validate_block(repr: &NormalizedRepr, node_names: &[String]) -> Result<String, String> {
     let pool_infos = collect_pool_infos(repr);
+    let arena_infos = collect_arena_graph_infos(repr)?;
+    let graph_backed = !arena_infos.is_empty();
     let support_structs = repr
         .support
         .iter()
@@ -528,9 +621,11 @@ fn render_validate_block(repr: &NormalizedRepr, node_names: &[String]) -> Result
 
     let mut ctx_fields = Vec::new();
     let mut key_fns = Vec::new();
+    let mut seen_items = std::collections::BTreeSet::<String>::new();
     let mut items = pool_infos.iter().collect::<Vec<_>>();
     items.sort_by(|a, b| a.0.cmp(b.0));
     for (item_name, pool) in items {
+        seen_items.insert(item_name.clone());
         ctx_fields.push(format!(
             "    {}_ids: Vec<std::collections::BTreeSet<{}>>,",
             snake_case(item_name),
@@ -548,6 +643,22 @@ fn render_validate_block(repr: &NormalizedRepr, node_names: &[String]) -> Result
             pool.key,
             accessor
         ));
+    }
+    for arena in &arena_infos {
+        if seen_items.insert(arena.item.clone()) {
+            ctx_fields.push(format!(
+                "    {}_ids: Vec<std::collections::BTreeSet<{}>>,",
+                snake_case(&arena.item),
+                arena.key
+            ));
+            key_fns.push(format!(
+                "fn key_of_{}(value: &{}) -> {} {{\n    {}\n}}",
+                snake_case(&arena.item),
+                arena.item,
+                arena.key,
+                arena.key_accessor
+            ));
+        }
     }
 
     let mut support_fns = repr
@@ -573,8 +684,52 @@ fn render_validate_block(repr: &NormalizedRepr, node_names: &[String]) -> Result
         .collect::<Vec<_>>();
     node_fns.sort();
 
-    let root_fn = format!(
-        r#"pub fn validate_root(root: &{root_name}) -> Result<(), String> {{
+    let graph_seed_rows = arena_infos
+        .iter()
+        .map(|info| {
+            let item_snake = snake_case(&info.item);
+            format!(
+                "    ctx.{item_snake}_ids.push(graph.all_{item_snake}().map(key_of_{item_snake}).collect());
+    for value in graph.all_{item_snake}() {{
+        validate_{item_snake}(value, &mut ctx, &mut errors);
+    }}"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let root_fn = if graph_backed {
+        format!(
+            r#"pub fn validate_root_in_graph(
+    graph: &Graph,
+    handle: {root_handle_name},
+) -> Result<(), String> {{
+    let Some(root) = graph.root(handle) else {{
+        return Err(format!("unknown root handle {{:?}}", handle));
+    }};
+    let mut ctx = ValidationContext::default();
+    let mut errors = Vec::new();
+{graph_seed_rows}
+    validate_{root_snake}(root, &mut ctx, &mut errors);
+    if errors.is_empty() {{
+        Ok(())
+    }} else {{
+        Err(errors.join("\n"))
+    }}
+}}
+
+pub fn validate_root_text(source: &str) -> Result<(), String> {{
+    let mut graph = Graph::new();
+    let handle = parse_root_into_graph(&mut graph, source)?;
+    validate_root_in_graph(&graph, handle)
+}}"#,
+            root_handle_name = format!("{}Handle", repr.syntax.root),
+            graph_seed_rows = graph_seed_rows,
+            root_snake = snake_case(&repr.syntax.root),
+        )
+    } else {
+        format!(
+            r#"pub fn validate_root(root: &{root_name}) -> Result<(), String> {{
     let mut ctx = ValidationContext::default();
     let mut errors = Vec::new();
     validate_{root_snake}(root, &mut ctx, &mut errors);
@@ -589,10 +744,10 @@ pub fn validate_root_text(source: &str) -> Result<(), String> {{
     let root = parse_root_text(source)?;
     validate_root(&root)
 }}"#,
-        root_name = repr.syntax.root,
-        root_snake = snake_case(&repr.syntax.root),
-    );
-
+            root_name = repr.syntax.root,
+            root_snake = snake_case(&repr.syntax.root),
+        )
+    };
     Ok(format!(
         r#"
 #![allow(dead_code, unused_variables)]
@@ -1088,6 +1243,61 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
     let hover_rows = render_hover_block(repr, &node_names).expect("hover block should render");
     let validate_rows =
         render_validate_block(repr, &node_names).expect("validate block should render");
+    let arena_graph_infos =
+        collect_arena_graph_infos(repr).expect("arena graph infos should collect");
+    let graph_storage_field_rows = arena_graph_infos
+        .iter()
+        .map(|info| {
+            format!(
+                "    {}: super::super::ArenaStorage<{}, {}>,",
+                info.storage_field, info.key, info.item
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let graph_storage_init_rows = arena_graph_infos
+        .iter()
+        .map(|info| {
+            format!(
+                "            {}: super::super::ArenaStorage::new(),",
+                info.storage_field
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let graph_storage_method_rows = arena_graph_infos
+        .iter()
+        .map(|info| {
+            let item_snake = snake_case(&info.item);
+            format!(
+                "    pub fn insert_{item_snake}(&mut self, value: {item}) -> Result<{key}, String> {{
+        let key = {{
+            let value = &value;
+            {key_accessor}
+        }};
+        self.{storage_field}.insert(key, value)?;
+        Ok(key)
+    }}
+
+    pub fn {item_snake}(&self, handle: {key}) -> Option<&{item}> {{
+        self.{storage_field}.get(handle)
+    }}
+
+    pub fn {item_snake}_mut(&mut self, handle: {key}) -> Option<&mut {item}> {{
+        self.{storage_field}.get_mut(handle)
+    }}
+
+    pub fn all_{item_snake}(&self) -> impl Iterator<Item = &{item}> {{
+        self.{storage_field}.values()
+    }}",
+                item = info.item,
+                key = info.key,
+                storage_field = info.storage_field,
+                key_accessor = info.key_accessor,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
 
     RenderParts {
         module_doc_rows,
@@ -1121,6 +1331,9 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         semantic_rows,
         hover_rows,
         validate_rows,
+        graph_storage_field_rows,
+        graph_storage_init_rows,
+        graph_storage_method_rows,
     }
 }
 
@@ -1139,8 +1352,45 @@ fn render_root_mod_file(reprs: &[NormalizedRepr]) -> String {
         .iter()
         .map(|repr| {
             let module_name = snake_case(&repr.name);
-            format!(
-                r#"
+            if repr_has_graph_arenas(repr) {
+                format!(
+                    r#"
+fn validate_{module_name}(source: &str) -> Result<(), String> {{
+    let mut graph = {module_name}::Graph::new();
+    let handle = {module_name}::parse_root_into_graph(&mut graph, source)?;
+    {module_name}::validate_root_in_graph(&graph, handle)
+}}
+
+fn format_{module_name}(source: &str) -> Result<String, String> {{
+    let mut graph = {module_name}::Graph::new();
+    let handle = {module_name}::parse_root_into_graph(&mut graph, source)?;
+    {module_name}::format_root_in_graph(&graph, handle)
+}}
+
+fn semantic_tokens_{module_name}(source: &str) -> Vec<SemanticToken> {{
+    let mut graph = {module_name}::Graph::new();
+    let Ok(handle) = {module_name}::parse_root_into_graph(&mut graph, source) else {{
+        return Vec::new();
+    }};
+    {module_name}::semantic_tokens_in_graph(source, &graph, handle)
+}}
+
+fn hover_entries_{module_name}(source: &str) -> Vec<HoverEntry> {{
+    let mut graph = {module_name}::Graph::new();
+    let Ok(handle) = {module_name}::parse_root_into_graph(&mut graph, source) else {{
+        return Vec::new();
+    }};
+    {module_name}::hover_entries_in_graph(&graph, handle)
+}}
+
+fn resolve_{module_name}(source: &str) -> Result<ResolutionSet, String> {{
+    {module_name}::resolve(source)
+}}
+"#
+                )
+            } else {
+                format!(
+                    r#"
 fn validate_{module_name}(source: &str) -> Result<(), String> {{
     {module_name}::validate_root_text(source)
 }}
@@ -1162,7 +1412,8 @@ fn resolve_{module_name}(source: &str) -> Result<ResolutionSet, String> {{
     {module_name}::resolve(source)
 }}
 "#
-            )
+                )
+            }
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -1305,6 +1556,55 @@ impl<'a, T> IntoIterator for &'a mut Pool<T> {{
 
     fn into_iter(self) -> Self::IntoIter {{
         self.0.iter_mut()
+    }}
+}}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArenaStorage<Id, T>
+where
+    Id: Ord + Copy + std::fmt::Debug,
+{{
+    by_id: std::collections::BTreeMap<Id, T>,
+}}
+
+impl<Id, T> Default for ArenaStorage<Id, T>
+where
+    Id: Ord + Copy + std::fmt::Debug,
+{{
+    fn default() -> Self {{
+        Self {{
+            by_id: std::collections::BTreeMap::new(),
+        }}
+    }}
+}}
+
+impl<Id, T> ArenaStorage<Id, T>
+where
+    Id: Ord + Copy + std::fmt::Debug,
+{{
+    pub fn new() -> Self {{
+        Self {{
+            by_id: std::collections::BTreeMap::new(),
+        }}
+    }}
+
+    pub fn insert(&mut self, id: Id, value: T) -> Result<(), String> {{
+        if self.by_id.insert(id, value).is_some() {{
+            return Err(format!("duplicate arena id {{id:?}}"));
+        }}
+        Ok(())
+    }}
+
+    pub fn get(&self, id: Id) -> Option<&T> {{
+        self.by_id.get(&id)
+    }}
+
+    pub fn get_mut(&mut self, id: Id) -> Option<&mut T> {{
+        self.by_id.get_mut(&id)
+    }}
+
+    pub fn values(&self) -> impl Iterator<Item = &T> {{
+        self.by_id.values()
     }}
 }}
 
@@ -1598,6 +1898,14 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
 
 fn render_ast_file(parts: &RenderParts) -> String {
     let root_handle_name = format!("{}Handle", parts.root_name);
+    let graph_new_rows = if parts.graph_storage_init_rows.trim().is_empty() {
+        "        Self::default()".to_owned()
+    } else {
+        format!(
+            "        Self {{\n            roots: Vec::new(),\n{}\n        }}",
+            parts.graph_storage_init_rows
+        )
+    };
     format!(
         r#"
 {module_doc_rows}
@@ -1621,11 +1929,12 @@ impl {root_handle_name} {{
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Graph {{
     roots: Vec<{root_name}>,
+{graph_storage_field_rows}
 }}
 
 impl Graph {{
     pub fn new() -> Self {{
-        Self::default()
+{graph_new_rows}
     }}
 
     pub fn insert_root(&mut self, root: {root_name}) -> {root_handle_name} {{
@@ -1653,6 +1962,8 @@ impl Graph {{
     pub fn is_empty(&self) -> bool {{
         self.roots.is_empty()
     }}
+
+{graph_storage_method_rows}
 }}
 
 {placeholder_rows}
@@ -1664,6 +1975,9 @@ impl Graph {{
         module_doc_rows = parts.module_doc_rows,
         root_handle_name = root_handle_name,
         root_name = parts.root_name,
+        graph_storage_field_rows = parts.graph_storage_field_rows,
+        graph_new_rows = graph_new_rows,
+        graph_storage_method_rows = parts.graph_storage_method_rows,
         placeholder_rows = parts.placeholder_rows,
         support_rows = parts.support_rows,
         ast_rows = parts.ast_rows,
@@ -1879,7 +2193,6 @@ fn add_breathing_room(body: &str) -> String {
             && trimmed.ends_with(',')
             && !trimmed.starts_with("#[");
         let starts_field_doc = line.starts_with("        ///");
-        let prev_opens_enum_body = prev_trimmed.ends_with('{') && !prev.starts_with("    ");
 
         let prev_ends_item = prev_trimmed.ends_with('}') || prev_trimmed.ends_with(';');
         let prev_ends_variant = prev_trimmed.ends_with(',') && !prev.starts_with("        ");
@@ -1887,11 +2200,6 @@ fn add_breathing_room(body: &str) -> String {
 
         if !out.is_empty() {
             if starts_top_level_item && prev_ends_item && !prev_trimmed.is_empty() {
-                out.push('\n');
-            } else if (starts_variant_doc || starts_variant)
-                && prev_opens_enum_body
-                && !prev_trimmed.is_empty()
-            {
                 out.push('\n');
             } else if (starts_variant_doc || starts_variant)
                 && prev_ends_variant

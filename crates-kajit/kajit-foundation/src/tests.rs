@@ -307,7 +307,8 @@ repr @module{
         .contents
         .clone();
 
-    assert!(ast.contains("pub blocks: super::super::Arena<Block>,"));
+    assert!(ast.contains("pub blocks: super::super::Order<BlockId>,"));
+    assert!(ast.contains("blocks: super::super::ArenaStorage<BlockId, Block>,"));
     assert!(ast.contains("pub succs: super::super::Order<BlockId>,"));
     assert!(meta.contains("owner: \"Program\""));
     assert!(meta.contains("field: \"blocks\""));
@@ -332,4 +333,26 @@ fn mir_pilot_schema_loads_and_normalizes() {
 
     let loaded = schema::load_pilot_schema(&path).unwrap();
     let _repr = normalize::normalize_repr(&loaded.body).unwrap();
+}
+
+#[test]
+fn hir_support_enum_variant_order_stays_in_schema_order() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../notes/unified-ast/pilot/hir.repr.styx");
+
+    let loaded = schema::load_pilot_schema(&path).unwrap();
+    let repr =
+        normalize::with_module_doc(normalize::normalize_repr(&loaded.body).unwrap(), loaded.doc);
+    let files = render_module::render_repr_poc_files(&[repr]);
+    let ast = files
+        .iter()
+        .find(|file| file.relative_path == "hir/ast.rs")
+        .unwrap()
+        .contents
+        .clone();
+
+    let enum_pos = ast.find("\n    #[default]\n    Enum,").unwrap();
+    let struct_pos = ast.find("\n    Struct,").unwrap();
+    let alias_pos = ast.find("\n    Alias,").unwrap();
+    assert!(enum_pos < struct_pos && struct_pos < alias_pos);
 }

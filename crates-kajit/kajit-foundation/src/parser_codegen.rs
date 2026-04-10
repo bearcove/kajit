@@ -19,6 +19,153 @@ enum RuleTargetDecl<'a> {
     Support(&'a NormalizedSupportDecl),
 }
 
+#[derive(Debug, Clone)]
+struct ArenaParserInfo {
+    item: String,
+    key: String,
+    capture_var: String,
+}
+
+fn arena_key_accessor_expr(
+    item_name: &str,
+    decl: &NormalizedNodeDecl,
+    key_name: &str,
+    value_expr: &str,
+) -> Result<String, String> {
+    match decl {
+        NormalizedNodeDecl::Record { fields, .. } => {
+            let matching_fields = fields
+                .iter()
+                .filter_map(|(field_name, ty)| match &ty.value {
+                    SyntaxTypeUse::Ref { name } if name == key_name => Some(field_name.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let key_field = matching_fields
+                .iter()
+                .find(|field_name| field_name.as_str() == "id")
+                .cloned()
+                .or_else(|| {
+                    if matching_fields.len() == 1 {
+                        matching_fields.first().cloned()
+                    } else {
+                        None
+                    }
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "keyed arena item {item_name} must expose a unique field of type {key_name}"
+                    )
+                })?;
+            Ok(format!("{value_expr}.{}", rust_ident(&key_field)))
+        }
+        NormalizedNodeDecl::Enum(variants) => {
+            let mut arms = Vec::new();
+            let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
+            variant_names.sort();
+            for variant_name in variant_names {
+                let variant = &variants[&variant_name].value;
+                match variant {
+                    NormalizedNodeDecl::Record { fields, .. } => {
+                        let matching_fields = fields
+                            .iter()
+                            .filter_map(|(field_name, ty)| match &ty.value {
+                                SyntaxTypeUse::Ref { name } if name == key_name => {
+                                    Some(field_name.clone())
+                                }
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+                        let key_field = matching_fields
+                            .iter()
+                            .find(|field_name| field_name.as_str() == "id")
+                            .cloned()
+                            .or_else(|| {
+                                if matching_fields.len() == 1 {
+                                    matching_fields.first().cloned()
+                                } else {
+                                    None
+                                }
+                            })
+                            .ok_or_else(|| {
+                                format!(
+                                    "keyed arena item {item_name}.{variant_name} must expose a unique field of type {key_name}"
+                                )
+                            })?;
+                        let key_ident = rust_ident(&key_field);
+                        arms.push(format!(
+                            "        {item_name}::{variant_name} {{ {key_ident}, .. }} => *{key_ident},"
+                        ));
+                    }
+                    NormalizedNodeDecl::Enum(_) => {
+                        return Err(format!(
+                            "keyed arena item {item_name}.{variant_name} cannot be nested enum"
+                        ));
+                    }
+                }
+            }
+            Ok(format!(
+                "match {value_expr} {{\n{}\n    }}",
+                arms.join("\n")
+            ))
+        }
+    }
+}
+
+fn collect_arena_parser_infos(repr: &NormalizedRepr) -> Result<Vec<ArenaParserInfo>, String> {
+    let mut by_item = HashMap::<String, ArenaParserInfo>::new();
+    let mut collect_from_fields =
+        |fields: &HashMap<String, DocumentedValue<SyntaxTypeUse>>| -> Result<(), String> {
+            for ty in fields.values() {
+                if let SyntaxTypeUse::Arena {
+                    item: inner,
+                    key: Some(key),
+                } = &ty.value
+                    && let SyntaxTypeUse::Ref { name: item_name } = inner.as_ref()
+                {
+                    let decl = repr.nodes.get(item_name).ok_or_else(|| {
+                        format!("keyed arena item {item_name:?} must be a declared node")
+                    })?;
+                    let key_expr = arena_key_accessor_expr(item_name, &decl.value, key, "value")?;
+                    let info = ArenaParserInfo {
+                        item: item_name.clone(),
+                        key: key.clone(),
+                        capture_var: format!("arena_{}_values", snake_case(item_name)),
+                    };
+                    if let Some(existing) = by_item.get(item_name) {
+                        if existing.key != *key {
+                            return Err(format!(
+                                "arena item {item_name} used with conflicting keys: {:?} vs {:?}",
+                                existing.key, key
+                            ));
+                        }
+                    } else {
+                        let _ = key_expr;
+                        by_item.insert(item_name.clone(), info);
+                    }
+                }
+            }
+            Ok(())
+        };
+
+    for decl in repr.nodes.values() {
+        match &decl.value {
+            NormalizedNodeDecl::Record { fields, .. } => collect_from_fields(fields)?,
+            NormalizedNodeDecl::Enum(variants) => {
+                for variant in variants.values() {
+                    if let NormalizedNodeDecl::Record { fields, .. } = &variant.value {
+                        collect_from_fields(fields)?;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut out = by_item.into_values().collect::<Vec<_>>();
+    out.sort_by(|a, b| a.item.cmp(&b.item));
+    Ok(out)
+}
+
 fn token_parser_fn_name(token_name: &str) -> String {
     format!("token_{}", snake_case(token_name))
 }
@@ -102,15 +249,32 @@ fn render_value_parser(
     rule_names: &HashSet<String>,
     node_names: &[String],
     box_node_refs: bool,
+    arena_infos: &[ArenaParserInfo],
 ) -> Result<String, String> {
     if let SyntaxTypeUse::Optional(inner_ty) = ty
         && !matches!(rule, SyntaxRule::Optional { .. })
     {
-        return render_value_parser(repr, rule, inner_ty, rule_names, node_names, box_node_refs);
+        return render_value_parser(
+            repr,
+            rule,
+            inner_ty,
+            rule_names,
+            node_names,
+            box_node_refs,
+            arena_infos,
+        );
     }
 
     if let SyntaxTypeUse::RefTo { id, .. } = ty {
-        return render_value_parser(repr, rule, id, rule_names, node_names, box_node_refs);
+        return render_value_parser(
+            repr,
+            rule,
+            id,
+            rule_names,
+            node_names,
+            box_node_refs,
+            arena_infos,
+        );
     }
 
     match rule {
@@ -122,7 +286,15 @@ fn render_value_parser(
             let SyntaxTypeUse::Optional(inner_ty) = ty else {
                 return Err("optional rule without optional type".to_owned());
             };
-            let inner = render_value_parser(repr, inner, inner_ty, rule_names, node_names, true)?;
+            let inner = render_value_parser(
+                repr,
+                inner,
+                inner_ty,
+                rule_names,
+                node_names,
+                true,
+                arena_infos,
+            )?;
             Ok(format!("({inner}).or_not()"))
         }
         SyntaxRule::Repeat { item, sep } => {
@@ -133,7 +305,15 @@ fn render_value_parser(
                 | SyntaxTypeUse::Pool { item: inner_ty, .. } => inner_ty,
                 _ => return Err("repeat rule without repeated type".to_owned()),
             };
-            let inner = render_value_parser(repr, item, inner_ty, rule_names, node_names, false)?;
+            let inner = render_value_parser(
+                repr,
+                item,
+                inner_ty,
+                rule_names,
+                node_names,
+                false,
+                arena_infos,
+            )?;
             let collected = if let Some(sep) = sep.as_deref() {
                 format!(
                     "({inner}).separated_by(just({sep:?}).padded()).allow_trailing().collect::<Vec<_>>()"
@@ -143,6 +323,42 @@ fn render_value_parser(
             };
             Ok(match ty {
                 SyntaxTypeUse::Seq(_) => collected,
+                SyntaxTypeUse::Arena {
+                    item: arena_item,
+                    key: Some(_),
+                } => {
+                    let SyntaxTypeUse::Ref { name: item_name } = arena_item.as_ref() else {
+                        return Err("keyed arena item must be a node reference".to_owned());
+                    };
+                    let info = arena_infos
+                        .iter()
+                        .find(|info| info.item == *item_name)
+                        .ok_or_else(|| {
+                            format!("missing parser arena info for item {item_name:?}")
+                        })?;
+                    let decl = repr.nodes.get(item_name).ok_or_else(|| {
+                        format!("keyed arena item {item_name:?} must be a declared node")
+                    })?;
+                    let key_expr =
+                        arena_key_accessor_expr(item_name, &decl.value, &info.key, "value")?;
+                    format!(
+                        "({collected}).map({{
+            let {capture_var} = {capture_var}.clone();
+            move |values| {{
+                let mut ids = Vec::with_capacity(values.len());
+                let mut arena = {capture_var}.borrow_mut();
+                for value in values {{
+                    let id = {key_expr};
+                    ids.push(id);
+                    arena.push(value);
+                }}
+                super::super::Order::from(ids)
+            }}
+        }})",
+                        capture_var = info.capture_var,
+                        key_expr = key_expr,
+                    )
+                }
                 SyntaxTypeUse::Arena { .. } => {
                     format!("({collected}).map(super::super::Arena::from)")
                 }
@@ -168,13 +384,19 @@ fn flatten_struct_rule_items(
     fields: &HashMap<String, DocumentedValue<SyntaxTypeUse>>,
     rule_names: &HashSet<String>,
     node_names: &[String],
+    arena_infos: &[ArenaParserInfo],
 ) -> Result<Vec<SeqItem>, String> {
     match rule {
         SyntaxRule::Seq(items) => {
             let mut out = Vec::new();
             for item in items {
                 out.extend(flatten_struct_rule_items(
-                    repr, item, fields, rule_names, node_names,
+                    repr,
+                    item,
+                    fields,
+                    rule_names,
+                    node_names,
+                    arena_infos,
                 )?);
             }
             Ok(out)
@@ -185,15 +407,29 @@ fn flatten_struct_rule_items(
                 .get(field_name)
                 .ok_or_else(|| format!("schema node field {field_name:?} not found"))?
                 .value;
-            let parser =
-                render_value_parser(repr, named.inner.as_ref(), ty, rule_names, node_names, true)?;
+            let parser = render_value_parser(
+                repr,
+                named.inner.as_ref(),
+                ty,
+                rule_names,
+                node_names,
+                true,
+                arena_infos,
+            )?;
             Ok(vec![SeqItem::Bind {
                 name: field_name.to_owned(),
                 parser,
             }])
         }
         SyntaxRule::Optional { inner } => {
-            let nested = flatten_struct_rule_items(repr, inner, fields, rule_names, node_names)?;
+            let nested = flatten_struct_rule_items(
+                repr,
+                inner,
+                fields,
+                rule_names,
+                node_names,
+                arena_infos,
+            )?;
             let (chain, names) = render_binding_chain(&nested)?;
             if names.len() != 1 {
                 return Err(format!(
@@ -287,6 +523,7 @@ fn render_scalar_support_rule_expr(
     rule: &SyntaxRule,
     rule_names: &HashSet<String>,
     node_names: &[String],
+    arena_infos: &[ArenaParserInfo],
 ) -> Result<String, String> {
     let support_ty = SyntaxTypeUse::Ref {
         name: support_name.to_owned(),
@@ -297,7 +534,15 @@ fn render_scalar_support_rule_expr(
         | SyntaxRule::Ref { .. }
         | SyntaxRule::Optional { .. }
         | SyntaxRule::Repeat { .. } => {
-            return render_value_parser(repr, rule, &support_ty, rule_names, node_names, false);
+            return render_value_parser(
+                repr,
+                rule,
+                &support_ty,
+                rule_names,
+                node_names,
+                false,
+                arena_infos,
+            );
         }
         SyntaxRule::Seq(items) => {
             let expected_field = match decl {
@@ -401,6 +646,7 @@ fn render_struct_parser_expr(
     rule_names: &HashSet<String>,
     node_names: &[String],
     provenance_tag: &str,
+    arena_infos: &[ArenaParserInfo],
 ) -> Result<String, String> {
     if is_prov_only_struct(fields, provenance_tag) {
         if let Some(text) = extract_single_literal(rule) {
@@ -410,7 +656,8 @@ fn render_struct_parser_expr(
         }
     }
 
-    let mut items = flatten_struct_rule_items(repr, rule, fields, rule_names, node_names)?;
+    let mut items =
+        flatten_struct_rule_items(repr, rule, fields, rule_names, node_names, arena_infos)?;
     if fields.contains_key("docs")
         && !items
             .iter()
@@ -483,6 +730,7 @@ fn render_enum_parser_expr(
     rule_names: &HashSet<String>,
     node_names: &[String],
     provenance_tag: &str,
+    arena_infos: &[ArenaParserInfo],
 ) -> Result<String, String> {
     let SyntaxRule::Choice(items) = rule else {
         return Err(format!("enum rule for {enum_name} must be choice"));
@@ -506,8 +754,14 @@ fn render_enum_parser_expr(
                 "schema enum {enum_name} variant {variant_name:?} has unsupported declaration"
             ));
         };
-        let mut items =
-            flatten_struct_rule_items(repr, named.inner.as_ref(), fields, rule_names, node_names)?;
+        let mut items = flatten_struct_rule_items(
+            repr,
+            named.inner.as_ref(),
+            fields,
+            rule_names,
+            node_names,
+            arena_infos,
+        )?;
         if fields.contains_key("docs")
             && !items
                 .iter()
@@ -598,6 +852,7 @@ fn render_rule_parser_expr(
     rule_names: &HashSet<String>,
     node_names: &[String],
     provenance_tag: &str,
+    arena_infos: &[ArenaParserInfo],
 ) -> Result<String, String> {
     match decl {
         RuleTargetDecl::Node(NormalizedNodeDecl::Record { fields, .. }) => {
@@ -609,6 +864,7 @@ fn render_rule_parser_expr(
                 rule_names,
                 node_names,
                 provenance_tag,
+                arena_infos,
             )
         }
         RuleTargetDecl::Node(NormalizedNodeDecl::Enum(variants)) => render_enum_parser_expr(
@@ -619,6 +875,7 @@ fn render_rule_parser_expr(
             rule_names,
             node_names,
             provenance_tag,
+            arena_infos,
         ),
         RuleTargetDecl::Support(NormalizedSupportDecl::Struct(fields)) => {
             render_struct_parser_expr(
@@ -629,6 +886,7 @@ fn render_rule_parser_expr(
                 rule_names,
                 node_names,
                 provenance_tag,
+                arena_infos,
             )
         }
         RuleTargetDecl::Support(NormalizedSupportDecl::Enum(variants)) => {
@@ -673,6 +931,7 @@ fn render_rule_parser_expr(
             rule,
             rule_names,
             node_names,
+            arena_infos,
         ),
         RuleTargetDecl::Support(NormalizedSupportDecl::StringSeq | NormalizedSupportDecl::Unit) => {
             Err(format!(
@@ -827,6 +1086,8 @@ pub(crate) fn render_parser_block(
     node_names: &[String],
     provenance_tag: &str,
 ) -> Result<String, String> {
+    let arena_infos = collect_arena_parser_infos(repr)?;
+    let has_graph_arenas = !arena_infos.is_empty();
     let rule_names = repr.syntax.rules.keys().cloned().collect::<HashSet<_>>();
     let mut referenced_rules = HashSet::new();
     for rule in repr.syntax.rules.values() {
@@ -864,6 +1125,7 @@ pub(crate) fn render_parser_block(
                 &rule_names,
                 node_names,
                 provenance_tag,
+                &arena_infos,
             )?;
             let parser_name = format!("{}_parser", snake_case(name));
             let binding_name = if name == root_name || referenced_rules.contains(name) {
@@ -887,6 +1149,82 @@ pub(crate) fn render_parser_block(
         .map(|name| render_token_parser_fn(name, repr.syntax.token_specs.get(name).unwrap()))
         .collect::<Result<Vec<_>, _>>()?
         .join("\n\n");
+
+    let arena_capture_init_rows = arena_infos
+        .iter()
+        .map(|info| {
+            format!(
+                "    let {capture_var} = std::rc::Rc::new(std::cell::RefCell::new(Vec::<{item}>::new()));",
+                capture_var = info.capture_var,
+                item = info.item,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let arena_capture_struct_rows = arena_infos
+        .iter()
+        .map(|info| format!("    {}: Vec<{}>,", info.capture_var, info.item))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let arena_capture_build_rows = arena_infos
+        .iter()
+        .map(|info| {
+            format!(
+                "        {field}: std::mem::take(&mut *{field}.borrow_mut()),",
+                field = info.capture_var
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let arena_insert_rows = arena_infos
+        .iter()
+        .map(|info| {
+            format!(
+                "    for value in captures.{field} {{\n        graph.insert_{method}(value).map_err(|err| vec![Rich::custom(chumsky::span::SimpleSpan::new(0, 0), err)])?;\n    }}",
+                field = info.capture_var,
+                method = snake_case(&info.item),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let parse_return_ty = if has_graph_arenas {
+        format!("({root_name}, ParseArenaCaptures)")
+    } else {
+        root_name.to_owned()
+    };
+    let parse_result_value = if has_graph_arenas {
+        format!(
+            "    let root = {root_parser_name}\n        .then_ignore(end())\n        .parse(source)\n        .into_result()?;\n    Ok((root, ParseArenaCaptures {{\n{arena_capture_build_rows}\n    }}))"
+        )
+    } else {
+        format!(
+            "    {root_parser_name}\n        .then_ignore(end())\n        .parse(source)\n        .into_result()"
+        )
+    };
+    let parse_root_text_from_value = if has_graph_arenas {
+        "    parse_root_value_rich(source, file_id).map(|(root, _)| root)"
+    } else {
+        "    parse_root_value_rich(source, file_id)"
+    };
+    let parse_root_text_with_file_id_body = if has_graph_arenas {
+        "    parse_root_value_rich(source, file_id)\n        .map(|(root, _)| root)\n        .map_err(|errs| crate::format_rich_errors(source, errs))"
+    } else {
+        "    parse_root_value_rich(source, file_id)\n        .map_err(|errs| crate::format_rich_errors(source, errs))"
+    };
+    let parse_into_graph_preamble = if has_graph_arenas {
+        "    let (root, captures) = parse_root_value_rich(source, file_id)?;"
+    } else {
+        "    let root = parse_root_value_rich(source, file_id)?;"
+    };
+    let arena_capture_struct_block = if has_graph_arenas {
+        format!(
+            "\n#[derive(Debug, Default)]\nstruct ParseArenaCaptures {{\n{arena_capture_struct_rows}\n}}\n"
+        )
+    } else {
+        String::new()
+    };
 
     Ok(format!(
         r#"
@@ -920,6 +1258,8 @@ fn doc_block<'src>() -> impl Parser<'src, &'src str, Option<DocBlock>, ParseExtr
 
 {token_rows}
 
+{arena_capture_struct_block}
+
 fn prov_from_span(span: chumsky::span::SimpleSpan<usize>, file_id: Option<u32>) -> Prov {{
     Prov {{
         file_id,
@@ -933,24 +1273,21 @@ fn prov_from_span(span: chumsky::span::SimpleSpan<usize>, file_id: Option<u32>) 
 fn parse_root_value_rich(
     source: &str,
     file_id: Option<u32>,
-) -> Result<{root_name}, Vec<Rich<'_, char>>> {{
+) -> Result<{parse_return_ty}, Vec<Rich<'_, char>>> {{
+{arena_capture_init_rows}
 {parser_defs}
-
-    {root_parser_name}
-        .then_ignore(end())
-        .parse(source)
-        .into_result()
+{parse_result_value}
 }}
 
 pub fn parse_root_text_rich(
     source: &str,
     file_id: Option<u32>,
 ) -> Result<{root_name}, Vec<Rich<'_, char>>> {{
-    parse_root_value_rich(source, file_id)
+{parse_root_text_from_value}
 }}
 
 pub fn parse_root_text_with_file_id(source: &str, file_id: Option<u32>) -> Result<{root_name}, String> {{
-    parse_root_value_rich(source, file_id).map_err(|errs| crate::format_rich_errors(source, errs))
+{parse_root_text_with_file_id_body}
 }}
 
 pub fn parse_root_text(source: &str) -> Result<{root_name}, String> {{
@@ -980,7 +1317,8 @@ pub fn parse_root_into_graph_rich<'src>(
     source: &'src str,
     file_id: Option<u32>,
 ) -> Result<{root_handle_name}, Vec<Rich<'src, char>>> {{
-    let root = parse_root_value_rich(source, file_id)?;
+{parse_into_graph_preamble}
+{arena_insert_rows}
     Ok(graph.insert_root(root))
 }}
 
@@ -1021,10 +1359,17 @@ pub fn parse_{root_fn_suffix}_into_graph(
 }}
 "#,
         token_rows = token_rows,
+        arena_capture_struct_block = arena_capture_struct_block,
+        parse_return_ty = parse_return_ty,
+        arena_capture_init_rows = arena_capture_init_rows,
         parser_defs = parser_defs,
+        parse_result_value = parse_result_value,
+        parse_root_text_from_value = parse_root_text_from_value,
+        parse_root_text_with_file_id_body = parse_root_text_with_file_id_body,
+        parse_into_graph_preamble = parse_into_graph_preamble,
+        arena_insert_rows = arena_insert_rows,
         root_name = root_name,
         root_handle_name = root_handle_name,
-        root_parser_name = root_parser_name,
         root_fn_suffix = root_fn_suffix,
     ))
 }
