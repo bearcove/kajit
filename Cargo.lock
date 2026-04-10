@@ -402,9 +402,9 @@ dependencies = [
 
 [[package]]
 name = "facet-format"
-version = "0.44.5"
+version = "0.44.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d87b44b7183a982f8c9889b7ec50bf8f1a38318a77069084436cc908bb1e5e96"
+checksum = "50e9bca089d254ef30bcb902566f7f8477b29a11cda26d5332bd584259af451c"
 dependencies = [
  "facet-core",
  "facet-dessert",
@@ -517,9 +517,9 @@ dependencies = [
 
 [[package]]
 name = "facet-styx"
-version = "3.0.0"
+version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "752632ec234fe1fb4194d0aa59d2df74c9946bc71c78b8e98adcfac267217655"
+checksum = "f0d02f11309f8dac1402aa047d9e6a936e4d574ee18f066451f5fdc7246145b1"
 dependencies = [
  "ariadne 0.6.0",
  "facet",
@@ -1109,6 +1109,7 @@ version = "0.1.0"
 dependencies = [
  "facet",
  "facet-styx",
+ "indexmap 2.13.0",
  "prettyplease",
  "styx-tree",
  "syn 2.0.117",
@@ -1889,9 +1890,9 @@ dependencies = [
 
 [[package]]
 name = "styx-tree"
-version = "3.0.0"
+version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fffd467514b106c38630d124d0c2bfae7540e598509653233bc4bbe9e9d92f4d"
+checksum = "0fefaaecf365d4e8fa1d07b281692d9d7b4adcab4324fac746db0ce0301c42c6"
 dependencies = [
  "ariadne 0.6.0",
  "facet",

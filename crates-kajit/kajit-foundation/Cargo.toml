@@ -9,10 +9,11 @@ edition = "2024"
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
-facet = "0.44"
-facet-styx = "3.0.0"
+facet = { version = "0.44", features = ["indexmap"] }
+facet-styx = "3.0.1"
+indexmap = "2"
 prettyplease = "0.2"
-styx-tree = { version = "3.0.0", features = ["facet"] }
+styx-tree = { version = "3.0.1", features = ["facet"] }
 syn = { version = "2", features = ["full"] }
 
 [dev-dependencies]

@@ -354,8 +354,7 @@ pub(crate) fn render_semantic_block(
                 .join("\n")
             }
             NormalizedNodeDecl::Enum(variants) => {
-                let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
-                variant_names.sort();
+                let variant_names = variants.keys().cloned().collect::<Vec<_>>();
                 let arms = variant_names
                     .into_iter()
                     .map(|variant_name| {

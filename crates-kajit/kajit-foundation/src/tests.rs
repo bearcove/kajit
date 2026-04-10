@@ -6,6 +6,55 @@ use crate::render_module;
 use crate::schema;
 
 #[test]
+fn modern_schema_template_syntax_deserializes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("modern.repr.styx");
+    fs::write(
+        &path,
+        r#"
+name Demo
+file_ext .k-demo
+description "modern schema"
+
+rules {
+    templates {
+        Keyword {
+            syntax @template{
+                params ({text @Any})
+                body {
+                    syntax text
+                    highlight keyword
+                }
+            }
+        }
+    }
+
+    FnKw @Keyword("fn")
+}
+"#,
+    )
+    .unwrap();
+
+    let loaded = schema::load_pilot_schema(&path).unwrap();
+    match loaded.body {
+        schema::LoadedReprBody::Modern(repr) => {
+            assert_eq!(repr.name, "Demo");
+            assert!(
+                repr.templates
+                    .keys()
+                    .any(|name| schema::documented_name(name) == "Keyword")
+            );
+            assert!(
+                repr.rules
+                    .keys()
+                    .any(|name| schema::documented_name(name) == "FnKw")
+            );
+        }
+        schema::LoadedReprBody::Legacy(_) => panic!("expected modern repr"),
+    }
+}
+
+#[test]
 fn supports_id_entity_and_slot_shapes() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("mini.repr.styx");
@@ -351,8 +400,8 @@ fn hir_support_enum_variant_order_stays_in_schema_order() {
         .contents
         .clone();
 
-    let enum_pos = ast.find("\n    #[default]\n    Enum,").unwrap();
-    let struct_pos = ast.find("\n    Struct,").unwrap();
-    let alias_pos = ast.find("\n    Alias,").unwrap();
-    assert!(enum_pos < struct_pos && struct_pos < alias_pos);
+    let call_pos = ast.find("\n    Call {").unwrap();
+    let local_pos = ast.find("\n    Local {").unwrap();
+    let literal_pos = ast.find("\n    Literal {").unwrap();
+    assert!(call_pos < local_pos && local_pos < literal_pos);
 }

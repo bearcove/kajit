@@ -4,6 +4,7 @@ use std::path::Path;
 
 use facet::Facet;
 use facet_styx::{Documented, RenderError};
+use indexmap::IndexMap;
 
 #[derive(Facet, Debug, Clone)]
 #[facet(metadata_container)]
@@ -24,7 +25,13 @@ pub(crate) struct PilotSchemaDocument {
 #[derive(Debug, Clone)]
 pub(crate) struct LoadedRepr {
     pub(crate) doc: Option<Vec<String>>,
-    pub(crate) body: ReprBody,
+    pub(crate) body: LoadedReprBody,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum LoadedReprBody {
+    Legacy(ReprBody),
+    Modern(ModernReprBody),
 }
 
 #[derive(Facet, Debug, Clone)]
@@ -53,6 +60,123 @@ pub(crate) struct ReprBody {
     pub(crate) common: Option<HashMap<String, TypeUse>>,
     pub(crate) support: Option<HashMap<Documented<String>, SupportDecl>>,
     pub(crate) nodes: Option<HashMap<Documented<String>, NodeDecl>>,
+}
+
+#[derive(Facet, Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct ModernPilotSchemaDocument {
+    pub(crate) name: String,
+    pub(crate) file_ext: String,
+    pub(crate) description: String,
+    pub(crate) rules: ModernRulesDecl,
+}
+
+#[derive(Facet, Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct ModernRulesDecl {
+    pub(crate) templates: Option<IndexMap<Documented<String>, TemplateDecl>>,
+
+    #[facet(flatten)]
+    pub(crate) rules: IndexMap<Documented<String>, ModernRuleDecl>,
+}
+
+#[derive(Facet, Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct TemplateDecl {
+    pub(crate) syntax: SyntaxExpr,
+    pub(crate) highlight: Option<String>,
+}
+
+#[derive(Facet, Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct TemplateSyntaxDecl {
+    pub(crate) params: Vec<SyntaxExpr>,
+    pub(crate) body: ModernStructDecl,
+}
+
+#[derive(Facet, Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct ModernStructDecl {
+    pub(crate) syntax: Option<SyntaxExpr>,
+    pub(crate) highlight: Option<String>,
+}
+
+#[derive(Facet, Debug, Clone)]
+#[allow(dead_code)]
+#[facet(rename_all = "lowercase")]
+#[repr(u8)]
+pub(crate) enum ModernRuleDecl {
+    #[facet(untagged)]
+    Literal(String),
+    #[facet(untagged)]
+    InlineStruct(ModernStructDecl),
+    Struct(ModernStructDecl),
+    Enum,
+    #[facet(other)]
+    UserTag {
+        #[facet(tag)]
+        tag: String,
+        #[facet(content)]
+        content: Option<SyntaxPayload>,
+    },
+}
+
+#[derive(Facet, Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct ModernReprBody {
+    pub(crate) name: String,
+    pub(crate) file_ext: String,
+    pub(crate) description: String,
+    pub(crate) templates: IndexMap<Documented<String>, TemplateDecl>,
+    pub(crate) rules: IndexMap<Documented<String>, ModernRuleDecl>,
+}
+
+#[derive(Facet, Debug, Clone)]
+#[allow(dead_code)]
+#[facet(rename_all = "snake_case")]
+#[repr(u8)]
+pub(crate) enum SyntaxExpr {
+    Template(Box<TemplateSyntaxDecl>),
+    Regex(Vec<SyntaxExpr>),
+    BraceBlock(Vec<SyntaxExpr>),
+    ParenList(Vec<SyntaxExpr>),
+    BracketList(Vec<SyntaxExpr>),
+    Paren(Vec<SyntaxExpr>),
+    Bracket(Vec<SyntaxExpr>),
+    Optional(Vec<SyntaxExpr>),
+    Many(Vec<SyntaxExpr>),
+    SeparatedBy(Vec<SyntaxExpr>),
+    Indent(Vec<SyntaxExpr>),
+    SoftSpace,
+    Newline,
+    #[facet(rename = "Any")]
+    Any,
+    #[facet(rename = "Rule")]
+    Rule,
+    #[facet(other)]
+    Other {
+        #[facet(tag)]
+        tag: Option<String>,
+        #[facet(content)]
+        content: Option<SyntaxPayload>,
+    },
+}
+
+#[derive(Facet, Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct SyntaxObject {
+    #[facet(flatten)]
+    pub(crate) fields: IndexMap<Documented<String>, SyntaxExpr>,
+}
+
+#[derive(Facet, Debug, Clone)]
+#[allow(dead_code)]
+#[repr(u8)]
+#[facet(untagged)]
+pub(crate) enum SyntaxPayload {
+    Scalar(String),
+    Seq(Vec<SyntaxExpr>),
+    Object(SyntaxObject),
 }
 
 #[derive(Facet, Debug, Clone)]
@@ -196,14 +320,20 @@ pub(crate) struct NodeVariants {
 pub(crate) fn load_pilot_schema(schema_path: &Path) -> Result<LoadedRepr, String> {
     let schema_source = fs::read_to_string(schema_path)
         .map_err(|e| format!("failed to read {}: {e}", schema_path.display()))?;
-    let schema: PilotSchemaDocument = facet_styx::from_str(&schema_source).map_err(|e| {
-        format!(
-            "failed to parse {} as Styx\n{}",
-            schema_path.display(),
-            e.render(&schema_path.display().to_string(), &schema_source)
-        )
-    })?;
-    validate_repr_schema(&schema, schema_path)
+    match facet_styx::from_str::<PilotSchemaDocument>(&schema_source) {
+        Ok(schema) => validate_repr_schema(&schema, schema_path),
+        Err(legacy_err) => {
+            match facet_styx::from_str::<ModernPilotSchemaDocument>(&schema_source) {
+                Ok(schema) => validate_modern_repr_schema(&schema, schema_path),
+                Err(modern_err) => Err(format!(
+                    "failed to parse {} as Styx\nlegacy schema:\n{}\n\nmodern schema:\n{}",
+                    schema_path.display(),
+                    legacy_err.render(&schema_path.display().to_string(), &schema_source),
+                    modern_err.render(&schema_path.display().to_string(), &schema_source),
+                )),
+            }
+        }
+    }
 }
 
 fn validate_repr_schema(schema: &PilotSchemaDocument, path: &Path) -> Result<LoadedRepr, String> {
@@ -369,7 +499,7 @@ fn validate_repr_schema(schema: &PilotSchemaDocument, path: &Path) -> Result<Loa
 
     Ok(LoadedRepr {
         doc: schema.repr.doc.clone(),
-        body: ReprBody {
+        body: LoadedReprBody::Legacy(ReprBody {
             name: repr.name.clone(),
             file_ext: repr.file_ext.clone(),
             contract: ReprContract {
@@ -387,7 +517,49 @@ fn validate_repr_schema(schema: &PilotSchemaDocument, path: &Path) -> Result<Loa
             common: repr.common.clone(),
             support: repr.support.clone(),
             nodes: repr.nodes.clone(),
-        },
+        }),
+    })
+}
+
+fn validate_modern_repr_schema(
+    schema: &ModernPilotSchemaDocument,
+    path: &Path,
+) -> Result<LoadedRepr, String> {
+    if schema.name.trim().is_empty() {
+        return Err(format!("expected {} name to be non-empty", path.display()));
+    }
+
+    if !schema.file_ext.starts_with('.') || schema.file_ext.len() < 2 {
+        return Err(format!(
+            "expected {} file_ext to start with '.', got {:?}",
+            path.display(),
+            schema.file_ext
+        ));
+    }
+
+    if schema.description.trim().is_empty() {
+        return Err(format!(
+            "expected {} description to be non-empty",
+            path.display()
+        ));
+    }
+
+    if schema.rules.rules.is_empty() {
+        return Err(format!(
+            "expected {} rules to contain at least one rule",
+            path.display()
+        ));
+    }
+
+    Ok(LoadedRepr {
+        doc: None,
+        body: LoadedReprBody::Modern(ModernReprBody {
+            name: schema.name.clone(),
+            file_ext: schema.file_ext.clone(),
+            description: schema.description.clone(),
+            templates: schema.rules.templates.clone().unwrap_or_default(),
+            rules: schema.rules.rules.clone(),
+        }),
     })
 }
 

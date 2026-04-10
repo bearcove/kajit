@@ -458,8 +458,7 @@ pub(crate) fn render_walk_fn(
             )
         }
         NormalizedNodeDecl::Enum(variants) => {
-            let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
-            variant_names.sort();
+            let variant_names = variants.keys().cloned().collect::<Vec<_>>();
             let arms = variant_names
                 .iter()
                 .filter_map(|variant_name| match &variants.get(variant_name).unwrap().value {
@@ -569,8 +568,7 @@ pub(crate) fn render_node_decl(
             }
         }
         NormalizedNodeDecl::Enum(variants) => {
-            let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
-            variant_names.sort();
+            let variant_names = variants.keys().cloned().collect::<Vec<_>>();
             let leaf_struct_rows = variant_names
                 .iter()
                 .filter_map(|variant_name| match &variants.get(variant_name).unwrap().value {
@@ -691,8 +689,7 @@ pub(crate) fn render_provenance_impl(
                 )
             }) =>
         {
-            let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
-            variant_names.sort();
+            let variant_names = variants.keys().cloned().collect::<Vec<_>>();
             let match_rows = variant_names
                 .iter()
                 .map(

@@ -1,5 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use indexmap::IndexMap;
+
 use crate::normalize::{
     DocumentedValue, NormalizedNodeDecl, NormalizedRepr, NormalizedSupportDecl,
     NormalizedTokenSpec, SyntaxRepeatSeparator, SyntaxRule, SyntaxTypeUse, direct_ref_name,
@@ -61,8 +63,7 @@ fn arena_key_accessor_expr(
         }
         NormalizedNodeDecl::Enum(variants) => {
             let mut arms = Vec::new();
-            let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
-            variant_names.sort();
+            let variant_names = variants.keys().cloned().collect::<Vec<_>>();
             for variant_name in variant_names {
                 let variant = &variants[&variant_name].value;
                 match variant {
@@ -387,6 +388,52 @@ fn render_value_parser(
                 }
                 _ => unreachable!("repeat rule without repeated type"),
             })
+        }
+        SyntaxRule::Seq(items) => {
+            let mut chain = None::<String>;
+            let mut bound = None::<String>;
+            for item in items {
+                let part = match render_value_parser(
+                    repr,
+                    item,
+                    ty,
+                    rule_names,
+                    node_names,
+                    box_node_refs,
+                    arena_infos,
+                ) {
+                    Ok(parser) => {
+                        if bound.is_some() {
+                            return Err(format!(
+                                "sequence value rule for type {:?} contains multiple value parsers: {:?}",
+                                ty, rule
+                            ));
+                        }
+                        bound = Some(parser.clone());
+                        parser
+                    }
+                    Err(_) => render_syntax_only_rule_parser_expr(repr, item)?,
+                };
+                chain = Some(match chain {
+                    None => part,
+                    Some(prev) => {
+                        if bound.as_ref().is_some_and(|bound_part| bound_part == &part) {
+                            format!("({prev}).ignore_then({part})")
+                        } else if bound.is_some() && prev == *bound.as_ref().unwrap() {
+                            format!("({prev}).then_ignore({part})")
+                        } else {
+                            format!("({prev}).ignore_then({part})")
+                        }
+                    }
+                });
+            }
+            bound.ok_or_else(|| {
+                format!(
+                    "sequence value rule for field type {:?} does not contain a value parser: {:?}",
+                    ty, rule
+                )
+            })?;
+            Ok(chain.expect("sequence parser chain should exist"))
         }
         _ => Err(format!(
             "unsupported value rule kind for field type {:?}: {:?}",
@@ -766,7 +813,7 @@ fn render_struct_parser_expr(
 fn render_enum_parser_expr(
     repr: &NormalizedRepr,
     enum_name: &str,
-    variants: &HashMap<String, DocumentedValue<NormalizedNodeDecl>>,
+    variants: &IndexMap<String, DocumentedValue<NormalizedNodeDecl>>,
     rule: &SyntaxRule,
     rule_names: &HashSet<String>,
     node_names: &[String],
@@ -1254,7 +1301,8 @@ pub(crate) fn render_parser_block(
                     &arena_infos,
                 )?
             } else {
-                render_syntax_only_rule_parser_expr(repr, rule)?
+                render_syntax_only_rule_parser_expr(repr, rule)
+                    .map_err(|err| format!("rule {name}: {err}"))?
             };
             let parser_name = format!("{}_parser", snake_case(name));
             let binding_name = if name == root_name || referenced_rules.contains(name) {

@@ -177,8 +177,7 @@ fn field_id_accessor(
         }
         NormalizedNodeDecl::Enum(variants) => {
             let mut arms = Vec::new();
-            let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
-            variant_names.sort();
+            let variant_names = variants.keys().cloned().collect::<Vec<_>>();
             for variant_name in variant_names {
                 let variant = &variants[&variant_name].value;
                 match variant {
@@ -993,8 +992,7 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
                         .collect::<Vec<_>>()
                 }
                 NormalizedNodeDecl::Enum(variants) => {
-                    let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
-                    variant_names.sort();
+                    let variant_names = variants.keys().cloned().collect::<Vec<_>>();
                     variant_names
                         .into_iter()
                         .flat_map(|variant_name| match &variants[&variant_name].value {
@@ -1037,8 +1035,7 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
                         .collect::<Vec<_>>()
                 }
                 NormalizedNodeDecl::Enum(variants) => {
-                    let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
-                    variant_names.sort();
+                    let variant_names = variants.keys().cloned().collect::<Vec<_>>();
                     variant_names
                         .into_iter()
                         .flat_map(|variant_name| match &variants[&variant_name].value {
@@ -1082,8 +1079,7 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
                         .collect::<Vec<_>>()
                 }
                 NormalizedNodeDecl::Enum(variants) => {
-                    let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
-                    variant_names.sort();
+                    let variant_names = variants.keys().cloned().collect::<Vec<_>>();
                     variant_names
                         .into_iter()
                         .flat_map(|variant_name| match &variants[&variant_name].value {
