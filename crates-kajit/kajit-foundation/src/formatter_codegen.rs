@@ -64,7 +64,7 @@ pub fn format_root_in_graph(graph: &Graph, handle: {root_name}Handle) -> Result<
     let Some(node) = graph.root(handle) else {{
         return Err(format!("unknown root handle {{:?}}", handle));
     }};
-    Ok(format_root_text(node))
+    Ok(format_{root_fn}_in_graph_node(graph, node))
 }}
 
 pub fn format_{root_fn}_in_graph(graph: &Graph, handle: {root_name}Handle) -> Result<String, String> {{
@@ -170,26 +170,47 @@ fn render_node_formatter(
     repr: &NormalizedRepr,
     node_names: &[String],
 ) -> Result<String, String> {
+    let graph_backed = has_keyed_arenas(repr);
     let fn_name = format!("format_{}", snake_case(node_name));
     let write_name = format!("write_{}", snake_case(node_name));
+    let fn_name_in_graph = format!("{fn_name}_in_graph_node");
+    let write_name_in_graph = format!("{write_name}_in_graph");
     match decl {
         NormalizedNodeDecl::Record { fields, .. } => {
             if let Some(template) = repr.syntax.canonical_print.get(node_name) {
                 let parts = parse_template(template)?;
                 let body = render_template_lines(&parts, "node", fields, None, repr, node_names)?;
-                Ok(format!(
+                let base = format!(
                     "pub fn {fn_name}(node: &{node_name}) -> String {{\n    let mut w = Writer::new();\n    {write_name}(&mut w, node);\n    w.finish()\n}}\n\nfn {write_name}(w: &mut Writer, node: &{node_name}) {{\n{body}\n}}"
+                );
+                if !graph_backed {
+                    return Ok(base);
+                }
+
+                let body_in_graph = render_template_lines_in_graph(
+                    &parts, "graph", "node", fields, None, repr, node_names,
+                )?;
+                Ok(format!(
+                    "{base}\n\npub fn {fn_name_in_graph}(graph: &Graph, node: &{node_name}) -> String {{\n    let mut w = Writer::new();\n    {write_name_in_graph}(&mut w, graph, node);\n    w.finish()\n}}\n\nfn {write_name_in_graph}(w: &mut Writer, graph: &Graph, node: &{node_name}) {{\n{body_in_graph}\n}}",
                 ))
             } else {
-                Ok(format!(
+                let base = format!(
                     "pub fn {fn_name}(node: &{node_name}) -> String {{\n    format!(\"{{:?}}\", node)\n}}\n\nfn {write_name}(w: &mut Writer, node: &{node_name}) {{\n    w.text(&format!(\"{{:?}}\", node));\n}}"
-                ))
+                );
+                if !graph_backed {
+                    Ok(base)
+                } else {
+                    Ok(format!(
+                        "{base}\n\npub fn {fn_name_in_graph}(graph: &Graph, node: &{node_name}) -> String {{\n    let _ = graph;\n    {fn_name}(node)\n}}\n\nfn {write_name_in_graph}(w: &mut Writer, graph: &Graph, node: &{node_name}) {{\n    let _ = graph;\n    {write_name}(w, node)\n}}"
+                    ))
+                }
             }
         }
         NormalizedNodeDecl::Enum(variants) => {
             let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
             variant_names.sort();
             let mut arms = Vec::new();
+            let mut arms_in_graph = Vec::new();
             for variant_name in variant_names {
                 let variant_decl = variants.get(&variant_name).unwrap();
                 let NormalizedNodeDecl::Record { fields, .. } = &variant_decl.value else {
@@ -251,14 +272,37 @@ fn render_node_formatter(
                         repr,
                         node_names,
                     )?;
+                    let body_in_graph = if graph_backed {
+                        render_template_lines_in_graph(
+                            &parts,
+                            "graph",
+                            "node",
+                            fields,
+                            Some(&overrides),
+                            repr,
+                            node_names,
+                        )?
+                    } else {
+                        String::new()
+                    };
                     if is_prov_only_struct(fields, prov_tag) {
                         arms.push(format!(
                             "        {node_name}::{variant_name}({pattern}) => {{\n{body}\n        }}"
                         ));
+                        if graph_backed {
+                            arms_in_graph.push(format!(
+                                "        {node_name}::{variant_name}({pattern}) => {{\n{body_in_graph}\n        }}"
+                            ));
+                        }
                     } else {
                         arms.push(format!(
                             "        {node_name}::{variant_name} {{ {pattern} }} => {{\n{body}\n        }}"
                         ));
+                        if graph_backed {
+                            arms_in_graph.push(format!(
+                                "        {node_name}::{variant_name} {{ {pattern} }} => {{\n{body_in_graph}\n        }}"
+                            ));
+                        }
                     }
                 } else {
                     let prov_tag = repr
@@ -273,16 +317,33 @@ fn render_node_formatter(
                         arms.push(format!(
                             "        other @ {node_name}::{variant_name}(..) => {{ w.text(&format!(\"{{:?}}\", other)); }}"
                         ));
+                        if graph_backed {
+                            arms_in_graph.push(format!(
+                                "        other @ {node_name}::{variant_name}(..) => {{ w.text(&format!(\"{{:?}}\", other)); }}"
+                            ));
+                        }
                     } else {
                         arms.push(format!(
                             "        other @ {node_name}::{variant_name} {{ .. }} => {{ w.text(&format!(\"{{:?}}\", other)); }}"
                         ));
+                        if graph_backed {
+                            arms_in_graph.push(format!(
+                                "        other @ {node_name}::{variant_name} {{ .. }} => {{ w.text(&format!(\"{{:?}}\", other)); }}"
+                            ));
+                        }
                     }
                 }
             }
-            Ok(format!(
+            let base = format!(
                 "pub fn {fn_name}(node: &{node_name}) -> String {{\n    let mut w = Writer::new();\n    {write_name}(&mut w, node);\n    w.finish()\n}}\n\nfn {write_name}(w: &mut Writer, node: &{node_name}) {{\n    match node {{\n{}\n    }}\n}}",
                 arms.join(",\n")
+            );
+            if !graph_backed {
+                return Ok(base);
+            }
+            Ok(format!(
+                "{base}\n\npub fn {fn_name_in_graph}(graph: &Graph, node: &{node_name}) -> String {{\n    let mut w = Writer::new();\n    {write_name_in_graph}(&mut w, graph, node);\n    w.finish()\n}}\n\nfn {write_name_in_graph}(w: &mut Writer, graph: &Graph, node: &{node_name}) {{\n    let _ = graph;\n    match node {{\n{}\n    }}\n}}",
+                arms_in_graph.join(",\n")
             ))
         }
     }
@@ -375,6 +436,63 @@ fn render_template_lines(
                 nested_overrides.insert(name.clone(), ("value".to_owned(), (*inner_ty).clone()));
                 let nested = render_template_lines(
                     parts,
+                    node_expr,
+                    fields,
+                    Some(&nested_overrides),
+                    repr,
+                    node_names,
+                )?;
+                lines.push(format!("    if let Some(value) = {expr}.as_ref() {{"));
+                lines.push(nested);
+                lines.push("    }".to_owned());
+                at_line_start = false;
+            }
+        }
+    }
+    Ok(lines.join("\n"))
+}
+
+fn render_template_lines_in_graph(
+    parts: &[TemplatePart],
+    graph_expr: &str,
+    node_expr: &str,
+    fields: &HashMap<String, DocumentedValue<SyntaxTypeUse>>,
+    overrides: Option<&HashMap<String, (String, SyntaxTypeUse)>>,
+    repr: &NormalizedRepr,
+    node_names: &[String],
+) -> Result<String, String> {
+    let mut lines = Vec::new();
+    let mut at_line_start = false;
+    for part in parts {
+        match part {
+            TemplatePart::Literal(text) => {
+                lines.push(format!("    w.text({text:?});"));
+                at_line_start = text.ends_with('\n');
+            }
+            TemplatePart::Field { name, joiner } => {
+                let (expr, ty) = lookup_field(name, node_expr, fields, overrides)?;
+                lines.extend(render_value_write_lines_in_graph(
+                    repr,
+                    "w",
+                    graph_expr,
+                    &expr,
+                    &ty,
+                    joiner.as_deref(),
+                    node_names,
+                    at_line_start,
+                )?);
+                at_line_start = false;
+            }
+            TemplatePart::Optional { name, parts } => {
+                let (expr, ty) = lookup_field(name, node_expr, fields, overrides)?;
+                let SyntaxTypeUse::Optional(inner_ty) = ty else {
+                    return Err(format!("optional template field {name:?} is not optional"));
+                };
+                let mut nested_overrides = overrides.cloned().unwrap_or_default();
+                nested_overrides.insert(name.clone(), ("value".to_owned(), (*inner_ty).clone()));
+                let nested = render_template_lines_in_graph(
+                    parts,
+                    graph_expr,
                     node_expr,
                     fields,
                     Some(&nested_overrides),
@@ -569,6 +687,241 @@ fn render_value_write_lines(
                 )])
             } else {
                 Ok(vec![format!("    {write_name}({writer_name}, &{expr});")])
+            }
+        }
+        SyntaxTypeUse::Ref { name } => Ok(vec![match () {
+            _ if is_string_scalar_type(repr, name) => {
+                format!("    {writer_name}.text(&{expr}.text);")
+            }
+            _ if is_int_scalar_type(repr, name) => {
+                format!("    {writer_name}.text(&{expr}.value.to_string());")
+            }
+            _ if is_id_type(repr, name) => {
+                format!("    {writer_name}.text(&{expr}.0.to_string());")
+            }
+            _ if matches!(
+                repr.support.get(name).map(|decl| &decl.value),
+                Some(NormalizedSupportDecl::Struct(_) | NormalizedSupportDecl::Enum(_))
+            ) =>
+            {
+                format!("    write_{}({writer_name}, &{expr});", snake_case(name))
+            }
+            _ => format!("    {writer_name}.text(&format!(\"{{:?}}\", {expr}));"),
+        }]),
+    }
+}
+
+fn render_value_write_lines_in_graph(
+    repr: &NormalizedRepr,
+    writer_name: &str,
+    graph_name: &str,
+    expr: &str,
+    ty: &SyntaxTypeUse,
+    joiner: Option<&str>,
+    node_names: &[String],
+    at_line_start: bool,
+) -> Result<Vec<String>, String> {
+    match ty {
+        SyntaxTypeUse::Optional(_) => {
+            Err("optional formatting must be handled by TemplatePart::Optional".to_owned())
+        }
+        SyntaxTypeUse::Seq(inner) | SyntaxTypeUse::Order(inner) => {
+            let sep = joiner.unwrap_or("\n");
+            let mut lines = vec![format!(
+                "    for (idx, value) in {expr}.iter().enumerate() {{"
+            )];
+            lines.push("        if idx != 0 {".to_owned());
+            lines.push(format!("            {writer_name}.text({sep:?});"));
+            lines.push("        }".to_owned());
+            if should_indent_value(inner, node_names) && at_line_start {
+                lines.push(format!(
+                    "        {writer_name}.with_indent(|{writer_name}| {{"
+                ));
+                lines.extend(
+                    render_value_write_lines_in_graph(
+                        repr,
+                        writer_name,
+                        graph_name,
+                        "value",
+                        inner,
+                        None,
+                        node_names,
+                        false,
+                    )?
+                    .into_iter()
+                    .map(|line| format!("    {line}")),
+                );
+                lines.push("        });".to_owned());
+            } else {
+                lines.extend(
+                    render_value_write_lines_in_graph(
+                        repr,
+                        writer_name,
+                        graph_name,
+                        "value",
+                        inner,
+                        None,
+                        node_names,
+                        false,
+                    )?
+                    .into_iter()
+                    .map(|line| format!("    {line}")),
+                );
+            }
+            lines.push("    }".to_owned());
+            Ok(lines)
+        }
+        SyntaxTypeUse::Arena {
+            item: inner,
+            key: Some(_key),
+        } => {
+            // Keyed arenas are stored in `Graph`; the field itself stores ids.
+            let sep = joiner.unwrap_or("\n");
+            let SyntaxTypeUse::Ref { name: item_name } = inner.as_ref() else {
+                return Err(format!(
+                    "keyed arena item must be a node ref, got {inner:?}"
+                ));
+            };
+            let accessor = snake_case(item_name);
+            let mut lines = vec![format!("    for (idx, id) in {expr}.iter().enumerate() {{")];
+            lines.push("        if idx != 0 {".to_owned());
+            lines.push(format!("            {writer_name}.text({sep:?});"));
+            lines.push("        }".to_owned());
+            lines.push(format!(
+                "        let Some(value) = {graph_name}.{accessor}(*id) else {{ continue; }};"
+            ));
+            if should_indent_value(inner, node_names) && at_line_start {
+                lines.push(format!(
+                    "        {writer_name}.with_indent(|{writer_name}| {{"
+                ));
+                lines.extend(
+                    render_value_write_lines_in_graph(
+                        repr,
+                        writer_name,
+                        graph_name,
+                        "value",
+                        inner,
+                        None,
+                        node_names,
+                        false,
+                    )?
+                    .into_iter()
+                    .map(|line| format!("    {line}")),
+                );
+                lines.push("        });".to_owned());
+            } else {
+                lines.extend(
+                    render_value_write_lines_in_graph(
+                        repr,
+                        writer_name,
+                        graph_name,
+                        "value",
+                        inner,
+                        None,
+                        node_names,
+                        false,
+                    )?
+                    .into_iter()
+                    .map(|line| format!("    {line}")),
+                );
+            }
+            lines.push("    }".to_owned());
+            Ok(lines)
+        }
+        SyntaxTypeUse::Arena {
+            item: inner,
+            key: None,
+        } => {
+            let sep = joiner.unwrap_or("\n");
+            let mut lines = vec![format!(
+                "    for (idx, value) in {expr}.iter().enumerate() {{"
+            )];
+            lines.push("        if idx != 0 {".to_owned());
+            lines.push(format!("            {writer_name}.text({sep:?});"));
+            lines.push("        }".to_owned());
+            lines.extend(
+                render_value_write_lines_in_graph(
+                    repr,
+                    writer_name,
+                    graph_name,
+                    "value",
+                    inner,
+                    None,
+                    node_names,
+                    false,
+                )?
+                .into_iter()
+                .map(|line| format!("    {line}")),
+            );
+            lines.push("    }".to_owned());
+            Ok(lines)
+        }
+        SyntaxTypeUse::Pool { item: inner, .. } => {
+            let sep = joiner.unwrap_or("\n");
+            let mut lines = vec![format!(
+                "    for (idx, value) in {expr}.iter().enumerate() {{"
+            )];
+            lines.push("        if idx != 0 {".to_owned());
+            lines.push(format!("            {writer_name}.text({sep:?});"));
+            lines.push("        }".to_owned());
+            if should_indent_value(inner, node_names) && at_line_start {
+                lines.push(format!(
+                    "        {writer_name}.with_indent(|{writer_name}| {{"
+                ));
+                lines.extend(
+                    render_value_write_lines_in_graph(
+                        repr,
+                        writer_name,
+                        graph_name,
+                        "value",
+                        inner,
+                        None,
+                        node_names,
+                        false,
+                    )?
+                    .into_iter()
+                    .map(|line| format!("    {line}")),
+                );
+                lines.push("        });".to_owned());
+            } else {
+                lines.extend(
+                    render_value_write_lines_in_graph(
+                        repr,
+                        writer_name,
+                        graph_name,
+                        "value",
+                        inner,
+                        None,
+                        node_names,
+                        false,
+                    )?
+                    .into_iter()
+                    .map(|line| format!("    {line}")),
+                );
+            }
+            lines.push("    }".to_owned());
+            Ok(lines)
+        }
+        SyntaxTypeUse::RefTo { id, .. } => render_value_write_lines_in_graph(
+            repr,
+            writer_name,
+            graph_name,
+            expr,
+            id,
+            joiner,
+            node_names,
+            at_line_start,
+        ),
+        SyntaxTypeUse::Ref { name } if node_names.iter().any(|node| node == name) => {
+            let write_name = format!("write_{}_in_graph", snake_case(name));
+            if at_line_start {
+                Ok(vec![format!(
+                    "    {writer_name}.with_indent(|{writer_name}| {write_name}({writer_name}, {graph_name}, &{expr}));"
+                )])
+            } else {
+                Ok(vec![format!(
+                    "    {write_name}({writer_name}, {graph_name}, &{expr});"
+                )])
             }
         }
         SyntaxTypeUse::Ref { name } => Ok(vec![match () {

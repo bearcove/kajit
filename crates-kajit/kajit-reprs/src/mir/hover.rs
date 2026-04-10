@@ -17,7 +17,7 @@ pub fn hover_entries_in_graph(graph: &Graph, handle: ProgramHandle) -> Vec<Hover
         return Vec::new();
     };
     let mut out = Vec::new();
-    collect_program(root, &mut out);
+    collect_program(graph, root, &mut out);
     out.sort_by_key(|entry| (entry.start, entry.end, entry.priority));
     out.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.markdown == b.markdown);
     out
@@ -36,7 +36,8 @@ fn emit_hover(prov: &Prov, markdown: &str, priority: u8, out: &mut Vec<HoverEntr
         priority,
     });
 }
-fn collect_block(node: &Block, out: &mut Vec<HoverEntry>) {
+fn collect_block(graph: &Graph, node: &Block, out: &mut Vec<HoverEntry>) {
+    let _ = graph;
     if let Some(prov) = node.provenance() {
         emit_hover(
             prov,
@@ -46,7 +47,8 @@ fn collect_block(node: &Block, out: &mut Vec<HoverEntry>) {
         );
     }
 }
-fn collect_const_ref(node: &ConstRef, out: &mut Vec<HoverEntry>) {
+fn collect_const_ref(graph: &Graph, node: &ConstRef, out: &mut Vec<HoverEntry>) {
+    let _ = graph;
     match node {
         ConstRef::Named { name, prov } => {
             if let Some(prov) = node.provenance() {
@@ -62,25 +64,29 @@ fn collect_const_ref(node: &ConstRef, out: &mut Vec<HoverEntry>) {
         }
     }
 }
-fn collect_data_args_line(node: &DataArgsLine, out: &mut Vec<HoverEntry>) {
+fn collect_data_args_line(graph: &Graph, node: &DataArgsLine, out: &mut Vec<HoverEntry>) {
+    let _ = graph;
     if let Some(prov) = node.provenance() {
         emit_hover(prov, "The `data_args` header line.", 10, out);
     }
 }
-fn collect_data_results_line(node: &DataResultsLine, out: &mut Vec<HoverEntry>) {
+fn collect_data_results_line(graph: &Graph, node: &DataResultsLine, out: &mut Vec<HoverEntry>) {
+    let _ = graph;
     if let Some(prov) = node.provenance() {
         emit_hover(prov, "The `data_results` header line.", 10, out);
     }
 }
-fn collect_edge(node: &Edge, out: &mut Vec<HoverEntry>) {
+fn collect_edge(graph: &Graph, node: &Edge, out: &mut Vec<HoverEntry>) {
+    let _ = graph;
     if let Some(prov) = node.provenance() {
         emit_hover(prov, "A control-flow edge between two blocks.", 10, out);
     }
     for value in &node.args {
-        collect_edge_arg(value, out);
+        collect_edge_arg(graph, value, out);
     }
 }
-fn collect_edge_arg(node: &EdgeArg, out: &mut Vec<HoverEntry>) {
+fn collect_edge_arg(graph: &Graph, node: &EdgeArg, out: &mut Vec<HoverEntry>) {
+    let _ = graph;
     match node {
         EdgeArg::Identity { prov, vreg } => {
             if let Some(prov) = node.provenance() {
@@ -108,7 +114,8 @@ fn collect_edge_arg(node: &EdgeArg, out: &mut Vec<HoverEntry>) {
         }
     }
 }
-fn collect_fixed_reg(node: &FixedReg, out: &mut Vec<HoverEntry>) {
+fn collect_fixed_reg(graph: &Graph, node: &FixedReg, out: &mut Vec<HoverEntry>) {
+    let _ = graph;
     match node {
         FixedReg::AbiArg { index, prov } => {
             if let Some(prov) = node.provenance() {
@@ -130,7 +137,8 @@ fn collect_fixed_reg(node: &FixedReg, out: &mut Vec<HoverEntry>) {
         }
     }
 }
-fn collect_function(node: &Function, out: &mut Vec<HoverEntry>) {
+fn collect_function(graph: &Graph, node: &Function, out: &mut Vec<HoverEntry>) {
+    let _ = graph;
     if let Some(prov) = node.provenance() {
         emit_hover(
             prov,
@@ -156,18 +164,24 @@ fn collect_function(node: &Function, out: &mut Vec<HoverEntry>) {
         );
     }
     for value in &node.blocks {
-        collect_block(value, out);
+        collect_block(graph, value, out);
     }
-    collect_data_args_line(&node.data_args, out);
-    collect_data_results_line(&node.data_results, out);
+    collect_data_args_line(graph, &node.data_args, out);
+    collect_data_results_line(graph, &node.data_results, out);
     for value in &node.edges {
-        collect_edge(value, out);
+        collect_edge(graph, value, out);
+    }
+    for id in &node.insts {
+        if let Some(value) = graph.inst(*id) {
+            collect_inst(graph, value, out);
+        }
     }
     for value in &node.terms {
-        collect_terminator(value, out);
+        collect_terminator(graph, value, out);
     }
 }
-fn collect_inst(node: &Inst, out: &mut Vec<HoverEntry>) {
+fn collect_inst(graph: &Graph, node: &Inst, out: &mut Vec<HoverEntry>) {
+    let _ = graph;
     if let Some(prov) = node.provenance() {
         emit_hover(
             prov,
@@ -186,17 +200,18 @@ fn collect_inst(node: &Inst, out: &mut Vec<HoverEntry>) {
     }
     if let Some(value) = node.defs.as_ref() {
         for value in value {
-            collect_operand(value, out);
+            collect_operand(graph, value, out);
         }
     }
-    collect_inst_op(&node.op, out);
+    collect_inst_op(graph, &node.op, out);
     if let Some(value) = node.uses.as_ref() {
         for value in value {
-            collect_operand(value, out);
+            collect_operand(graph, value, out);
         }
     }
 }
-fn collect_inst_op(node: &InstOp, out: &mut Vec<HoverEntry>) {
+fn collect_inst_op(graph: &Graph, node: &InstOp, out: &mut Vec<HoverEntry>) {
+    let _ = graph;
     match node {
         InstOp::BinOp { op, prov } => {
             if let Some(prov) = node.provenance() {
@@ -215,7 +230,7 @@ fn collect_inst_op(node: &InstOp, out: &mut Vec<HoverEntry>) {
             if let Some(prov) = func.provenance() {
                 emit_hover(prov, "Call an effectful intrinsic by reference.", 30, out);
             }
-            collect_intrinsic_ref(func, out);
+            collect_intrinsic_ref(graph, func, out);
         }
         InstOp::CallIntrinsic { func, prov } => {
             if let Some(prov) = node.provenance() {
@@ -234,7 +249,7 @@ fn collect_inst_op(node: &InstOp, out: &mut Vec<HoverEntry>) {
                     out,
                 );
             }
-            collect_intrinsic_ref(func, out);
+            collect_intrinsic_ref(graph, func, out);
         }
         InstOp::CallLambda { prov, target } => {
             if let Some(prov) = node.provenance() {
@@ -248,7 +263,7 @@ fn collect_inst_op(node: &InstOp, out: &mut Vec<HoverEntry>) {
             if let Some(prov) = func.provenance() {
                 emit_hover(prov, "Call a pure intrinsic by reference.", 30, out);
             }
-            collect_intrinsic_ref(func, out);
+            collect_intrinsic_ref(graph, func, out);
         }
         InstOp::Const { prov, value } => {
             if let Some(prov) = node.provenance() {
@@ -257,7 +272,7 @@ fn collect_inst_op(node: &InstOp, out: &mut Vec<HoverEntry>) {
             if let Some(prov) = value.provenance() {
                 emit_hover(prov, "Materialize an immediate constant.", 30, out);
             }
-            collect_const_ref(value, out);
+            collect_const_ref(graph, value, out);
         }
         InstOp::Copy(value) => {
             if let Some(prov) = node.provenance() {
@@ -281,7 +296,7 @@ fn collect_inst_op(node: &InstOp, out: &mut Vec<HoverEntry>) {
             if let Some(prov) = symbol.provenance() {
                 emit_hover(prov, "Load the address of an external symbol.", 30, out);
             }
-            collect_intrinsic_ref(symbol, out);
+            collect_intrinsic_ref(graph, symbol, out);
         }
         InstOp::LoadFromAddr { prov, width } => {
             if let Some(prov) = node.provenance() {
@@ -315,7 +330,7 @@ fn collect_inst_op(node: &InstOp, out: &mut Vec<HoverEntry>) {
             if let Some(prov) = op.provenance() {
                 emit_hover(prov, "Execute a unary op.", 30, out);
             }
-            collect_unary_op(op, out);
+            collect_unary_op(graph, op, out);
         }
         InstOp::WriteToSlot { prov, slot } => {
             if let Some(prov) = node.provenance() {
@@ -324,7 +339,8 @@ fn collect_inst_op(node: &InstOp, out: &mut Vec<HoverEntry>) {
         }
     }
 }
-fn collect_intrinsic_ref(node: &IntrinsicRef, out: &mut Vec<HoverEntry>) {
+fn collect_intrinsic_ref(graph: &Graph, node: &IntrinsicRef, out: &mut Vec<HoverEntry>) {
+    let _ = graph;
     match node {
         IntrinsicRef::Address { prov, value } => {
             if let Some(prov) = node.provenance() {
@@ -340,15 +356,17 @@ fn collect_intrinsic_ref(node: &IntrinsicRef, out: &mut Vec<HoverEntry>) {
         }
     }
 }
-fn collect_operand(node: &Operand, out: &mut Vec<HoverEntry>) {
+fn collect_operand(graph: &Graph, node: &Operand, out: &mut Vec<HoverEntry>) {
+    let _ = graph;
     if let Some(prov) = node.provenance() {
         emit_hover(prov, "A register operand used by an instruction.", 10, out);
     }
     if let Some(value) = node.fixed.as_ref() {
-        collect_fixed_reg(value, out);
+        collect_fixed_reg(graph, value, out);
     }
 }
-fn collect_program(node: &Program, out: &mut Vec<HoverEntry>) {
+fn collect_program(graph: &Graph, node: &Program, out: &mut Vec<HoverEntry>) {
+    let _ = graph;
     if let Some(prov) = node.provenance() {
         emit_hover(prov, "The root CFG-MIR program.", 10, out);
     }
@@ -365,10 +383,11 @@ fn collect_program(node: &Program, out: &mut Vec<HoverEntry>) {
         out,
     );
     for value in &node.functions {
-        collect_function(value, out);
+        collect_function(graph, value, out);
     }
 }
-fn collect_terminator(node: &Terminator, out: &mut Vec<HoverEntry>) {
+fn collect_terminator(graph: &Graph, node: &Terminator, out: &mut Vec<HoverEntry>) {
+    let _ = graph;
     match node {
         Terminator::Branch { edge, id, prov } => {
             if let Some(prov) = node.provenance() {
@@ -415,7 +434,8 @@ fn collect_terminator(node: &Terminator, out: &mut Vec<HoverEntry>) {
         }
     }
 }
-fn collect_unary_op(node: &UnaryOp, out: &mut Vec<HoverEntry>) {
+fn collect_unary_op(graph: &Graph, node: &UnaryOp, out: &mut Vec<HoverEntry>) {
+    let _ = graph;
     match node {
         UnaryOp::SignExtend { from_width, prov } => {
             if let Some(prov) = node.provenance() {

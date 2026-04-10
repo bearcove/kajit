@@ -23,7 +23,7 @@ pub fn semantic_tokens_in_graph(
         return Vec::new();
     };
     let mut out = Vec::new();
-    collect_program(source, root, &mut out);
+    collect_program(source, graph, root, &mut out);
     out.sort_by_key(|token| (token.start, token.end, token.kind));
     out.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.kind == b.kind);
     out
@@ -72,11 +72,13 @@ fn emit_literal_token(
         kind,
     });
 }
-fn collect_block(source: &str, node: &Block, out: &mut Vec<SemanticToken>) {
+fn collect_block(source: &str, graph: &Graph, node: &Block, out: &mut Vec<SemanticToken>) {
+    let _ = graph;
     let current_prov = node.provenance();
     emit_literal_token(source, current_prov, "block", "keyword", out);
 }
-fn collect_const_ref(source: &str, node: &ConstRef, out: &mut Vec<SemanticToken>) {
+fn collect_const_ref(source: &str, graph: &Graph, node: &ConstRef, out: &mut Vec<SemanticToken>) {
+    let _ = graph;
     match node {
         ConstRef::Named { name, prov } => {
             let current_prov = node.provenance();
@@ -87,20 +89,40 @@ fn collect_const_ref(source: &str, node: &ConstRef, out: &mut Vec<SemanticToken>
         }
     }
 }
-fn collect_data_args_line(source: &str, node: &DataArgsLine, out: &mut Vec<SemanticToken>) {
+fn collect_data_args_line(
+    source: &str,
+
+    graph: &Graph,
+
+    node: &DataArgsLine,
+
+    out: &mut Vec<SemanticToken>,
+) {
+    let _ = graph;
     let current_prov = node.provenance();
 }
-fn collect_data_results_line(source: &str, node: &DataResultsLine, out: &mut Vec<SemanticToken>) {
+fn collect_data_results_line(
+    source: &str,
+
+    graph: &Graph,
+
+    node: &DataResultsLine,
+
+    out: &mut Vec<SemanticToken>,
+) {
+    let _ = graph;
     let current_prov = node.provenance();
 }
-fn collect_edge(source: &str, node: &Edge, out: &mut Vec<SemanticToken>) {
+fn collect_edge(source: &str, graph: &Graph, node: &Edge, out: &mut Vec<SemanticToken>) {
+    let _ = graph;
     let current_prov = node.provenance();
     emit_literal_token(source, current_prov, "edge", "keyword", out);
     for value in &node.args {
-        collect_edge_arg(source, value, out);
+        collect_edge_arg(source, graph, value, out);
     }
 }
-fn collect_edge_arg(source: &str, node: &EdgeArg, out: &mut Vec<SemanticToken>) {
+fn collect_edge_arg(source: &str, graph: &Graph, node: &EdgeArg, out: &mut Vec<SemanticToken>) {
+    let _ = graph;
     match node {
         EdgeArg::Identity { prov, vreg } => {
             let current_prov = node.provenance();
@@ -114,7 +136,8 @@ fn collect_edge_arg(source: &str, node: &EdgeArg, out: &mut Vec<SemanticToken>) 
         }
     }
 }
-fn collect_fixed_reg(source: &str, node: &FixedReg, out: &mut Vec<SemanticToken>) {
+fn collect_fixed_reg(source: &str, graph: &Graph, node: &FixedReg, out: &mut Vec<SemanticToken>) {
+    let _ = graph;
     match node {
         FixedReg::AbiArg { index, prov } => {
             let current_prov = node.provenance();
@@ -127,62 +150,70 @@ fn collect_fixed_reg(source: &str, node: &FixedReg, out: &mut Vec<SemanticToken>
         }
     }
 }
-fn collect_function(source: &str, node: &Function, out: &mut Vec<SemanticToken>) {
+fn collect_function(source: &str, graph: &Graph, node: &Function, out: &mut Vec<SemanticToken>) {
+    let _ = graph;
     let current_prov = node.provenance();
     emit_literal_token(source, current_prov, "cfg_func", "keyword", out);
     for value in &node.blocks {
-        collect_block(source, value, out);
+        collect_block(source, graph, value, out);
     }
-    collect_data_args_line(source, &node.data_args, out);
-    collect_data_results_line(source, &node.data_results, out);
+    collect_data_args_line(source, graph, &node.data_args, out);
+    collect_data_results_line(source, graph, &node.data_results, out);
     for value in &node.edges {
-        collect_edge(source, value, out);
+        collect_edge(source, graph, value, out);
+    }
+    for id in &node.insts {
+        if let Some(value) = graph.inst(*id) {
+            collect_inst(source, graph, value, out);
+        }
     }
     for value in &node.terms {
-        collect_terminator(source, value, out);
+        collect_terminator(source, graph, value, out);
     }
 }
-fn collect_inst(source: &str, node: &Inst, out: &mut Vec<SemanticToken>) {
+fn collect_inst(source: &str, graph: &Graph, node: &Inst, out: &mut Vec<SemanticToken>) {
+    let _ = graph;
     let current_prov = node.provenance();
     emit_literal_token(source, current_prov, "inst", "keyword", out);
     if let Some(value) = node.defs.as_ref() {
         for value in value {
-            collect_operand(source, value, out);
+            collect_operand(source, graph, value, out);
         }
     }
-    collect_inst_op(source, &node.op, out);
+    collect_inst_op(source, graph, &node.op, out);
     if let Some(value) = node.uses.as_ref() {
         for value in value {
-            collect_operand(source, value, out);
+            collect_operand(source, graph, value, out);
         }
     }
 }
-fn collect_inst_op(source: &str, node: &InstOp, out: &mut Vec<SemanticToken>) {
+fn collect_inst_op(source: &str, graph: &Graph, node: &InstOp, out: &mut Vec<SemanticToken>) {
+    let _ = graph;
     match node {
         InstOp::BinOp { op, prov } => {
             let current_prov = node.provenance();
         }
         InstOp::CallEffect { func, prov } => {
             let current_prov = node.provenance();
-            collect_intrinsic_ref(source, func, out);
+            collect_intrinsic_ref(source, graph, func, out);
         }
         InstOp::CallIntrinsic { func, prov } => {
             let current_prov = node.provenance();
-            collect_intrinsic_ref(source, func, out);
+            collect_intrinsic_ref(source, graph, func, out);
         }
         InstOp::CallLambda { prov, target } => {
             let current_prov = node.provenance();
         }
         InstOp::CallPure { func, prov } => {
             let current_prov = node.provenance();
-            collect_intrinsic_ref(source, func, out);
+            collect_intrinsic_ref(source, graph, func, out);
         }
         InstOp::Const { prov, value } => {
             let current_prov = node.provenance();
             if let Some(prov) = value.provenance() {
                 emit_prov_token(prov, "number", out);
             }
-            collect_const_ref(source, value, out);
+            collect_const_ref(source, graph, value, out);
         }
         InstOp::Copy(value) => {
             let current_prov = node.provenance();
@@ -193,7 +224,7 @@ fn collect_inst_op(source: &str, node: &InstOp, out: &mut Vec<SemanticToken>) {
         }
         InstOp::ExternAddr { prov, symbol } => {
             let current_prov = node.provenance();
-            collect_intrinsic_ref(source, symbol, out);
+            collect_intrinsic_ref(source, graph, symbol, out);
         }
         InstOp::LoadFromAddr { prov, width } => {
             let current_prov = node.provenance();
@@ -209,14 +240,23 @@ fn collect_inst_op(source: &str, node: &InstOp, out: &mut Vec<SemanticToken>) {
         }
         InstOp::UnaryOp { op, prov } => {
             let current_prov = node.provenance();
-            collect_unary_op(source, op, out);
+            collect_unary_op(source, graph, op, out);
         }
         InstOp::WriteToSlot { prov, slot } => {
             let current_prov = node.provenance();
         }
     }
 }
-fn collect_intrinsic_ref(source: &str, node: &IntrinsicRef, out: &mut Vec<SemanticToken>) {
+fn collect_intrinsic_ref(
+    source: &str,
+
+    graph: &Graph,
+
+    node: &IntrinsicRef,
+
+    out: &mut Vec<SemanticToken>,
+) {
+    let _ = graph;
     match node {
         IntrinsicRef::Address { prov, value } => {
             let current_prov = node.provenance();
@@ -227,22 +267,33 @@ fn collect_intrinsic_ref(source: &str, node: &IntrinsicRef, out: &mut Vec<Semant
         }
     }
 }
-fn collect_operand(source: &str, node: &Operand, out: &mut Vec<SemanticToken>) {
+fn collect_operand(source: &str, graph: &Graph, node: &Operand, out: &mut Vec<SemanticToken>) {
+    let _ = graph;
     let current_prov = node.provenance();
     if let Some(value) = node.fixed.as_ref() {
-        collect_fixed_reg(source, value, out);
+        collect_fixed_reg(source, graph, value, out);
     }
 }
-fn collect_program(source: &str, node: &Program, out: &mut Vec<SemanticToken>) {
+fn collect_program(source: &str, graph: &Graph, node: &Program, out: &mut Vec<SemanticToken>) {
+    let _ = graph;
     let current_prov = node.provenance();
     emit_literal_token(source, current_prov, "cfg_program", "keyword", out);
     emit_prov_token(&node.slot_count.prov, "number", out);
     emit_prov_token(&node.vreg_count.prov, "number", out);
     for value in &node.functions {
-        collect_function(source, value, out);
+        collect_function(source, graph, value, out);
     }
 }
-fn collect_terminator(source: &str, node: &Terminator, out: &mut Vec<SemanticToken>) {
+fn collect_terminator(
+    source: &str,
+
+    graph: &Graph,
+
+    node: &Terminator,
+
+    out: &mut Vec<SemanticToken>,
+) {
+    let _ = graph;
     match node {
         Terminator::Branch { edge, id, prov } => {
             let current_prov = node.provenance();
@@ -289,7 +340,8 @@ fn collect_terminator(source: &str, node: &Terminator, out: &mut Vec<SemanticTok
         }
     }
 }
-fn collect_unary_op(source: &str, node: &UnaryOp, out: &mut Vec<SemanticToken>) {
+fn collect_unary_op(source: &str, graph: &Graph, node: &UnaryOp, out: &mut Vec<SemanticToken>) {
+    let _ = graph;
     match node {
         UnaryOp::SignExtend { from_width, prov } => {
             let current_prov = node.provenance();

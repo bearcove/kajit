@@ -18,7 +18,7 @@ pub fn format_root_in_graph(graph: &Graph, handle: ProgramHandle) -> Result<Stri
     let Some(node) = graph.root(handle) else {
         return Err(format!("unknown root handle {:?}", handle));
     };
-    Ok(format_root_text(node))
+    Ok(format_program_in_graph_node(graph, node))
 }
 pub fn format_program_in_graph(graph: &Graph, handle: ProgramHandle) -> Result<String, String> {
     format_root_in_graph(graph, handle)
@@ -103,12 +103,69 @@ fn write_block(w: &mut Writer, node: &Block) {
     }
     w.text("]");
 }
+pub fn format_block_in_graph_node(graph: &Graph, node: &Block) -> String {
+    let mut w = Writer::new();
+    write_block_in_graph(&mut w, graph, node);
+    w.finish()
+}
+fn write_block_in_graph(w: &mut Writer, graph: &Graph, node: &Block) {
+    w.text("block b");
+    w.text(&node.id.0.to_string());
+    w.text(" params=[");
+    for (idx, value) in node.params.iter().enumerate() {
+        if idx != 0 {
+            w.text(", ");
+        }
+        w.text(&value.0.to_string());
+    }
+    w.text("] insts=[");
+    for (idx, value) in node.insts.iter().enumerate() {
+        if idx != 0 {
+            w.text(", ");
+        }
+        w.text(&value.0.to_string());
+    }
+    w.text("] term=t");
+    w.text(&node.term.0.to_string());
+    w.text(" preds=[");
+    for (idx, value) in node.preds.iter().enumerate() {
+        if idx != 0 {
+            w.text(", ");
+        }
+        w.text(&value.0.to_string());
+    }
+    w.text("] succs=[");
+    for (idx, value) in node.succs.iter().enumerate() {
+        if idx != 0 {
+            w.text(", ");
+        }
+        w.text(&value.0.to_string());
+    }
+    w.text("]");
+}
 pub fn format_const_ref(node: &ConstRef) -> String {
     let mut w = Writer::new();
     write_const_ref(&mut w, node);
     w.finish()
 }
 fn write_const_ref(w: &mut Writer, node: &ConstRef) {
+    match node {
+        ConstRef::Named { name, .. } => {
+            w.text("@");
+            w.text(&name.text);
+        }
+        ConstRef::Value { value, .. } => {
+            w.text(&value.value.to_string());
+        }
+    }
+}
+pub fn format_const_ref_in_graph_node(graph: &Graph, node: &ConstRef) -> String {
+    let mut w = Writer::new();
+    write_const_ref_in_graph(&mut w, graph, node);
+    w.finish()
+}
+fn write_const_ref_in_graph(w: &mut Writer, graph: &Graph, node: &ConstRef) {
+    let _ = graph;
     match node {
         ConstRef::Named { name, .. } => {
             w.text("@");
@@ -134,12 +191,42 @@ fn write_data_args_line(w: &mut Writer, node: &DataArgsLine) {
     }
     w.text("]");
 }
+pub fn format_data_args_line_in_graph_node(graph: &Graph, node: &DataArgsLine) -> String {
+    let mut w = Writer::new();
+    write_data_args_line_in_graph(&mut w, graph, node);
+    w.finish()
+}
+fn write_data_args_line_in_graph(w: &mut Writer, graph: &Graph, node: &DataArgsLine) {
+    w.text("data_args: [");
+    for (idx, value) in node.args.iter().enumerate() {
+        if idx != 0 {
+            w.text(", ");
+        }
+        w.text(&value.0.to_string());
+    }
+    w.text("]");
+}
 pub fn format_data_results_line(node: &DataResultsLine) -> String {
     let mut w = Writer::new();
     write_data_results_line(&mut w, node);
     w.finish()
 }
 fn write_data_results_line(w: &mut Writer, node: &DataResultsLine) {
+    w.text("data_results: [");
+    for (idx, value) in node.results.iter().enumerate() {
+        if idx != 0 {
+            w.text(", ");
+        }
+        w.text(&value.0.to_string());
+    }
+    w.text("]");
+}
+pub fn format_data_results_line_in_graph_node(graph: &Graph, node: &DataResultsLine) -> String {
+    let mut w = Writer::new();
+    write_data_results_line_in_graph(&mut w, graph, node);
+    w.finish()
+}
+fn write_data_results_line_in_graph(w: &mut Writer, graph: &Graph, node: &DataResultsLine) {
     w.text("data_results: [");
     for (idx, value) in node.results.iter().enumerate() {
         if idx != 0 {
@@ -170,6 +257,27 @@ fn write_edge(w: &mut Writer, node: &Edge) {
     }
     w.text("]");
 }
+pub fn format_edge_in_graph_node(graph: &Graph, node: &Edge) -> String {
+    let mut w = Writer::new();
+    write_edge_in_graph(&mut w, graph, node);
+    w.finish()
+}
+fn write_edge_in_graph(w: &mut Writer, graph: &Graph, node: &Edge) {
+    w.text("edge e");
+    w.text(&node.id.0.to_string());
+    w.text(": b");
+    w.text(&node.from.0.to_string());
+    w.text(" -> b");
+    w.text(&node.to.0.to_string());
+    w.text(" [");
+    for (idx, value) in node.args.iter().enumerate() {
+        if idx != 0 {
+            w.text(", ");
+        }
+        write_edge_arg_in_graph(w, graph, &value);
+    }
+    w.text("]");
+}
 pub fn format_edge_arg(node: &EdgeArg) -> String {
     let mut w = Writer::new();
     write_edge_arg(&mut w, node);
@@ -187,12 +295,52 @@ fn write_edge_arg(w: &mut Writer, node: &EdgeArg) {
         }
     }
 }
+pub fn format_edge_arg_in_graph_node(graph: &Graph, node: &EdgeArg) -> String {
+    let mut w = Writer::new();
+    write_edge_arg_in_graph(&mut w, graph, node);
+    w.finish()
+}
+fn write_edge_arg_in_graph(w: &mut Writer, graph: &Graph, node: &EdgeArg) {
+    let _ = graph;
+    match node {
+        EdgeArg::Identity { vreg, .. } => {
+            w.text(&vreg.0.to_string());
+        }
+        EdgeArg::Mapped { source, target, .. } => {
+            w.text(&target.0.to_string());
+            w.text("=>");
+            w.text(&source.0.to_string());
+        }
+    }
+}
 pub fn format_fixed_reg(node: &FixedReg) -> String {
     let mut w = Writer::new();
     write_fixed_reg(&mut w, node);
     w.finish()
 }
 fn write_fixed_reg(w: &mut Writer, node: &FixedReg) {
+    match node {
+        FixedReg::AbiArg { index, .. } => {
+            w.text("arg");
+            w.text(&index.value.to_string());
+        }
+        FixedReg::AbiRet { index, .. } => {
+            w.text("ret");
+            w.text(&index.value.to_string());
+        }
+        FixedReg::HwReg { index, .. } => {
+            w.text("hw");
+            w.text(&index.value.to_string());
+        }
+    }
+}
+pub fn format_fixed_reg_in_graph_node(graph: &Graph, node: &FixedReg) -> String {
+    let mut w = Writer::new();
+    write_fixed_reg_in_graph(&mut w, graph, node);
+    w.finish()
+}
+fn write_fixed_reg_in_graph(w: &mut Writer, graph: &Graph, node: &FixedReg) {
+    let _ = graph;
     match node {
         FixedReg::AbiArg { index, .. } => {
             w.text("arg");
@@ -262,6 +410,65 @@ fn write_function(w: &mut Writer, node: &Function) {
     }
     w.text("\n}");
 }
+pub fn format_function_in_graph_node(graph: &Graph, node: &Function) -> String {
+    let mut w = Writer::new();
+    write_function_in_graph(&mut w, graph, node);
+    w.finish()
+}
+fn write_function_in_graph(w: &mut Writer, graph: &Graph, node: &Function) {
+    w.text("cfg_func @");
+    w.text(&node.lambda_id.0.to_string());
+    w.text(" f");
+    w.text(&node.function_id.0.to_string());
+    w.text(" entry=b");
+    w.text(&node.entry.0.to_string());
+    w.text(" ");
+    w.text("{");
+    w.text("\n");
+    w.with_indent(|w| write_data_args_line_in_graph(w, graph, &node.data_args));
+    w.text("\n");
+    w.with_indent(|w| write_data_results_line_in_graph(w, graph, &node.data_results));
+    w.text("\n");
+    for (idx, value) in node.blocks.iter().enumerate() {
+        if idx != 0 {
+            w.text("\n");
+        }
+        w.with_indent(|w| {
+            write_block_in_graph(w, graph, &value);
+        });
+    }
+    w.text("\n");
+    for (idx, id) in node.insts.iter().enumerate() {
+        if idx != 0 {
+            w.text("\n");
+        }
+        let Some(value) = graph.inst(*id) else {
+            continue;
+        };
+        w.with_indent(|w| {
+            write_inst_in_graph(w, graph, &value);
+        });
+    }
+    w.text("\n");
+    for (idx, value) in node.terms.iter().enumerate() {
+        if idx != 0 {
+            w.text("\n");
+        }
+        w.with_indent(|w| {
+            write_terminator_in_graph(w, graph, &value);
+        });
+    }
+    w.text("\n");
+    for (idx, value) in node.edges.iter().enumerate() {
+        if idx != 0 {
+            w.text("\n");
+        }
+        w.with_indent(|w| {
+            write_edge_in_graph(w, graph, &value);
+        });
+    }
+    w.text("\n}");
+}
 pub fn format_inst(node: &Inst) -> String {
     let mut w = Writer::new();
     write_inst(&mut w, node);
@@ -287,6 +494,38 @@ fn write_inst(w: &mut Writer, node: &Inst) {
                 w.text(", ");
             }
             write_operand(w, &value);
+        }
+    }
+    if let Some(value) = node.clobbers.as_ref() {
+        w.text("!");
+        write_clobber_kind(w, &value);
+    }
+}
+pub fn format_inst_in_graph_node(graph: &Graph, node: &Inst) -> String {
+    let mut w = Writer::new();
+    write_inst_in_graph(&mut w, graph, node);
+    w.finish()
+}
+fn write_inst_in_graph(w: &mut Writer, graph: &Graph, node: &Inst) {
+    w.text("inst i");
+    w.text(&node.id.0.to_string());
+    w.text(":");
+    if let Some(value) = node.defs.as_ref() {
+        for (idx, value) in value.iter().enumerate() {
+            if idx != 0 {
+                w.text(", ");
+            }
+            write_operand_in_graph(w, graph, &value);
+        }
+        w.text(" =");
+    }
+    write_inst_op_in_graph(w, graph, &node.op);
+    if let Some(value) = node.uses.as_ref() {
+        for (idx, value) in value.iter().enumerate() {
+            if idx != 0 {
+                w.text(", ");
+            }
+            write_operand_in_graph(w, graph, &value);
         }
     }
     if let Some(value) = node.clobbers.as_ref() {
@@ -374,12 +613,110 @@ fn write_inst_op(w: &mut Writer, node: &InstOp) {
         }
     }
 }
+pub fn format_inst_op_in_graph_node(graph: &Graph, node: &InstOp) -> String {
+    let mut w = Writer::new();
+    write_inst_op_in_graph(&mut w, graph, node);
+    w.finish()
+}
+fn write_inst_op_in_graph(w: &mut Writer, graph: &Graph, node: &InstOp) {
+    let _ = graph;
+    match node {
+        InstOp::BinOp { op, .. } => {
+            w.text(" ");
+            write_bin_op_kind(w, &op);
+        }
+        InstOp::CallEffect { func, .. } => {
+            w.text(" call_effect(");
+            write_intrinsic_ref_in_graph(w, graph, &func);
+            w.text(")");
+        }
+        InstOp::CallIntrinsic { func, .. } => {
+            w.text(" call_intrinsic(");
+            write_intrinsic_ref_in_graph(w, graph, &func);
+            w.text(")");
+        }
+        InstOp::CallLambda { target, .. } => {
+            w.text(" call_lambda(@");
+            w.text(&target.0.to_string());
+            w.text(")");
+        }
+        InstOp::CallPure { func, .. } => {
+            w.text(" call_pure(");
+            write_intrinsic_ref_in_graph(w, graph, &func);
+            w.text(")");
+        }
+        InstOp::Const { value, .. } => {
+            w.text(" const(");
+            write_const_ref_in_graph(w, graph, &value);
+            w.text(")");
+        }
+        InstOp::Copy(_value) => {
+            w.text(" copy");
+        }
+        InstOp::DataAddr { blob_id, .. } => {
+            w.text(" data_addr(");
+            w.text(&blob_id.0.to_string());
+            w.text(")");
+        }
+        InstOp::ExternAddr { symbol, .. } => {
+            w.text(" extern_addr(");
+            write_intrinsic_ref_in_graph(w, graph, &symbol);
+            w.text(")");
+        }
+        InstOp::LoadFromAddr { width, .. } => {
+            w.text(" load_addr([");
+            write_width(w, &width);
+            w.text("])");
+        }
+        InstOp::ReadFromSlot { slot, .. } => {
+            w.text(" read_slot(");
+            w.text(&slot.0.to_string());
+            w.text(")");
+        }
+        InstOp::StackAlloc { id, .. } => {
+            w.text(" stack_alloc(");
+            w.text(&id.0.to_string());
+            w.text(")");
+        }
+        InstOp::StoreToAddr { width, .. } => {
+            w.text(" store_addr([");
+            write_width(w, &width);
+            w.text("])");
+        }
+        InstOp::UnaryOp { op, .. } => {
+            w.text(" ");
+            write_unary_op_in_graph(w, graph, &op);
+        }
+        InstOp::WriteToSlot { slot, .. } => {
+            w.text(" write_slot(");
+            w.text(&slot.0.to_string());
+            w.text(")");
+        }
+    }
+}
 pub fn format_intrinsic_ref(node: &IntrinsicRef) -> String {
     let mut w = Writer::new();
     write_intrinsic_ref(&mut w, node);
     w.finish()
 }
 fn write_intrinsic_ref(w: &mut Writer, node: &IntrinsicRef) {
+    match node {
+        IntrinsicRef::Address { value, .. } => {
+            w.text(&value.value.to_string());
+        }
+        IntrinsicRef::Named { name, .. } => {
+            w.text("@");
+            w.text(&name.text);
+        }
+    }
+}
+pub fn format_intrinsic_ref_in_graph_node(graph: &Graph, node: &IntrinsicRef) -> String {
+    let mut w = Writer::new();
+    write_intrinsic_ref_in_graph(&mut w, graph, node);
+    w.finish()
+}
+fn write_intrinsic_ref_in_graph(w: &mut Writer, graph: &Graph, node: &IntrinsicRef) {
+    let _ = graph;
     match node {
         IntrinsicRef::Address { value, .. } => {
             w.text(&value.value.to_string());
@@ -405,6 +742,21 @@ fn write_operand(w: &mut Writer, node: &Operand) {
         write_fixed_reg(w, &value);
     }
 }
+pub fn format_operand_in_graph_node(graph: &Graph, node: &Operand) -> String {
+    let mut w = Writer::new();
+    write_operand_in_graph(&mut w, graph, node);
+    w.finish()
+}
+fn write_operand_in_graph(w: &mut Writer, graph: &Graph, node: &Operand) {
+    w.text("v");
+    w.text(&node.vreg.0.to_string());
+    w.text(":");
+    write_reg_class(w, &node.class);
+    if let Some(value) = node.fixed.as_ref() {
+        w.text("/");
+        write_fixed_reg_in_graph(w, graph, &value);
+    }
+}
 pub fn format_program(node: &Program) -> String {
     let mut w = Writer::new();
     write_program(&mut w, node);
@@ -424,6 +776,29 @@ fn write_program(w: &mut Writer, node: &Program) {
         }
         w.with_indent(|w| {
             write_function(w, &value);
+        });
+    }
+    w.text("\n}");
+}
+pub fn format_program_in_graph_node(graph: &Graph, node: &Program) -> String {
+    let mut w = Writer::new();
+    write_program_in_graph(&mut w, graph, node);
+    w.finish()
+}
+fn write_program_in_graph(w: &mut Writer, graph: &Graph, node: &Program) {
+    w.text("cfg_program vregs=");
+    w.text(&node.vreg_count.value.to_string());
+    w.text(" slots=");
+    w.text(&node.slot_count.value.to_string());
+    w.text(" ");
+    w.text("{");
+    w.text("\n");
+    for (idx, value) in node.functions.iter().enumerate() {
+        if idx != 0 {
+            w.text("\n");
+        }
+        w.with_indent(|w| {
+            write_function_in_graph(w, graph, &value);
         });
     }
     w.text("\n}");
@@ -501,12 +876,100 @@ fn write_terminator(w: &mut Writer, node: &Terminator) {
         }
     }
 }
+pub fn format_terminator_in_graph_node(graph: &Graph, node: &Terminator) -> String {
+    let mut w = Writer::new();
+    write_terminator_in_graph(&mut w, graph, node);
+    w.finish()
+}
+fn write_terminator_in_graph(w: &mut Writer, graph: &Graph, node: &Terminator) {
+    let _ = graph;
+    match node {
+        Terminator::Branch { edge, id, .. } => {
+            w.text("term t");
+            w.text(&id.0.to_string());
+            w.text(": branch e");
+            w.text(&edge.0.to_string());
+        }
+        Terminator::BranchIf {
+            cond,
+            fallthrough,
+            id,
+            taken,
+            ..
+        } => {
+            w.text("term t");
+            w.text(&id.0.to_string());
+            w.text(": branch_if ");
+            w.text(&cond.0.to_string());
+            w.text(" -> e");
+            w.text(&taken.0.to_string());
+            w.text(", fallthrough e");
+            w.text(&fallthrough.0.to_string());
+        }
+        Terminator::BranchIfZero {
+            cond,
+            fallthrough,
+            id,
+            taken,
+            ..
+        } => {
+            w.text("term t");
+            w.text(&id.0.to_string());
+            w.text(": branch_if_zero ");
+            w.text(&cond.0.to_string());
+            w.text(" -> e");
+            w.text(&taken.0.to_string());
+            w.text(", fallthrough e");
+            w.text(&fallthrough.0.to_string());
+        }
+        Terminator::JumpTable {
+            default,
+            id,
+            predicate,
+            targets,
+            ..
+        } => {
+            w.text("term t");
+            w.text(&id.0.to_string());
+            w.text(": jump_table ");
+            w.text(&predicate.0.to_string());
+            w.text(" [");
+            for (idx, value) in targets.iter().enumerate() {
+                if idx != 0 {
+                    w.text(", ");
+                }
+                w.text(&value.0.to_string());
+            }
+            w.text("], default e");
+            w.text(&default.0.to_string());
+        }
+        Terminator::Return { id, .. } => {
+            w.text("term t");
+            w.text(&id.0.to_string());
+            w.text(": return");
+        }
+    }
+}
 pub fn format_unary_op(node: &UnaryOp) -> String {
     let mut w = Writer::new();
     write_unary_op(&mut w, node);
     w.finish()
 }
 fn write_unary_op(w: &mut Writer, node: &UnaryOp) {
+    match node {
+        UnaryOp::SignExtend { from_width, .. } => {
+            w.text("SignExtend ");
+            write_width(w, &from_width);
+        }
+    }
+}
+pub fn format_unary_op_in_graph_node(graph: &Graph, node: &UnaryOp) -> String {
+    let mut w = Writer::new();
+    write_unary_op_in_graph(&mut w, graph, node);
+    w.finish()
+}
+fn write_unary_op_in_graph(w: &mut Writer, graph: &Graph, node: &UnaryOp) {
+    let _ = graph;
     match node {
         UnaryOp::SignExtend { from_width, .. } => {
             w.text("SignExtend ");

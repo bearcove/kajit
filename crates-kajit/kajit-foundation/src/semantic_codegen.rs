@@ -65,10 +65,11 @@ fn recurse_calls_for_type(
     expr: &str,
     node_names: &[String],
     borrowed: bool,
+    graph_expr: Option<&str>,
 ) -> Vec<String> {
     match ty {
         SyntaxTypeUse::Optional(inner) => {
-            let inner_calls = recurse_calls_for_type(inner, "value", node_names, true);
+            let inner_calls = recurse_calls_for_type(inner, "value", node_names, true, graph_expr);
             if inner_calls.is_empty() {
                 Vec::new()
             } else {
@@ -83,7 +84,7 @@ fn recurse_calls_for_type(
             }
         }
         SyntaxTypeUse::Seq(inner) | SyntaxTypeUse::Order(inner) => {
-            let inner_calls = recurse_calls_for_type(inner, "value", node_names, true);
+            let inner_calls = recurse_calls_for_type(inner, "value", node_names, true, graph_expr);
             if inner_calls.is_empty() {
                 Vec::new()
             } else {
@@ -102,12 +103,29 @@ fn recurse_calls_for_type(
                 )]
             }
         }
-        SyntaxTypeUse::Arena { key: Some(_), .. } => Vec::new(),
+        SyntaxTypeUse::Arena { item, key: Some(_) } => {
+            let Some(graph_expr) = graph_expr else {
+                return Vec::new();
+            };
+            let SyntaxTypeUse::Ref { name: item_name } = item.as_ref() else {
+                return Vec::new();
+            };
+            let accessor = snake_case(item_name);
+            let collect = snake_case(item_name);
+            let iter_expr = if borrowed {
+                expr.to_owned()
+            } else {
+                format!("&{expr}")
+            };
+            vec![format!(
+                "for id in {iter_expr} {{\n    if let Some(value) = {graph_expr}.{accessor}(*id) {{\n        collect_{collect}(source, {graph_expr}, value, out);\n    }}\n}}"
+            )]
+        }
         SyntaxTypeUse::Arena {
             item: inner,
             key: None,
         } => {
-            let inner_calls = recurse_calls_for_type(inner, "value", node_names, true);
+            let inner_calls = recurse_calls_for_type(inner, "value", node_names, true, graph_expr);
             if inner_calls.is_empty() {
                 Vec::new()
             } else {
@@ -127,7 +145,7 @@ fn recurse_calls_for_type(
             }
         }
         SyntaxTypeUse::Pool { item: inner, .. } => {
-            let inner_calls = recurse_calls_for_type(inner, "value", node_names, true);
+            let inner_calls = recurse_calls_for_type(inner, "value", node_names, true, graph_expr);
             if inner_calls.is_empty() {
                 Vec::new()
             } else {
@@ -146,17 +164,23 @@ fn recurse_calls_for_type(
                 )]
             }
         }
-        SyntaxTypeUse::RefTo { id, .. } => recurse_calls_for_type(id, expr, node_names, borrowed),
+        SyntaxTypeUse::RefTo { id, .. } => {
+            recurse_calls_for_type(id, expr, node_names, borrowed, graph_expr)
+        }
         SyntaxTypeUse::Ref { name } if node_names.iter().any(|node| node == name) => {
             let expr = if borrowed {
                 expr.to_owned()
             } else {
                 format!("&{expr}")
             };
-            vec![format!(
-                "collect_{}(source, {expr}, out);",
-                snake_case(name)
-            )]
+            let method = snake_case(name);
+            if let Some(graph_expr) = graph_expr {
+                vec![format!(
+                    "collect_{method}(source, {graph_expr}, {expr}, out);"
+                )]
+            } else {
+                vec![format!("collect_{method}(source, {expr}, out);")]
+            }
         }
         _ => Vec::new(),
     }
@@ -310,6 +334,7 @@ pub(crate) fn render_semantic_block(
                                 &format!("node.{}", rust_ident(&field_name)),
                                 node_names,
                                 false,
+                                graph_backed.then_some("graph"),
                             )
                         })
                         .collect::<Vec<_>>()
@@ -415,6 +440,7 @@ pub(crate) fn render_semantic_block(
                                         &rust_ident(field_name),
                                         node_names,
                                         true,
+                                        graph_backed.then_some("graph"),
                                     )
                                 })
                                     .collect::<Vec<_>>();
@@ -460,9 +486,15 @@ pub(crate) fn render_semantic_block(
             }
         };
 
-        collector_rows.push(format!(
-            "fn collect_{method}(source: &str, node: &{node_name}, out: &mut Vec<SemanticToken>) {{\n    {body}\n}}"
-        ));
+        if graph_backed {
+            collector_rows.push(format!(
+                "fn collect_{method}(source: &str, graph: &Graph, node: &{node_name}, out: &mut Vec<SemanticToken>) {{\n    let _ = graph;\n    {body}\n}}"
+            ));
+        } else {
+            collector_rows.push(format!(
+                "fn collect_{method}(source: &str, node: &{node_name}, out: &mut Vec<SemanticToken>) {{\n    {body}\n}}"
+            ));
+        }
     }
 
     let semantic_head = if graph_backed {
@@ -484,7 +516,7 @@ pub fn semantic_tokens_in_graph(
         return Vec::new();
     }};
     let mut out = Vec::new();
-    collect_{root_method}(source, root, &mut out);
+    collect_{root_method}(source, graph, root, &mut out);
     out.sort_by_key(|token| (token.start, token.end, token.kind));
     out.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.kind == b.kind);
     out
