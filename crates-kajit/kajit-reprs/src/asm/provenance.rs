@@ -10,12 +10,14 @@ impl HasProvenance for A64Item {
     fn provenance(&self) -> Option<&Prov> {
         match self {
             Self::AddImm { prov, .. } => Some(prov),
+            Self::AddReg { prov, .. } => Some(prov),
             Self::B { prov, .. } => Some(prov),
             Self::Label { prov, .. } => Some(prov),
             Self::Mov { prov, .. } => Some(prov),
             Self::Movz { prov, .. } => Some(prov),
             Self::Nop { prov, .. } => Some(prov),
             Self::Ret { prov, .. } => Some(prov),
+            Self::SubReg { prov, .. } => Some(prov),
         }
     }
 }
@@ -95,16 +97,24 @@ impl HasProvenance for RetKeyword {
     }
 }
 
+impl HasProvenance for SubKeyword {
+    fn provenance(&self) -> Option<&Prov> {
+        Some(&self.prov)
+    }
+}
+
 impl HasProvenance for X64Item {
     fn provenance(&self) -> Option<&Prov> {
         match self {
             Self::AddImm { prov, .. } => Some(prov),
+            Self::AddReg { prov, .. } => Some(prov),
             Self::Jmp { prov, .. } => Some(prov),
             Self::Label { prov, .. } => Some(prov),
             Self::MovImm { prov, .. } => Some(prov),
             Self::MovReg { prov, .. } => Some(prov),
             Self::Nop { prov, .. } => Some(prov),
             Self::Ret { prov, .. } => Some(prov),
+            Self::SubReg { prov, .. } => Some(prov),
         }
     }
 }

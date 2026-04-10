@@ -125,10 +125,36 @@ fn emit_a64_item(
                 )
                 .map_err(map_err)
         }
+        A64Item::AddReg {
+            rd, rn, rm, prov, ..
+        } => {
+            set_source_location(emitter, prov, source);
+            emitter
+                .emit_add_reg(
+                    Width::X64,
+                    lower_a64_reg(rd),
+                    lower_a64_reg(rn),
+                    lower_a64_reg(rm),
+                )
+                .map_err(map_err)
+        }
         A64Item::B { target, prov, .. } => {
             set_source_location(emitter, prov, source);
             let label_id = lookup_a64_label(label_map, target)?;
             emitter.emit_b_label(label_id).map_err(map_err)
+        }
+        A64Item::SubReg {
+            rd, rn, rm, prov, ..
+        } => {
+            set_source_location(emitter, prov, source);
+            emitter
+                .emit_sub_reg(
+                    Width::X64,
+                    lower_a64_reg(rd),
+                    lower_a64_reg(rn),
+                    lower_a64_reg(rm),
+                )
+                .map_err(map_err)
         }
     }
 }
@@ -204,10 +230,26 @@ fn emit_x64_item(
                 .emit_with(|buf| crate::x64::encode_add_r64_imm32(lower_x64_reg(rd), imm, buf))
                 .map_err(map_err)
         }
+        X64Item::AddReg { rd, rm, prov, .. } => {
+            set_source_location(emitter, prov, source);
+            emitter
+                .emit_with(|buf| {
+                    crate::x64::encode_add_r64_r64(lower_x64_reg(rd), lower_x64_reg(rm), buf)
+                })
+                .map_err(map_err)
+        }
         X64Item::Jmp { target, prov, .. } => {
             set_source_location(emitter, prov, source);
             let label_id = lookup_x64_label(label_map, target)?;
             emitter.emit_jmp_label(label_id).map_err(map_err)
+        }
+        X64Item::SubReg { rd, rm, prov, .. } => {
+            set_source_location(emitter, prov, source);
+            emitter
+                .emit_with(|buf| {
+                    crate::x64::encode_sub_r64_r64(lower_x64_reg(rd), lower_x64_reg(rm), buf)
+                })
+                .map_err(map_err)
         }
     }
 }

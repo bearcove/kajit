@@ -40,6 +40,9 @@ pub trait Visit {
     fn visit_ret_keyword(&mut self, node: &RetKeyword) {
         walk_ret_keyword(self, node);
     }
+    fn visit_sub_keyword(&mut self, node: &SubKeyword) {
+        walk_sub_keyword(self, node);
+    }
     fn visit_x64_item(&mut self, node: &X64Item) {
         walk_x64_item(self, node);
     }
@@ -88,6 +91,9 @@ pub trait VisitMut {
     fn visit_ret_keyword_mut(&mut self, node: &mut RetKeyword) {
         walk_ret_keyword_mut(self, node);
     }
+    fn visit_sub_keyword_mut(&mut self, node: &mut SubKeyword) {
+        walk_sub_keyword_mut(self, node);
+    }
     fn visit_x64_item_mut(&mut self, node: &mut X64Item) {
         walk_x64_item_mut(self, node);
     }
@@ -103,6 +109,12 @@ pub fn walk_a64_item<V: ?Sized + Visit>(v: &mut V, node: &A64Item) {
         A64Item::AddImm { op, rd, rn, .. } => {
             v.visit_add_keyword(op);
             v.visit_a64_reg(rd);
+            v.visit_a64_reg(rn);
+        }
+        A64Item::AddReg { op, rd, rm, rn, .. } => {
+            v.visit_add_keyword(op);
+            v.visit_a64_reg(rd);
+            v.visit_a64_reg(rm);
             v.visit_a64_reg(rn);
         }
         A64Item::B { op, .. } => {
@@ -123,6 +135,12 @@ pub fn walk_a64_item<V: ?Sized + Visit>(v: &mut V, node: &A64Item) {
         }
         A64Item::Ret { op, .. } => {
             v.visit_ret_keyword(op);
+        }
+        A64Item::SubReg { op, rd, rm, rn, .. } => {
+            v.visit_sub_keyword(op);
+            v.visit_a64_reg(rd);
+            v.visit_a64_reg(rm);
+            v.visit_a64_reg(rn);
         }
     }
 }
@@ -173,11 +191,17 @@ pub fn walk_program<V: ?Sized + Visit>(v: &mut V, node: &Program) {
     }
 }
 pub fn walk_ret_keyword<V: ?Sized + Visit>(_v: &mut V, _node: &RetKeyword) {}
+pub fn walk_sub_keyword<V: ?Sized + Visit>(_v: &mut V, _node: &SubKeyword) {}
 pub fn walk_x64_item<V: ?Sized + Visit>(v: &mut V, node: &X64Item) {
     match node {
         X64Item::AddImm { op, rd, .. } => {
             v.visit_add_keyword(op);
             v.visit_x64_reg(rd);
+        }
+        X64Item::AddReg { op, rd, rm, .. } => {
+            v.visit_add_keyword(op);
+            v.visit_x64_reg(rd);
+            v.visit_x64_reg(rm);
         }
         X64Item::Jmp { op, .. } => {
             v.visit_jmp_keyword(op);
@@ -197,6 +221,11 @@ pub fn walk_x64_item<V: ?Sized + Visit>(v: &mut V, node: &X64Item) {
         }
         X64Item::Ret { op, .. } => {
             v.visit_ret_keyword(op);
+        }
+        X64Item::SubReg { op, rd, rm, .. } => {
+            v.visit_sub_keyword(op);
+            v.visit_x64_reg(rd);
+            v.visit_x64_reg(rm);
         }
     }
 }
@@ -218,6 +247,12 @@ pub fn walk_a64_item_mut<V: ?Sized + VisitMut>(v: &mut V, node: &mut A64Item) {
             v.visit_a64_reg_mut(rd);
             v.visit_a64_reg_mut(rn);
         }
+        A64Item::AddReg { op, rd, rm, rn, .. } => {
+            v.visit_add_keyword_mut(op);
+            v.visit_a64_reg_mut(rd);
+            v.visit_a64_reg_mut(rm);
+            v.visit_a64_reg_mut(rn);
+        }
         A64Item::B { op, .. } => {
             v.visit_b_keyword_mut(op);
         }
@@ -236,6 +271,12 @@ pub fn walk_a64_item_mut<V: ?Sized + VisitMut>(v: &mut V, node: &mut A64Item) {
         }
         A64Item::Ret { op, .. } => {
             v.visit_ret_keyword_mut(op);
+        }
+        A64Item::SubReg { op, rd, rm, rn, .. } => {
+            v.visit_sub_keyword_mut(op);
+            v.visit_a64_reg_mut(rd);
+            v.visit_a64_reg_mut(rm);
+            v.visit_a64_reg_mut(rn);
         }
     }
 }
@@ -290,11 +331,17 @@ pub fn walk_program_mut<V: ?Sized + VisitMut>(v: &mut V, node: &mut Program) {
     }
 }
 pub fn walk_ret_keyword_mut<V: ?Sized + VisitMut>(_v: &mut V, _node: &mut RetKeyword) {}
+pub fn walk_sub_keyword_mut<V: ?Sized + VisitMut>(_v: &mut V, _node: &mut SubKeyword) {}
 pub fn walk_x64_item_mut<V: ?Sized + VisitMut>(v: &mut V, node: &mut X64Item) {
     match node {
         X64Item::AddImm { op, rd, .. } => {
             v.visit_add_keyword_mut(op);
             v.visit_x64_reg_mut(rd);
+        }
+        X64Item::AddReg { op, rd, rm, .. } => {
+            v.visit_add_keyword_mut(op);
+            v.visit_x64_reg_mut(rd);
+            v.visit_x64_reg_mut(rm);
         }
         X64Item::Jmp { op, .. } => {
             v.visit_jmp_keyword_mut(op);
@@ -314,6 +361,11 @@ pub fn walk_x64_item_mut<V: ?Sized + VisitMut>(v: &mut V, node: &mut X64Item) {
         }
         X64Item::Ret { op, .. } => {
             v.visit_ret_keyword_mut(op);
+        }
+        X64Item::SubReg { op, rd, rm, .. } => {
+            v.visit_sub_keyword_mut(op);
+            v.visit_x64_reg_mut(rd);
+            v.visit_x64_reg_mut(rm);
         }
     }
 }

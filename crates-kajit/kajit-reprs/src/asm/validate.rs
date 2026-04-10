@@ -19,6 +19,19 @@ fn validate_a64_item(value: &A64Item, ctx: &mut ValidationContext, errors: &mut 
             validate_a64_reg(&rd, ctx, errors);
             validate_a64_reg(&rn, ctx, errors);
         }
+        A64Item::AddReg {
+            op,
+            prov,
+            rd,
+            rm,
+            rn,
+            ..
+        } => {
+            validate_add_keyword(&op, ctx, errors);
+            validate_a64_reg(&rd, ctx, errors);
+            validate_a64_reg(&rm, ctx, errors);
+            validate_a64_reg(&rn, ctx, errors);
+        }
         A64Item::B {
             op, prov, target, ..
         } => {
@@ -45,6 +58,19 @@ fn validate_a64_item(value: &A64Item, ctx: &mut ValidationContext, errors: &mut 
         }
         A64Item::Ret { op, prov, .. } => {
             validate_ret_keyword(&op, ctx, errors);
+        }
+        A64Item::SubReg {
+            op,
+            prov,
+            rd,
+            rm,
+            rn,
+            ..
+        } => {
+            validate_sub_keyword(&op, ctx, errors);
+            validate_a64_reg(&rd, ctx, errors);
+            validate_a64_reg(&rm, ctx, errors);
+            validate_a64_reg(&rn, ctx, errors);
         }
     }
 }
@@ -140,6 +166,9 @@ fn validate_program(value: &Program, ctx: &mut ValidationContext, errors: &mut V
 fn validate_ret_keyword(value: &RetKeyword, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     let _ = (value, ctx, errors);
 }
+fn validate_sub_keyword(value: &SubKeyword, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+    let _ = (value, ctx, errors);
+}
 fn validate_x64_item(value: &X64Item, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     match value {
         X64Item::AddImm {
@@ -147,6 +176,13 @@ fn validate_x64_item(value: &X64Item, ctx: &mut ValidationContext, errors: &mut 
         } => {
             validate_add_keyword(&op, ctx, errors);
             validate_x64_reg(&rd, ctx, errors);
+        }
+        X64Item::AddReg {
+            op, prov, rd, rm, ..
+        } => {
+            validate_add_keyword(&op, ctx, errors);
+            validate_x64_reg(&rd, ctx, errors);
+            validate_x64_reg(&rm, ctx, errors);
         }
         X64Item::Jmp {
             op, prov, target, ..
@@ -174,6 +210,13 @@ fn validate_x64_item(value: &X64Item, ctx: &mut ValidationContext, errors: &mut 
         }
         X64Item::Ret { op, prov, .. } => {
             validate_ret_keyword(&op, ctx, errors);
+        }
+        X64Item::SubReg {
+            op, prov, rd, rm, ..
+        } => {
+            validate_sub_keyword(&op, ctx, errors);
+            validate_x64_reg(&rd, ctx, errors);
+            validate_x64_reg(&rm, ctx, errors);
         }
     }
 }

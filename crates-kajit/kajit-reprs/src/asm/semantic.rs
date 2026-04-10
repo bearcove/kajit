@@ -77,6 +77,22 @@ fn collect_a64_item(source: &str, node: &A64Item, out: &mut Vec<SemanticToken>) 
             collect_a64_reg(source, rd, out);
             collect_a64_reg(source, rn, out);
         }
+        A64Item::AddReg {
+            op,
+            prov,
+            rd,
+            rm,
+            rn,
+        } => {
+            let current_prov = node.provenance();
+            if let Some(prov) = op.provenance() {
+                emit_prov_token(prov, "keyword", out);
+            }
+            collect_add_keyword(source, op, out);
+            collect_a64_reg(source, rd, out);
+            collect_a64_reg(source, rm, out);
+            collect_a64_reg(source, rn, out);
+        }
         A64Item::B { op, prov, target } => {
             let current_prov = node.provenance();
             if let Some(prov) = op.provenance() {
@@ -120,6 +136,22 @@ fn collect_a64_item(source: &str, node: &A64Item, out: &mut Vec<SemanticToken>) 
                 emit_prov_token(prov, "keyword", out);
             }
             collect_ret_keyword(source, op, out);
+        }
+        A64Item::SubReg {
+            op,
+            prov,
+            rd,
+            rm,
+            rn,
+        } => {
+            let current_prov = node.provenance();
+            if let Some(prov) = op.provenance() {
+                emit_prov_token(prov, "keyword", out);
+            }
+            collect_sub_keyword(source, op, out);
+            collect_a64_reg(source, rd, out);
+            collect_a64_reg(source, rm, out);
+            collect_a64_reg(source, rn, out);
         }
     }
 }
@@ -234,6 +266,9 @@ fn collect_program(source: &str, node: &Program, out: &mut Vec<SemanticToken>) {
 fn collect_ret_keyword(source: &str, node: &RetKeyword, out: &mut Vec<SemanticToken>) {
     let current_prov = node.provenance();
 }
+fn collect_sub_keyword(source: &str, node: &SubKeyword, out: &mut Vec<SemanticToken>) {
+    let current_prov = node.provenance();
+}
 fn collect_x64_item(source: &str, node: &X64Item, out: &mut Vec<SemanticToken>) {
     match node {
         X64Item::AddImm { imm, op, prov, rd } => {
@@ -244,6 +279,15 @@ fn collect_x64_item(source: &str, node: &X64Item, out: &mut Vec<SemanticToken>) 
             }
             collect_add_keyword(source, op, out);
             collect_x64_reg(source, rd, out);
+        }
+        X64Item::AddReg { op, prov, rd, rm } => {
+            let current_prov = node.provenance();
+            if let Some(prov) = op.provenance() {
+                emit_prov_token(prov, "keyword", out);
+            }
+            collect_add_keyword(source, op, out);
+            collect_x64_reg(source, rd, out);
+            collect_x64_reg(source, rm, out);
         }
         X64Item::Jmp { op, prov, target } => {
             let current_prov = node.provenance();
@@ -288,6 +332,15 @@ fn collect_x64_item(source: &str, node: &X64Item, out: &mut Vec<SemanticToken>) 
                 emit_prov_token(prov, "keyword", out);
             }
             collect_ret_keyword(source, op, out);
+        }
+        X64Item::SubReg { op, prov, rd, rm } => {
+            let current_prov = node.provenance();
+            if let Some(prov) = op.provenance() {
+                emit_prov_token(prov, "keyword", out);
+            }
+            collect_sub_keyword(source, op, out);
+            collect_x64_reg(source, rd, out);
+            collect_x64_reg(source, rm, out);
         }
     }
 }

@@ -72,6 +72,15 @@ fn write_a64_item(w: &mut Writer, node: &A64Item) {
             w.text(", ");
             w.text(&imm.value.to_string());
         }
+        A64Item::AddReg { op, rd, rm, rn, .. } => {
+            write_add_keyword(w, &op);
+            w.text(" ");
+            write_a64_reg(w, &rd);
+            w.text(", ");
+            write_a64_reg(w, &rn);
+            w.text(", ");
+            write_a64_reg(w, &rm);
+        }
         A64Item::B { op, target, .. } => {
             write_b_keyword(w, &op);
             w.text(" ");
@@ -100,6 +109,15 @@ fn write_a64_item(w: &mut Writer, node: &A64Item) {
         }
         A64Item::Ret { op, .. } => {
             write_ret_keyword(w, &op);
+        }
+        A64Item::SubReg { op, rd, rm, rn, .. } => {
+            write_sub_keyword(w, &op);
+            w.text(" ");
+            write_a64_reg(w, &rd);
+            w.text(", ");
+            write_a64_reg(w, &rn);
+            w.text(", ");
+            write_a64_reg(w, &rm);
         }
     }
 }
@@ -252,6 +270,14 @@ pub fn format_ret_keyword(node: &RetKeyword) -> String {
 fn write_ret_keyword(w: &mut Writer, node: &RetKeyword) {
     w.text("ret");
 }
+pub fn format_sub_keyword(node: &SubKeyword) -> String {
+    let mut w = Writer::new();
+    write_sub_keyword(&mut w, node);
+    w.finish()
+}
+fn write_sub_keyword(w: &mut Writer, node: &SubKeyword) {
+    w.text("sub");
+}
 pub fn format_x64_item(node: &X64Item) -> String {
     let mut w = Writer::new();
     write_x64_item(&mut w, node);
@@ -265,6 +291,13 @@ fn write_x64_item(w: &mut Writer, node: &X64Item) {
             write_x64_reg(w, &rd);
             w.text(", ");
             w.text(&imm.value.to_string());
+        }
+        X64Item::AddReg { op, rd, rm, .. } => {
+            write_add_keyword(w, &op);
+            w.text(" ");
+            write_x64_reg(w, &rd);
+            w.text(", ");
+            write_x64_reg(w, &rm);
         }
         X64Item::Jmp { op, target, .. } => {
             write_jmp_keyword(w, &op);
@@ -294,6 +327,13 @@ fn write_x64_item(w: &mut Writer, node: &X64Item) {
         }
         X64Item::Ret { op, .. } => {
             write_ret_keyword(w, &op);
+        }
+        X64Item::SubReg { op, rd, rm, .. } => {
+            write_sub_keyword(w, &op);
+            w.text(" ");
+            write_x64_reg(w, &rd);
+            w.text(", ");
+            write_x64_reg(w, &rm);
         }
     }
 }

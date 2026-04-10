@@ -1,0 +1,11 @@
+cfg_program vregs=3 slots=0 {
+    cfg_func @0 f0 entry=b0 {
+        data_args: []
+        data_results: [2]
+        block b0 params=[] insts=[0,1,2] term=t0 preds=[] succs=[]
+        inst i0: v0:gpr/ret0 = const(7)
+        inst i1: v1:gpr/hw1 = copy v0:gpr/ret0
+        inst i2: v2:gpr/ret0 = add v1:gpr/hw1, v0:gpr/ret0
+        term t0: return
+    }
+}

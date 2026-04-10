@@ -55,6 +55,7 @@ repr @module{
             MovKeyword @seq("mov")
             MovzKeyword @seq("movz")
             AddKeyword @seq("add")
+            SubKeyword @seq("sub")
             BKeyword @seq("b")
             JmpKeyword @seq("jmp")
 
@@ -125,6 +126,24 @@ repr @module{
                     ","
                     @field(imm @token(int))
                 ))
+                /// Add a register to a register.
+                @variant(AddReg @seq(
+                    @field(op @ref(AddKeyword))
+                    @field(rd @ref(A64Reg))
+                    ","
+                    @field(rn @ref(A64Reg))
+                    ","
+                    @field(rm @ref(A64Reg))
+                ))
+                /// Subtract a register from a register.
+                @variant(SubReg @seq(
+                    @field(op @ref(SubKeyword))
+                    @field(rd @ref(A64Reg))
+                    ","
+                    @field(rn @ref(A64Reg))
+                    ","
+                    @field(rm @ref(A64Reg))
+                ))
                 /// Branch to a label.
                 @variant(B @seq(
                     @field(op @ref(BKeyword))
@@ -178,6 +197,20 @@ repr @module{
                     ","
                     @field(imm @token(int))
                 ))
+                /// Add a register to a register.
+                @variant(AddReg @seq(
+                    @field(op @ref(AddKeyword))
+                    @field(rd @ref(X64Reg))
+                    ","
+                    @field(rm @ref(X64Reg))
+                ))
+                /// Subtract a register from a register.
+                @variant(SubReg @seq(
+                    @field(op @ref(SubKeyword))
+                    @field(rd @ref(X64Reg))
+                    ","
+                    @field(rm @ref(X64Reg))
+                ))
                 /// Jump to a label.
                 @variant(Jmp @seq(
                     @field(op @ref(JmpKeyword))
@@ -196,6 +229,7 @@ repr @module{
             MovKeyword "mov"
             MovzKeyword "movz"
             AddKeyword "add"
+            SubKeyword "sub"
             BKeyword "b"
             JmpKeyword "jmp"
 
@@ -216,6 +250,8 @@ repr @module{
             A64Item.Movz "{op} {rd}, {imm}"
             A64Item.Mov "{op} {rd}, {rm}"
             A64Item.AddImm "{op} {rd}, {rn}, {imm}"
+            A64Item.AddReg "{op} {rd}, {rn}, {rm}"
+            A64Item.SubReg "{op} {rd}, {rn}, {rm}"
             A64Item.B "{op} {target}"
 
             X64Reg.Rax "rax"
@@ -231,6 +267,8 @@ repr @module{
             X64Item.MovImm "{op} {rd}, {imm}"
             X64Item.MovReg "{op} {rd}, {rm}"
             X64Item.AddImm "{op} {rd}, {imm}"
+            X64Item.AddReg "{op} {rd}, {rm}"
+            X64Item.SubReg "{op} {rd}, {rm}"
             X64Item.Jmp "{op} {target}"
         }
 
@@ -245,6 +283,8 @@ repr @module{
             field.A64Item.Movz.op keyword
             field.A64Item.Mov.op keyword
             field.A64Item.AddImm.op keyword
+            field.A64Item.AddReg.op keyword
+            field.A64Item.SubReg.op keyword
             field.A64Item.B.op keyword
 
             field.X64Item.Ret.op keyword
@@ -252,6 +292,8 @@ repr @module{
             field.X64Item.MovImm.op keyword
             field.X64Item.MovReg.op keyword
             field.X64Item.AddImm.op keyword
+            field.X64Item.AddReg.op keyword
+            field.X64Item.SubReg.op keyword
             field.X64Item.Jmp.op keyword
 
             field.A64Item.Label.name label
@@ -345,6 +387,8 @@ repr @module{
         MovzKeyword @struct{ prov @Prov }
         /// Add an operand to a destination register.
         AddKeyword @struct{ prov @Prov }
+        /// Subtract an operand from a destination register.
+        SubKeyword @struct{ prov @Prov }
         /// Branch to a label in AArch64.
         BKeyword @struct{ prov @Prov }
         /// Jump to a label in x86-64.
@@ -426,6 +470,34 @@ repr @module{
                 rn @A64Reg
                 /// Immediate value.
                 imm @Imm
+            }
+
+            /// Add a register to a register.
+            AddReg @struct{
+                /// Opcode keyword.
+                op @AddKeyword
+                /// Source provenance for the item.
+                prov @Prov
+                /// Destination register.
+                rd @A64Reg
+                /// Left-hand operand register.
+                rn @A64Reg
+                /// Right-hand operand register.
+                rm @A64Reg
+            }
+
+            /// Subtract a register from a register.
+            SubReg @struct{
+                /// Opcode keyword.
+                op @SubKeyword
+                /// Source provenance for the item.
+                prov @Prov
+                /// Destination register.
+                rd @A64Reg
+                /// Left-hand operand register.
+                rn @A64Reg
+                /// Right-hand operand register.
+                rm @A64Reg
             }
 
             /// Branch to a symbolic label.
@@ -515,6 +587,30 @@ repr @module{
                 rd @X64Reg
                 /// Immediate value.
                 imm @Imm
+            }
+
+            /// Add a register to a register.
+            AddReg @struct{
+                /// Opcode keyword.
+                op @AddKeyword
+                /// Source provenance for the item.
+                prov @Prov
+                /// Destination register.
+                rd @X64Reg
+                /// Source register.
+                rm @X64Reg
+            }
+
+            /// Subtract a register from a register.
+            SubReg @struct{
+                /// Opcode keyword.
+                op @SubKeyword
+                /// Source provenance for the item.
+                prov @Prov
+                /// Destination register.
+                rd @X64Reg
+                /// Source register.
+                rm @X64Reg
             }
 
             /// Jump to a symbolic label.

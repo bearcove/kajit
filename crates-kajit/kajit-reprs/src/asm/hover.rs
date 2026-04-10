@@ -75,6 +75,53 @@ fn collect_a64_item(node: &A64Item, out: &mut Vec<HoverEntry>) {
             collect_a64_reg(rd, out);
             collect_a64_reg(rn, out);
         }
+        A64Item::AddReg {
+            op,
+            prov,
+            rd,
+            rm,
+            rn,
+        } => {
+            if let Some(prov) = node.provenance() {
+                emit_hover(prov, "Add a register to a register.", 40, out);
+            }
+            if let Some(prov) = op.provenance() {
+                emit_hover(
+                    prov,
+                    "Add a register to a register.\n\nOpcode keyword.",
+                    30,
+                    out,
+                );
+            }
+            if let Some(prov) = rd.provenance() {
+                emit_hover(
+                    prov,
+                    "Add a register to a register.\n\nDestination register.",
+                    30,
+                    out,
+                );
+            }
+            if let Some(prov) = rm.provenance() {
+                emit_hover(
+                    prov,
+                    "Add a register to a register.\n\nRight-hand operand register.",
+                    30,
+                    out,
+                );
+            }
+            if let Some(prov) = rn.provenance() {
+                emit_hover(
+                    prov,
+                    "Add a register to a register.\n\nLeft-hand operand register.",
+                    30,
+                    out,
+                );
+            }
+            collect_add_keyword(op, out);
+            collect_a64_reg(rd, out);
+            collect_a64_reg(rm, out);
+            collect_a64_reg(rn, out);
+        }
         A64Item::B { op, prov, target } => {
             if let Some(prov) = node.provenance() {
                 emit_hover(prov, "Branch to a symbolic label.", 40, out);
@@ -184,6 +231,53 @@ fn collect_a64_item(node: &A64Item, out: &mut Vec<HoverEntry>) {
                 emit_hover(prov, "A return instruction.\n\nOpcode keyword.", 30, out);
             }
             collect_ret_keyword(op, out);
+        }
+        A64Item::SubReg {
+            op,
+            prov,
+            rd,
+            rm,
+            rn,
+        } => {
+            if let Some(prov) = node.provenance() {
+                emit_hover(prov, "Subtract a register from a register.", 40, out);
+            }
+            if let Some(prov) = op.provenance() {
+                emit_hover(
+                    prov,
+                    "Subtract a register from a register.\n\nOpcode keyword.",
+                    30,
+                    out,
+                );
+            }
+            if let Some(prov) = rd.provenance() {
+                emit_hover(
+                    prov,
+                    "Subtract a register from a register.\n\nDestination register.",
+                    30,
+                    out,
+                );
+            }
+            if let Some(prov) = rm.provenance() {
+                emit_hover(
+                    prov,
+                    "Subtract a register from a register.\n\nRight-hand operand register.",
+                    30,
+                    out,
+                );
+            }
+            if let Some(prov) = rn.provenance() {
+                emit_hover(
+                    prov,
+                    "Subtract a register from a register.\n\nLeft-hand operand register.",
+                    30,
+                    out,
+                );
+            }
+            collect_sub_keyword(op, out);
+            collect_a64_reg(rd, out);
+            collect_a64_reg(rm, out);
+            collect_a64_reg(rn, out);
         }
     }
 }
@@ -339,6 +433,16 @@ fn collect_ret_keyword(node: &RetKeyword, out: &mut Vec<HoverEntry>) {
         emit_hover(prov, "Return from the current function.", 10, out);
     }
 }
+fn collect_sub_keyword(node: &SubKeyword, out: &mut Vec<HoverEntry>) {
+    if let Some(prov) = node.provenance() {
+        emit_hover(
+            prov,
+            "Subtract an operand from a destination register.",
+            10,
+            out,
+        );
+    }
+}
 fn collect_x64_item(node: &X64Item, out: &mut Vec<HoverEntry>) {
     match node {
         X64Item::AddImm { imm, op, prov, rd } => {
@@ -369,6 +473,38 @@ fn collect_x64_item(node: &X64Item, out: &mut Vec<HoverEntry>) {
             }
             collect_add_keyword(op, out);
             collect_x64_reg(rd, out);
+        }
+        X64Item::AddReg { op, prov, rd, rm } => {
+            if let Some(prov) = node.provenance() {
+                emit_hover(prov, "Add a register to a register.", 40, out);
+            }
+            if let Some(prov) = op.provenance() {
+                emit_hover(
+                    prov,
+                    "Add a register to a register.\n\nOpcode keyword.",
+                    30,
+                    out,
+                );
+            }
+            if let Some(prov) = rd.provenance() {
+                emit_hover(
+                    prov,
+                    "Add a register to a register.\n\nDestination register.",
+                    30,
+                    out,
+                );
+            }
+            if let Some(prov) = rm.provenance() {
+                emit_hover(
+                    prov,
+                    "Add a register to a register.\n\nSource register.",
+                    30,
+                    out,
+                );
+            }
+            collect_add_keyword(op, out);
+            collect_x64_reg(rd, out);
+            collect_x64_reg(rm, out);
         }
         X64Item::Jmp { op, prov, target } => {
             if let Some(prov) = node.provenance() {
@@ -479,6 +615,38 @@ fn collect_x64_item(node: &X64Item, out: &mut Vec<HoverEntry>) {
                 emit_hover(prov, "A return instruction.\n\nOpcode keyword.", 30, out);
             }
             collect_ret_keyword(op, out);
+        }
+        X64Item::SubReg { op, prov, rd, rm } => {
+            if let Some(prov) = node.provenance() {
+                emit_hover(prov, "Subtract a register from a register.", 40, out);
+            }
+            if let Some(prov) = op.provenance() {
+                emit_hover(
+                    prov,
+                    "Subtract a register from a register.\n\nOpcode keyword.",
+                    30,
+                    out,
+                );
+            }
+            if let Some(prov) = rd.provenance() {
+                emit_hover(
+                    prov,
+                    "Subtract a register from a register.\n\nDestination register.",
+                    30,
+                    out,
+                );
+            }
+            if let Some(prov) = rm.provenance() {
+                emit_hover(
+                    prov,
+                    "Subtract a register from a register.\n\nSource register.",
+                    30,
+                    out,
+                );
+            }
+            collect_sub_keyword(op, out);
+            collect_x64_reg(rd, out);
+            collect_x64_reg(rm, out);
         }
     }
 }

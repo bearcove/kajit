@@ -141,6 +141,10 @@ pub static RULES: &[RuleSpec] = &[
         kind: "seq",
     },
     RuleSpec {
+        name: "SubKeyword",
+        kind: "seq",
+    },
+    RuleSpec {
         name: "X64Item",
         kind: "choice",
     },
@@ -217,6 +221,10 @@ pub static NODES: &[NodeSpec] = &[
         kind: "struct",
     },
     NodeSpec {
+        name: "SubKeyword",
+        kind: "struct",
+    },
+    NodeSpec {
         name: "X64Item",
         kind: "enum",
     },
@@ -253,6 +261,31 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     },
     FieldSpec {
         owner: "A64Item.AddImm",
+        field: "rn",
+        kind: "A64Reg",
+    },
+    FieldSpec {
+        owner: "A64Item.AddReg",
+        field: "op",
+        kind: "AddKeyword",
+    },
+    FieldSpec {
+        owner: "A64Item.AddReg",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "A64Item.AddReg",
+        field: "rd",
+        kind: "A64Reg",
+    },
+    FieldSpec {
+        owner: "A64Item.AddReg",
+        field: "rm",
+        kind: "A64Reg",
+    },
+    FieldSpec {
+        owner: "A64Item.AddReg",
         field: "rn",
         kind: "A64Reg",
     },
@@ -340,6 +373,31 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
         owner: "A64Item.Ret",
         field: "prov",
         kind: "Prov",
+    },
+    FieldSpec {
+        owner: "A64Item.SubReg",
+        field: "op",
+        kind: "SubKeyword",
+    },
+    FieldSpec {
+        owner: "A64Item.SubReg",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "A64Item.SubReg",
+        field: "rd",
+        kind: "A64Reg",
+    },
+    FieldSpec {
+        owner: "A64Item.SubReg",
+        field: "rm",
+        kind: "A64Reg",
+    },
+    FieldSpec {
+        owner: "A64Item.SubReg",
+        field: "rn",
+        kind: "A64Reg",
     },
     FieldSpec {
         owner: "A64Reg.Sp",
@@ -462,6 +520,11 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
         kind: "Prov",
     },
     FieldSpec {
+        owner: "SubKeyword",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
         owner: "X64Item.AddImm",
         field: "imm",
         kind: "Imm",
@@ -479,6 +542,26 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     FieldSpec {
         owner: "X64Item.AddImm",
         field: "rd",
+        kind: "X64Reg",
+    },
+    FieldSpec {
+        owner: "X64Item.AddReg",
+        field: "op",
+        kind: "AddKeyword",
+    },
+    FieldSpec {
+        owner: "X64Item.AddReg",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "X64Item.AddReg",
+        field: "rd",
+        kind: "X64Reg",
+    },
+    FieldSpec {
+        owner: "X64Item.AddReg",
+        field: "rm",
         kind: "X64Reg",
     },
     FieldSpec {
@@ -567,6 +650,26 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
         kind: "Prov",
     },
     FieldSpec {
+        owner: "X64Item.SubReg",
+        field: "op",
+        kind: "SubKeyword",
+    },
+    FieldSpec {
+        owner: "X64Item.SubReg",
+        field: "prov",
+        kind: "Prov",
+    },
+    FieldSpec {
+        owner: "X64Item.SubReg",
+        field: "rd",
+        kind: "X64Reg",
+    },
+    FieldSpec {
+        owner: "X64Item.SubReg",
+        field: "rm",
+        kind: "X64Reg",
+    },
+    FieldSpec {
         owner: "X64Reg.Rax",
         field: "prov",
         kind: "Prov",
@@ -613,6 +716,10 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
         template: "{op} {rd}, {rn}, {imm}",
     },
     PrintSpec {
+        name: "A64Item.AddReg",
+        template: "{op} {rd}, {rn}, {rm}",
+    },
+    PrintSpec {
         name: "A64Item.B",
         template: "{op} {target}",
     },
@@ -635,6 +742,10 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
     PrintSpec {
         name: "A64Item.Ret",
         template: "{op}",
+    },
+    PrintSpec {
+        name: "A64Item.SubReg",
+        template: "{op} {rd}, {rn}, {rm}",
     },
     PrintSpec {
         name: "A64Reg.Sp",
@@ -701,8 +812,16 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
         template: "ret",
     },
     PrintSpec {
+        name: "SubKeyword",
+        template: "sub",
+    },
+    PrintSpec {
         name: "X64Item.AddImm",
         template: "{op} {rd}, {imm}",
+    },
+    PrintSpec {
+        name: "X64Item.AddReg",
+        template: "{op} {rd}, {rm}",
     },
     PrintSpec {
         name: "X64Item.Jmp",
@@ -727,6 +846,10 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
     PrintSpec {
         name: "X64Item.Ret",
         template: "{op}",
+    },
+    PrintSpec {
+        name: "X64Item.SubReg",
+        template: "{op} {rd}, {rm}",
     },
     PrintSpec {
         name: "X64Reg.Rax",

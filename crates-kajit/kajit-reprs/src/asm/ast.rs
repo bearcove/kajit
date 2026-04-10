@@ -97,6 +97,24 @@ pub enum A64Item {
         rn: Box<A64Reg>,
     },
 
+    /// Add a register to a register.
+    AddReg {
+        /// Opcode keyword.
+        op: Box<AddKeyword>,
+
+        /// Source provenance for the item.
+        prov: Prov,
+
+        /// Destination register.
+        rd: Box<A64Reg>,
+
+        /// Right-hand operand register.
+        rm: Box<A64Reg>,
+
+        /// Left-hand operand register.
+        rn: Box<A64Reg>,
+    },
+
     /// Branch to a symbolic label.
     B {
         /// Opcode keyword.
@@ -164,6 +182,24 @@ pub enum A64Item {
 
         /// Source provenance for the item.
         prov: Prov,
+    },
+
+    /// Subtract a register from a register.
+    SubReg {
+        /// Opcode keyword.
+        op: Box<SubKeyword>,
+
+        /// Source provenance for the item.
+        prov: Prov,
+
+        /// Destination register.
+        rd: Box<A64Reg>,
+
+        /// Right-hand operand register.
+        rm: Box<A64Reg>,
+
+        /// Left-hand operand register.
+        rn: Box<A64Reg>,
     },
 }
 
@@ -310,6 +346,12 @@ pub struct RetKeyword {
     pub prov: Prov,
 }
 
+/// Subtract an operand from a destination register.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubKeyword {
+    pub prov: Prov,
+}
+
 /// x86-64 labels and instructions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum X64Item {
@@ -326,6 +368,21 @@ pub enum X64Item {
 
         /// Destination register.
         rd: Box<X64Reg>,
+    },
+
+    /// Add a register to a register.
+    AddReg {
+        /// Opcode keyword.
+        op: Box<AddKeyword>,
+
+        /// Source provenance for the item.
+        prov: Prov,
+
+        /// Destination register.
+        rd: Box<X64Reg>,
+
+        /// Source register.
+        rm: Box<X64Reg>,
     },
 
     /// Jump to a symbolic label.
@@ -395,6 +452,21 @@ pub enum X64Item {
 
         /// Source provenance for the item.
         prov: Prov,
+    },
+
+    /// Subtract a register from a register.
+    SubReg {
+        /// Opcode keyword.
+        op: Box<SubKeyword>,
+
+        /// Source provenance for the item.
+        prov: Prov,
+
+        /// Destination register.
+        rd: Box<X64Reg>,
+
+        /// Source register.
+        rm: Box<X64Reg>,
     },
 }
 
