@@ -51,7 +51,7 @@ fn prov_from_span(span: chumsky::span::SimpleSpan<usize>, file_id: Option<u32>) 
         }),
     }
 }
-pub fn parse_root_text_rich(
+fn parse_root_value_rich(
     source: &str,
 
     file_id: Option<u32>,
@@ -754,8 +754,15 @@ pub fn parse_root_text_rich(
         .parse(source)
         .into_result()
 }
+pub fn parse_root_text_rich(
+    source: &str,
+
+    file_id: Option<u32>,
+) -> Result<Program, Vec<Rich<'_, char>>> {
+    parse_root_value_rich(source, file_id)
+}
 pub fn parse_root_text_with_file_id(source: &str, file_id: Option<u32>) -> Result<Program, String> {
-    parse_root_text_rich(source, file_id).map_err(|errs| crate::format_rich_errors(source, errs))
+    parse_root_value_rich(source, file_id).map_err(|errs| crate::format_rich_errors(source, errs))
 }
 pub fn parse_root_text(source: &str) -> Result<Program, String> {
     parse_root_text_with_file_id(source, None)
@@ -776,4 +783,48 @@ pub fn parse_program_text_with_file_id(
 }
 pub fn parse_program_text(source: &str) -> Result<Program, String> {
     parse_root_text(source)
+}
+pub fn parse_root_into_graph_rich<'src>(
+    graph: &mut Graph,
+
+    source: &'src str,
+
+    file_id: Option<u32>,
+) -> Result<ProgramHandle, Vec<Rich<'src, char>>> {
+    let root = parse_root_value_rich(source, file_id)?;
+    Ok(graph.insert_root(root))
+}
+pub fn parse_root_into_graph_with_file_id(
+    graph: &mut Graph,
+
+    source: &str,
+
+    file_id: Option<u32>,
+) -> Result<ProgramHandle, String> {
+    parse_root_into_graph_rich(graph, source, file_id)
+        .map_err(|errs| crate::format_rich_errors(source, errs))
+}
+pub fn parse_root_into_graph(graph: &mut Graph, source: &str) -> Result<ProgramHandle, String> {
+    parse_root_into_graph_with_file_id(graph, source, None)
+}
+pub fn parse_program_into_graph_rich<'src>(
+    graph: &mut Graph,
+
+    source: &'src str,
+
+    file_id: Option<u32>,
+) -> Result<ProgramHandle, Vec<Rich<'src, char>>> {
+    parse_root_into_graph_rich(graph, source, file_id)
+}
+pub fn parse_program_into_graph_with_file_id(
+    graph: &mut Graph,
+
+    source: &str,
+
+    file_id: Option<u32>,
+) -> Result<ProgramHandle, String> {
+    parse_root_into_graph_with_file_id(graph, source, file_id)
+}
+pub fn parse_program_into_graph(graph: &mut Graph, source: &str) -> Result<ProgramHandle, String> {
+    parse_root_into_graph(graph, source)
 }

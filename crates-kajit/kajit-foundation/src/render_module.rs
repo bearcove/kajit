@@ -1521,12 +1521,63 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
 }
 
 fn render_ast_file(parts: &RenderParts) -> String {
+    let root_handle_name = format!("{}Handle", parts.root_name);
     format!(
         r#"
 {module_doc_rows}
 
 pub trait EntityNode {{}}
 pub trait SlotNode {{}}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct {root_handle_name}(pub u32);
+
+impl {root_handle_name} {{
+    pub const fn new(index: u32) -> Self {{
+        Self(index)
+    }}
+
+    pub const fn index(self) -> usize {{
+        self.0 as usize
+    }}
+}}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Graph {{
+    roots: Vec<{root_name}>,
+}}
+
+impl Graph {{
+    pub fn new() -> Self {{
+        Self::default()
+    }}
+
+    pub fn insert_root(&mut self, root: {root_name}) -> {root_handle_name} {{
+        let handle = {root_handle_name}::new(self.roots.len() as u32);
+        self.roots.push(root);
+        handle
+    }}
+
+    pub fn root(&self, handle: {root_handle_name}) -> Option<&{root_name}> {{
+        self.roots.get(handle.index())
+    }}
+
+    pub fn root_mut(&mut self, handle: {root_handle_name}) -> Option<&mut {root_name}> {{
+        self.roots.get_mut(handle.index())
+    }}
+
+    pub fn roots(&self) -> &[{root_name}] {{
+        &self.roots
+    }}
+
+    pub fn len(&self) -> usize {{
+        self.roots.len()
+    }}
+
+    pub fn is_empty(&self) -> bool {{
+        self.roots.is_empty()
+    }}
+}}
 
 {placeholder_rows}
 
@@ -1535,6 +1586,8 @@ pub trait SlotNode {{}}
 {ast_rows}
 "#,
         module_doc_rows = parts.module_doc_rows,
+        root_handle_name = root_handle_name,
+        root_name = parts.root_name,
         placeholder_rows = parts.placeholder_rows,
         support_rows = parts.support_rows,
         ast_rows = parts.ast_rows,
@@ -1661,6 +1714,16 @@ fn parse_module_smoke() {
         module.functions[0].body.statements.as_slice(),
         [Stmt::Return { value: None, .. }]
     ));
+}
+
+#[test]
+fn parse_module_into_graph_smoke() {
+    let mut graph = Graph::new();
+    let handle = parse_root_into_graph(&mut graph, "module { fn main() -> Value { return } }")
+        .unwrap();
+    let module = graph.root(handle).unwrap();
+    assert_eq!(module.functions.len(), 1);
+    assert_eq!(module.functions[0].name.text, "main");
 }
 
 #[test]

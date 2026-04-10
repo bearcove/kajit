@@ -831,6 +831,7 @@ pub(crate) fn render_parser_block(
     let root_name = repr.syntax.root.as_str();
     let root_parser_name = format!("{}_parser", snake_case(root_name));
     let root_fn_suffix = snake_case(root_name);
+    let root_handle_name = format!("{root_name}Handle");
 
     let parser_defs = parser_order
         .iter()
@@ -924,7 +925,7 @@ fn prov_from_span(span: chumsky::span::SimpleSpan<usize>, file_id: Option<u32>) 
     }}
 }}
 
-pub fn parse_root_text_rich(
+fn parse_root_value_rich(
     source: &str,
     file_id: Option<u32>,
 ) -> Result<{root_name}, Vec<Rich<'_, char>>> {{
@@ -936,8 +937,15 @@ pub fn parse_root_text_rich(
         .into_result()
 }}
 
+pub fn parse_root_text_rich(
+    source: &str,
+    file_id: Option<u32>,
+) -> Result<{root_name}, Vec<Rich<'_, char>>> {{
+    parse_root_value_rich(source, file_id)
+}}
+
 pub fn parse_root_text_with_file_id(source: &str, file_id: Option<u32>) -> Result<{root_name}, String> {{
-    parse_root_text_rich(source, file_id).map_err(|errs| crate::format_rich_errors(source, errs))
+    parse_root_value_rich(source, file_id).map_err(|errs| crate::format_rich_errors(source, errs))
 }}
 
 pub fn parse_root_text(source: &str) -> Result<{root_name}, String> {{
@@ -961,10 +969,56 @@ pub fn parse_{root_fn_suffix}_text_with_file_id(
 pub fn parse_{root_fn_suffix}_text(source: &str) -> Result<{root_name}, String> {{
     parse_root_text(source)
 }}
+
+pub fn parse_root_into_graph_rich<'src>(
+    graph: &mut Graph,
+    source: &'src str,
+    file_id: Option<u32>,
+) -> Result<{root_handle_name}, Vec<Rich<'src, char>>> {{
+    let root = parse_root_value_rich(source, file_id)?;
+    Ok(graph.insert_root(root))
+}}
+
+pub fn parse_root_into_graph_with_file_id(
+    graph: &mut Graph,
+    source: &str,
+    file_id: Option<u32>,
+) -> Result<{root_handle_name}, String> {{
+    parse_root_into_graph_rich(graph, source, file_id)
+        .map_err(|errs| crate::format_rich_errors(source, errs))
+}}
+
+pub fn parse_root_into_graph(graph: &mut Graph, source: &str) -> Result<{root_handle_name}, String> {{
+    parse_root_into_graph_with_file_id(graph, source, None)
+}}
+
+pub fn parse_{root_fn_suffix}_into_graph_rich<'src>(
+    graph: &mut Graph,
+    source: &'src str,
+    file_id: Option<u32>,
+) -> Result<{root_handle_name}, Vec<Rich<'src, char>>> {{
+    parse_root_into_graph_rich(graph, source, file_id)
+}}
+
+pub fn parse_{root_fn_suffix}_into_graph_with_file_id(
+    graph: &mut Graph,
+    source: &str,
+    file_id: Option<u32>,
+) -> Result<{root_handle_name}, String> {{
+    parse_root_into_graph_with_file_id(graph, source, file_id)
+}}
+
+pub fn parse_{root_fn_suffix}_into_graph(
+    graph: &mut Graph,
+    source: &str,
+) -> Result<{root_handle_name}, String> {{
+    parse_root_into_graph(graph, source)
+}}
 "#,
         token_rows = token_rows,
         parser_defs = parser_defs,
         root_name = root_name,
+        root_handle_name = root_handle_name,
         root_parser_name = root_parser_name,
         root_fn_suffix = root_fn_suffix,
     ))

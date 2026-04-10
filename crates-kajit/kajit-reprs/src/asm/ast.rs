@@ -5,6 +5,49 @@ pub trait EntityNode {}
 
 pub trait SlotNode {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct ProgramHandle(pub u32);
+
+impl ProgramHandle {
+    pub const fn new(index: u32) -> Self {
+        Self(index)
+    }
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Graph {
+    roots: Vec<Program>,
+}
+
+impl Graph {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn insert_root(&mut self, root: Program) -> ProgramHandle {
+        let handle = ProgramHandle::new(self.roots.len() as u32);
+        self.roots.push(root);
+        handle
+    }
+    pub fn root(&self, handle: ProgramHandle) -> Option<&Program> {
+        self.roots.get(handle.index())
+    }
+    pub fn root_mut(&mut self, handle: ProgramHandle) -> Option<&mut Program> {
+        self.roots.get_mut(handle.index())
+    }
+    pub fn roots(&self) -> &[Program] {
+        &self.roots
+    }
+    pub fn len(&self) -> usize {
+        self.roots.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.roots.is_empty()
+    }
+}
+
 /// Preserved doc-comment lines collected from leading `///` comments.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DocBlock(pub Vec<String>);

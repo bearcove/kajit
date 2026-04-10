@@ -5,6 +5,49 @@ pub trait EntityNode {}
 
 pub trait SlotNode {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct ModuleHandle(pub u32);
+
+impl ModuleHandle {
+    pub const fn new(index: u32) -> Self {
+        Self(index)
+    }
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Graph {
+    roots: Vec<Module>,
+}
+
+impl Graph {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn insert_root(&mut self, root: Module) -> ModuleHandle {
+        let handle = ModuleHandle::new(self.roots.len() as u32);
+        self.roots.push(root);
+        handle
+    }
+    pub fn root(&self, handle: ModuleHandle) -> Option<&Module> {
+        self.roots.get(handle.index())
+    }
+    pub fn root_mut(&mut self, handle: ModuleHandle) -> Option<&mut Module> {
+        self.roots.get_mut(handle.index())
+    }
+    pub fn roots(&self) -> &[Module] {
+        &self.roots
+    }
+    pub fn len(&self) -> usize {
+        self.roots.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.roots.is_empty()
+    }
+}
+
 /// Preserved doc-comment lines collected from leading `///` comments.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DocBlock(pub Vec<String>);
@@ -60,12 +103,12 @@ pub struct Literal {
 /// The kind of local binding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LocalKind {
-    /// A compiler-introduced temporary.
-    #[default]
-    Temp,
-
     /// A named source-level local.
+    #[default]
     Local,
+
+    /// A compiler-introduced temporary.
+    Temp,
 }
 
 /// A named type reference in HIR.
@@ -85,12 +128,12 @@ impl Type {
 /// The kind of type definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TypeDefKind {
-    /// A type alias definition.
-    #[default]
-    Alias,
-
     /// An enum type definition.
+    #[default]
     Enum,
+
+    /// A type alias definition.
+    Alias,
 
     /// A struct type definition.
     Struct,

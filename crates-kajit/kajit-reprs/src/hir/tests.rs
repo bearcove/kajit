@@ -13,6 +13,15 @@ fn parse_module_smoke() {
     ));
 }
 #[test]
+fn parse_module_into_graph_smoke() {
+    let mut graph = Graph::new();
+    let handle =
+        parse_root_into_graph(&mut graph, "module { fn main() -> Value { return } }").unwrap();
+    let module = graph.root(handle).unwrap();
+    assert_eq!(module.functions.len(), 1);
+    assert_eq!(module.functions[0].name.text, "main");
+}
+#[test]
 fn format_module_smoke() {
     let text = "module { fn main() -> Value { return } }";
     let module = parse_root_text(text).unwrap();

@@ -5,6 +5,49 @@ pub trait EntityNode {}
 
 pub trait SlotNode {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct ProgramHandle(pub u32);
+
+impl ProgramHandle {
+    pub const fn new(index: u32) -> Self {
+        Self(index)
+    }
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Graph {
+    roots: Vec<Program>,
+}
+
+impl Graph {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn insert_root(&mut self, root: Program) -> ProgramHandle {
+        let handle = ProgramHandle::new(self.roots.len() as u32);
+        self.roots.push(root);
+        handle
+    }
+    pub fn root(&self, handle: ProgramHandle) -> Option<&Program> {
+        self.roots.get(handle.index())
+    }
+    pub fn root_mut(&mut self, handle: ProgramHandle) -> Option<&mut Program> {
+        self.roots.get_mut(handle.index())
+    }
+    pub fn roots(&self) -> &[Program] {
+        &self.roots
+    }
+    pub fn len(&self) -> usize {
+        self.roots.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.roots.is_empty()
+    }
+}
+
 /// Preserved doc-comment lines collected from leading `///` comments.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DocBlock(pub Vec<String>);
@@ -14,30 +57,12 @@ pub use kajit_types::{Prov, Span};
 /// The binary-op family used by the pilot text format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BinOpKind {
-    /// Integer addition.
+    /// Inequality comparison.
     #[default]
-    Add,
-
-    /// Bitwise AND.
-    And,
-
-    /// Logical right shift.
-    Shr,
-
-    /// Greater-than-or-equal comparison.
-    CmpGe,
-
-    /// Less-than comparison.
-    CmpLt,
-
-    /// Greater-than comparison.
-    CmpGt,
+    CmpNe,
 
     /// Bitwise OR.
     Or,
-
-    /// Arithmetic right shift.
-    Sar,
 
     /// Logical left shift.
     Shl,
@@ -45,20 +70,38 @@ pub enum BinOpKind {
     /// Integer multiplication.
     Mul,
 
-    /// Integer subtraction.
-    Sub,
+    /// Less-than-or-equal comparison.
+    CmpLe,
+
+    /// Logical right shift.
+    Shr,
+
+    /// Greater-than-or-equal comparison.
+    CmpGe,
+
+    /// Bitwise AND.
+    And,
+
+    /// Greater-than comparison.
+    CmpGt,
+
+    /// Less-than comparison.
+    CmpLt,
 
     /// Equality comparison.
     CmpEq,
 
-    /// Less-than-or-equal comparison.
-    CmpLe,
-
-    /// Inequality comparison.
-    CmpNe,
+    /// Integer subtraction.
+    Sub,
 
     /// Bitwise XOR.
     Xor,
+
+    /// Arithmetic right shift.
+    Sar,
+
+    /// Integer addition.
+    Add,
 }
 
 /// An embedded data blob identifier.
@@ -164,12 +207,12 @@ pub struct Nat {
 /// Required register class for an operand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RegClass {
-    /// General-purpose registers.
-    #[default]
-    Gpr,
-
     /// SIMD/vector registers.
+    #[default]
     Simd,
+
+    /// General-purpose registers.
+    Gpr,
 }
 
 /// A stack slot identifier.
@@ -241,18 +284,18 @@ impl VReg {
 /// A scalar width used by loads, stores, and sign extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Width {
-    /// Eight bytes.
+    /// One byte.
     #[default]
-    W8,
-
-    /// Two bytes.
-    W2,
+    W1,
 
     /// Four bytes.
     W4,
 
-    /// One byte.
-    W1,
+    /// Two bytes.
+    W2,
+
+    /// Eight bytes.
+    W8,
 }
 
 /// A live basic block.
