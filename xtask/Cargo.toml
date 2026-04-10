@@ -10,11 +10,9 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [features]
 default = []
-debug-cfg-mir = ["dep:kajit", "dep:kajit-mir"]
+debug-cfg-mir = []
 
 [dependencies]
-kajit = { path = "../crates-kajit/kajit", optional = true }
-kajit-mir = { path = "../crates-kajit/kajit-mir", optional = true }
 kajit-reprs = { path = "../crates-kajit/kajit-reprs" }
 prettyplease = "0.2"
 proc-macro2 = "1"

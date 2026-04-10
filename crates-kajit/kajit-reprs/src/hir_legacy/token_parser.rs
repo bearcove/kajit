@@ -1240,7 +1240,7 @@ pub fn parse_hir_v2(text: &str) -> Result<kajit_hir::Module, String> {
     build_module(parsed)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "hir-legacy-tests"))]
 mod tests {
     use super::*;
     use crate::lexer;

@@ -3,6 +3,7 @@ use std::ptr;
 use crate::common::EmissionState;
 use kajit_types::{
     SourceLocation, SourceMap, SourceMapEntry, SourceMapError, TraceEntry, TraceError,
+    decode_source_map_le,
 };
 
 #[cfg(target_os = "macos")]
@@ -354,6 +355,14 @@ impl Emitter {
         } else {
             Err(EmitError::LabelOutOfBounds { label })
         }
+    }
+
+    #[cfg(test)]
+    fn force_label_offset_for_test(&mut self, label: LabelId, offset: u32) {
+        *self
+            .core
+            .label_slot_mut(label.0)
+            .expect("label should exist in test") = Some(offset);
     }
 
     pub fn emit_je_label(&mut self, label: LabelId) -> Result<(), EmitError> {
@@ -1529,20 +1538,20 @@ mod tests {
         let done = emitter.new_label();
 
         emitter.bind_label(start).unwrap();
-        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
+        emitter.set_source_location(SourceLocation {
             file: 3,
             line: 10,
             column: 1,
         });
         emitter.emit_je_label(done).unwrap();
-        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
+        emitter.set_source_location(SourceLocation {
             file: 3,
             line: 11,
             column: 1,
         });
         emitter.emit_call_label(start).unwrap();
         emitter.bind_label(done).unwrap();
-        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
+        emitter.set_source_location(SourceLocation {
             file: 3,
             line: 12,
             column: 1,
@@ -1553,25 +1562,25 @@ mod tests {
         assert_eq!(
             finalized.source_map,
             vec![
-                kajit_reprs::asm::SourceMapEntry {
+                SourceMapEntry {
                     offset: 0,
-                    location: kajit_reprs::asm::SourceLocation {
+                    location: SourceLocation {
                         file: 3,
                         line: 10,
                         column: 1,
                     },
                 },
-                kajit_reprs::asm::SourceMapEntry {
+                SourceMapEntry {
                     offset: 6,
-                    location: kajit_reprs::asm::SourceLocation {
+                    location: SourceLocation {
                         file: 3,
                         line: 11,
                         column: 1,
                     },
                 },
-                kajit_reprs::asm::SourceMapEntry {
+                SourceMapEntry {
                     offset: 11,
-                    location: kajit_reprs::asm::SourceLocation {
+                    location: SourceLocation {
                         file: 3,
                         line: 12,
                         column: 1,
@@ -1596,7 +1605,7 @@ mod tests {
 
         let source_map_encoded = finalized.source_map_le().unwrap();
         assert_eq!(
-            kajit_reprs::asm::decode_source_map_le(&source_map_encoded).unwrap(),
+            decode_source_map_le(&source_map_encoded).unwrap(),
             finalized.source_map
         );
     }
@@ -1615,7 +1624,7 @@ mod tests {
         let mut emitter = Emitter::new();
         let far = emitter.new_label();
         emitter.emit_call_label(far).unwrap();
-        emitter.labels[far.0 as usize] = Some((i32::MAX as u32).saturating_add(1024));
+        emitter.force_label_offset_for_test(far, (i32::MAX as u32).saturating_add(1024));
         let err = emitter.finalize().unwrap_err();
         assert!(matches!(err, EmitError::RelativeOutOfRange { .. }));
     }
@@ -1659,20 +1668,20 @@ mod tests {
         let start = emitter.new_label();
         let target = emitter.new_label();
         emitter.bind_label(start).unwrap();
-        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
+        emitter.set_source_location(SourceLocation {
             file: 4,
             line: 1,
             column: 1,
         });
         emitter.emit_jmp_label(target).unwrap();
-        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
+        emitter.set_source_location(SourceLocation {
             file: 4,
             line: 2,
             column: 1,
         });
         emitter.emit_bytes(&[0x90, 0x90]); // 2 nops
         emitter.bind_label(target).unwrap();
-        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
+        emitter.set_source_location(SourceLocation {
             file: 4,
             line: 3,
             column: 1,

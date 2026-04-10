@@ -57,15 +57,21 @@ pub use kajit_types::{Prov, Span};
 /// The binary-op family used by the pilot text format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BinOpKind {
-    /// Inequality comparison.
+    /// Greater-than-or-equal comparison.
     #[default]
+    CmpGe,
+
+    /// Integer subtraction.
+    Sub,
+
+    /// Bitwise AND.
+    And,
+
+    /// Less-than comparison.
+    CmpLt,
+
+    /// Inequality comparison.
     CmpNe,
-
-    /// Bitwise OR.
-    Or,
-
-    /// Logical left shift.
-    Shl,
 
     /// Integer multiplication.
     Mul,
@@ -73,35 +79,29 @@ pub enum BinOpKind {
     /// Less-than-or-equal comparison.
     CmpLe,
 
-    /// Logical right shift.
-    Shr,
-
-    /// Greater-than-or-equal comparison.
-    CmpGe,
-
-    /// Bitwise AND.
-    And,
-
     /// Greater-than comparison.
     CmpGt,
-
-    /// Less-than comparison.
-    CmpLt,
-
-    /// Equality comparison.
-    CmpEq,
-
-    /// Integer subtraction.
-    Sub,
-
-    /// Bitwise XOR.
-    Xor,
 
     /// Arithmetic right shift.
     Sar,
 
+    /// Logical left shift.
+    Shl,
+
+    /// Bitwise OR.
+    Or,
+
     /// Integer addition.
     Add,
+
+    /// Logical right shift.
+    Shr,
+
+    /// Equality comparison.
+    CmpEq,
+
+    /// Bitwise XOR.
+    Xor,
 }
 
 /// An embedded data blob identifier.
@@ -133,15 +133,15 @@ impl BlockId {
 /// Named clobber groups printed after `!`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ClobberKind {
-    /// Caller-saved GPRs are clobbered.
+    /// Both caller-saved GPR and SIMD registers are clobbered.
     #[default]
+    Both,
+
+    /// Caller-saved GPRs are clobbered.
     Gpr,
 
     /// Caller-saved SIMD registers are clobbered.
     Simd,
-
-    /// Both caller-saved GPR and SIMD registers are clobbered.
-    Both,
 }
 
 /// A control-flow edge identifier.
@@ -207,12 +207,12 @@ pub struct Nat {
 /// Required register class for an operand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RegClass {
-    /// SIMD/vector registers.
-    #[default]
-    Simd,
-
     /// General-purpose registers.
+    #[default]
     Gpr,
+
+    /// SIMD/vector registers.
+    Simd,
 }
 
 /// A stack slot identifier.
@@ -291,11 +291,11 @@ pub enum Width {
     /// Four bytes.
     W4,
 
-    /// Two bytes.
-    W2,
-
     /// Eight bytes.
     W8,
+
+    /// Two bytes.
+    W2,
 }
 
 /// A live basic block.

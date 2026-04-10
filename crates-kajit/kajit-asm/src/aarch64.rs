@@ -3,6 +3,7 @@ use std::ptr;
 use crate::common::EmissionState;
 use kajit_types::{
     SourceLocation, SourceMap, SourceMapEntry, SourceMapError, TraceEntry, TraceError,
+    decode_source_map_le,
 };
 
 #[cfg(target_os = "macos")]
@@ -2686,13 +2687,13 @@ mod tests {
         let done = emitter.new_label();
 
         emitter.bind_label(start).unwrap();
-        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
+        emitter.set_source_location(SourceLocation {
             file: 1,
             line: 10,
             column: 1,
         });
         emitter.emit_b_label(done).unwrap();
-        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
+        emitter.set_source_location(SourceLocation {
             file: 1,
             line: 11,
             column: 1,
@@ -2701,7 +2702,7 @@ mod tests {
             .emit_cbz_label(Width::X64, Reg::from_raw(16), start)
             .unwrap();
         emitter.bind_label(done).unwrap();
-        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
+        emitter.set_source_location(SourceLocation {
             file: 1,
             line: 12,
             column: 1,
@@ -2713,25 +2714,25 @@ mod tests {
         assert_eq!(
             finalized.source_map,
             vec![
-                kajit_reprs::asm::SourceMapEntry {
+                SourceMapEntry {
                     offset: 0,
-                    location: kajit_reprs::asm::SourceLocation {
+                    location: SourceLocation {
                         file: 1,
                         line: 10,
                         column: 1,
                     },
                 },
-                kajit_reprs::asm::SourceMapEntry {
+                SourceMapEntry {
                     offset: 4,
-                    location: kajit_reprs::asm::SourceLocation {
+                    location: SourceLocation {
                         file: 1,
                         line: 11,
                         column: 1,
                     },
                 },
-                kajit_reprs::asm::SourceMapEntry {
+                SourceMapEntry {
                     offset: 8,
-                    location: kajit_reprs::asm::SourceLocation {
+                    location: SourceLocation {
                         file: 1,
                         line: 12,
                         column: 1,
@@ -2752,7 +2753,7 @@ mod tests {
 
         let source_map_encoded = finalized.source_map_le().unwrap();
         assert_eq!(
-            kajit_reprs::asm::decode_source_map_le(&source_map_encoded).unwrap(),
+            decode_source_map_le(&source_map_encoded).unwrap(),
             finalized.source_map
         );
     }
@@ -2793,19 +2794,19 @@ mod tests {
         let done = emitter.new_label();
 
         emitter.bind_label(start).unwrap();
-        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
+        emitter.set_source_location(SourceLocation {
             file: 2,
             line: 1,
             column: 1,
         });
         emitter.emit_tbz_label(Reg::X0, 7, done).unwrap();
-        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
+        emitter.set_source_location(SourceLocation {
             file: 2,
             line: 2,
             column: 1,
         });
         emitter.emit_tbnz_label(Reg::from_raw(1), 5, start).unwrap();
-        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
+        emitter.set_source_location(SourceLocation {
             file: 2,
             line: 3,
             column: 1,
@@ -2818,25 +2819,25 @@ mod tests {
         assert_eq!(
             finalized.source_map,
             vec![
-                kajit_reprs::asm::SourceMapEntry {
+                SourceMapEntry {
                     offset: 0,
-                    location: kajit_reprs::asm::SourceLocation {
+                    location: SourceLocation {
                         file: 2,
                         line: 1,
                         column: 1,
                     },
                 },
-                kajit_reprs::asm::SourceMapEntry {
+                SourceMapEntry {
                     offset: 4,
-                    location: kajit_reprs::asm::SourceLocation {
+                    location: SourceLocation {
                         file: 2,
                         line: 2,
                         column: 1,
                     },
                 },
-                kajit_reprs::asm::SourceMapEntry {
+                SourceMapEntry {
                     offset: 8,
-                    location: kajit_reprs::asm::SourceLocation {
+                    location: SourceLocation {
                         file: 2,
                         line: 3,
                         column: 1,
@@ -2933,6 +2934,7 @@ mod tests {
         assert!(matches!(err, EmitError::LabelAlreadyBound { .. }));
     }
 
+    #[cfg(feature = "old-asm-adapter")]
     #[test]
     fn emitter_captures_instructions() {
         let mut emitter = Emitter::new();

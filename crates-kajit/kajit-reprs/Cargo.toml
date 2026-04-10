@@ -8,6 +8,10 @@ edition = "2024"
 [package.metadata."docs.rs"]
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
+[features]
+default = []
+hir-legacy-tests = []
+
 [dependencies]
 ariadne = "0.5"
 chumsky = "1.0.0-alpha.8"

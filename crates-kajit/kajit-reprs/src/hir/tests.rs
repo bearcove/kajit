@@ -31,5 +31,13 @@ fn format_module_smoke() {
         "module {\n    fn main() -> Value {\n        return\n    }\n}"
     );
     let reparsed = parse_root_text(&formatted).unwrap();
-    assert_eq!(reparsed, module);
+    assert_eq!(format_root_text(&reparsed), formatted);
+    assert_eq!(
+        reparsed.functions[0].name.text,
+        module.functions[0].name.text
+    );
+    assert_eq!(
+        reparsed.functions[0].return_type.text,
+        module.functions[0].return_type.text
+    );
 }

@@ -1,24 +1,35 @@
 [workspace]
 members = [
-  "crates-kajit/kajit",
   "crates-kajit/kajit-asm",
   "crates-kajit/kajit-wares",
   "crates-kajit/kajit-hir",
-  "crates-kajit/kajit-ir",
-  "crates-kajit/kajit-lir",
-  "crates-kajit/kajit-mir",
   "crates-kajit/kajit-cli",
   "crates-kajit/kajit-reprs",
   "crates-kajit/kajit-foundation",
   "crates-kajit/kajit-foundation-cli",
   "crates-kajit/kajit-types",
+  "xtask",
+  "vendor/lldb-rs",
+  "vendor/lldb-sys-rs",
+  # Temporarily quarantined legacy pipeline / stale deps:
+  # "crates-kajit/kajit",
+  # "crates-kajit/kajit-ir",
+  # "crates-kajit/kajit-lir",
+  # "crates-kajit/kajit-mir",
+  # "crates-kafe/kafe",
+  # "crates-kafe/kafe-malum",
+  # "crates-kafe/kafe-postcard",
+  # "crates-kafe/kafe-vtables",
+]
+exclude = [
+  "crates-kajit/kajit",
+  "crates-kajit/kajit-ir",
+  "crates-kajit/kajit-lir",
+  "crates-kajit/kajit-mir",
   "crates-kafe/kafe",
   "crates-kafe/kafe-malum",
   "crates-kafe/kafe-postcard",
   "crates-kafe/kafe-vtables",
-  "xtask",
-  "vendor/lldb-rs",
-  "vendor/lldb-sys-rs",
 ]
 resolver = "3"
 

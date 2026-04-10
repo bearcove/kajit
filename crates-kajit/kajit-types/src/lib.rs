@@ -80,6 +80,27 @@ pub fn encode_source_map_le(source_map: &[SourceMapEntry]) -> Result<Vec<u8>, So
     Ok(out)
 }
 
+pub fn decode_source_map_le(bytes: &[u8]) -> Result<SourceMap, SourceMapError> {
+    if !bytes.len().is_multiple_of(14) {
+        return Err(SourceMapError::TruncatedBinary { len: bytes.len() });
+    }
+
+    let mut out = Vec::with_capacity(bytes.len() / 14);
+    for chunk in bytes.chunks_exact(14) {
+        let offset = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        let file = u16::from_le_bytes([chunk[4], chunk[5]]);
+        let line = u32::from_le_bytes([chunk[6], chunk[7], chunk[8], chunk[9]]);
+        let column = u32::from_le_bytes([chunk[10], chunk[11], chunk[12], chunk[13]]);
+        out.push(SourceMapEntry {
+            offset,
+            location: SourceLocation { file, line, column },
+        });
+    }
+
+    validate_source_map(&out)?;
+    Ok(out)
+}
+
 pub fn build_trace(
     code: &[u8],
     source_map: &[SourceMapEntry],

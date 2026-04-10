@@ -132,11 +132,11 @@ pub enum TypeDefKind {
     #[default]
     Enum,
 
-    /// A type alias definition.
-    Alias,
-
     /// A struct type definition.
     Struct,
+
+    /// A type alias definition.
+    Alias,
 }
 
 /// A sequence of statements with shared provenance.
