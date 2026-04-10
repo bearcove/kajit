@@ -37,6 +37,10 @@ pub(crate) enum SyntaxRule {
 pub(crate) enum SyntaxTypeUse {
     Optional(Box<SyntaxTypeUse>),
     Seq(Box<SyntaxTypeUse>),
+    Arena {
+        item: Box<SyntaxTypeUse>,
+        key: Option<String>,
+    },
     Pool {
         item: Box<SyntaxTypeUse>,
         key: Option<String>,
@@ -143,7 +147,10 @@ fn normalize_support_decl(decl: &SupportDecl) -> Result<NormalizedSupportDecl, S
         )?)),
         SupportDecl::Enum(variants) if !variants.variants.is_empty() => {
             let mut out = Vec::new();
-            for (name, decl) in &variants.variants {
+            let mut variant_names = variants.variants.keys().collect::<Vec<_>>();
+            variant_names.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+            for name in variant_names {
+                let decl = &variants.variants[name];
                 match decl {
                     SupportVariantDecl::Unit => {
                         out.push(DocumentedValue {
@@ -166,6 +173,21 @@ pub(crate) fn normalize_type_use(ty: &TypeUse) -> Result<SyntaxTypeUse, String> 
         ))),
         TypeUse::Seq(items) if items.len() == 1 => {
             Ok(SyntaxTypeUse::Seq(Box::new(normalize_type_use(&items[0])?)))
+        }
+        TypeUse::Arena(items) if (1..=2).contains(&items.len()) => {
+            let item = Box::new(normalize_type_use(&items[0])?);
+            let key = match items.get(1) {
+                None => None,
+                Some(TypeUse::Key(key_items)) if key_items.len() == 1 => match &key_items[0] {
+                    TypeUse::Ref { name: Some(name) } => Some(name.clone()),
+                    _ => return Err("arena key must reference a declared id type".to_owned()),
+                },
+                Some(TypeUse::Key(_)) => {
+                    return Err("arena key must have exactly one item".to_owned());
+                }
+                Some(_) => return Err("arena metadata must be @key(...)".to_owned()),
+            };
+            Ok(SyntaxTypeUse::Arena { item, key })
         }
         TypeUse::Pool(items) if (1..=2).contains(&items.len()) => {
             let item = Box::new(normalize_type_use(&items[0])?);
@@ -197,9 +219,12 @@ pub(crate) fn normalize_type_use(ty: &TypeUse) -> Result<SyntaxTypeUse, String> 
         TypeUse::Ref { name: None } => Err("type reference missing tag name".to_owned()),
         TypeUse::Optional(_) => Err("optional type must have exactly one item".to_owned()),
         TypeUse::Seq(_) => Err("seq type must have exactly one item".to_owned()),
+        TypeUse::Arena(_) => Err("arena type must have one item and optional @key(...)".to_owned()),
         TypeUse::Pool(_) => Err("pool type must have one item and optional @key(...)".to_owned()),
         TypeUse::Order(_) => Err("order type must have exactly one item".to_owned()),
-        TypeUse::Key(_) => Err("@key(...) is only valid inside @pool(...)".to_owned()),
+        TypeUse::Key(_) => {
+            Err("@key(...) is only valid inside @arena(...) or @pool(...)".to_owned())
+        }
         TypeUse::RefTo(_) => Err("@ref_to(...) must have id type and target entity".to_owned()),
     }
 }
@@ -421,6 +446,7 @@ pub(crate) fn render_default_value(ty: &SyntaxTypeUse, provenance_tag: &str) -> 
     match ty {
         SyntaxTypeUse::Optional(_) => Some("None".to_owned()),
         SyntaxTypeUse::Seq(_) => Some("Vec::new()".to_owned()),
+        SyntaxTypeUse::Arena { .. } => Some("super::super::Arena::default()".to_owned()),
         SyntaxTypeUse::Pool { .. } => Some("super::super::Pool::default()".to_owned()),
         SyntaxTypeUse::Order(_) => Some("super::super::Order::default()".to_owned()),
         SyntaxTypeUse::RefTo { .. } => None,

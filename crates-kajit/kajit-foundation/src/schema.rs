@@ -118,6 +118,7 @@ pub(crate) struct RuleNamed(pub(crate) (String, Box<RuleExpr>));
 pub(crate) enum TypeUse {
     Optional(Vec<TypeUse>),
     Seq(Vec<TypeUse>),
+    Arena(Vec<TypeUse>),
     Pool(Vec<TypeUse>),
     Order(Vec<TypeUse>),
     Key(Vec<TypeUse>),

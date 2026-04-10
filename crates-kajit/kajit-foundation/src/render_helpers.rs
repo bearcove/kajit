@@ -62,6 +62,12 @@ pub(crate) fn collect_syntax_type_tags(ty: &SyntaxTypeUse, out: &mut Vec<String>
         | SyntaxTypeUse::Order(inner) => {
             collect_syntax_type_tags(inner, out);
         }
+        SyntaxTypeUse::Arena { item: inner, key } => {
+            collect_syntax_type_tags(inner, out);
+            if let Some(key) = key {
+                out.push(key.clone());
+            }
+        }
         SyntaxTypeUse::Pool { item: inner, key } => {
             collect_syntax_type_tags(inner, out);
             if let Some(key) = key {
@@ -89,6 +95,12 @@ pub(crate) fn render_syntax_type_use(
         }
         SyntaxTypeUse::Seq(inner) => {
             format!("Vec<{}>", render_syntax_type_use(inner, node_names, false))
+        }
+        SyntaxTypeUse::Arena { item: inner, .. } => {
+            format!(
+                "super::super::Arena<{}>",
+                render_syntax_type_use(inner, node_names, false)
+            )
         }
         SyntaxTypeUse::Pool { item: inner, .. } => {
             format!(
@@ -181,6 +193,10 @@ pub(crate) fn render_type_use_kind(ty: &SyntaxTypeUse) -> String {
     match ty {
         SyntaxTypeUse::Optional(inner) => format!("optional<{}>", render_type_use_kind(inner)),
         SyntaxTypeUse::Seq(inner) => format!("seq<{}>", render_type_use_kind(inner)),
+        SyntaxTypeUse::Arena { item: inner, key } => match key {
+            Some(key) => format!("arena<{} key={key}>", render_type_use_kind(inner)),
+            None => format!("arena<{}>", render_type_use_kind(inner)),
+        },
         SyntaxTypeUse::Pool { item: inner, key } => match key {
             Some(key) => format!("pool<{} key={key}>", render_type_use_kind(inner)),
             None => format!("pool<{}>", render_type_use_kind(inner)),
@@ -320,6 +336,22 @@ pub(crate) fn render_visit_calls(
             }
         }
         SyntaxTypeUse::Seq(inner) | SyntaxTypeUse::Order(inner) => {
+            let inner = render_visit_calls(inner, "value", node_names, mutable, true);
+            if inner.is_empty() {
+                Vec::new()
+            } else {
+                let iter = if mutable { "iter_mut()" } else { "iter()" };
+                vec![format!(
+                    "for value in {expr}.{iter} {{\n{}\n}}",
+                    inner
+                        .into_iter()
+                        .map(|line| format!("    {line}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )]
+            }
+        }
+        SyntaxTypeUse::Arena { item: inner, .. } => {
             let inner = render_visit_calls(inner, "value", node_names, mutable, true);
             if inner.is_empty() {
                 Vec::new()

@@ -659,7 +659,9 @@ fn parse_root_value_rich(
     .then(
         ((block_parser.clone()).repeated().collect::<Vec<_>>()).map(super::super::Pool::from),
     ))
-    .then(((inst_parser.clone()).repeated().collect::<Vec<_>>()).map(super::super::Pool::from)))
+    .then(
+        ((inst_parser.clone()).repeated().collect::<Vec<_>>()).map(super::super::Arena::from),
+    ))
     .then(
         ((terminator_parser.clone()).repeated().collect::<Vec<_>>()).map(super::super::Pool::from),
     ))

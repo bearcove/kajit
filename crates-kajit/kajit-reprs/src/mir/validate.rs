@@ -41,7 +41,7 @@ fn validate_block(value: &Block, ctx: &mut ValidationContext, errors: &mut Vec<S
     for value in value.insts.iter() {
         if !ctx.inst_ids.iter().rev().any(|ids| ids.contains(&value)) {
             errors.push(format!(
-                "Block.insts references {:?} but no live Inst pool in scope contains it",
+                "Block.insts references {:?} but no live Inst collection in scope contains it",
                 value
             ));
         }
@@ -50,7 +50,7 @@ fn validate_block(value: &Block, ctx: &mut ValidationContext, errors: &mut Vec<S
     for value in value.preds.iter() {
         if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(&value)) {
             errors.push(format!(
-                "Block.preds references {:?} but no live Edge pool in scope contains it",
+                "Block.preds references {:?} but no live Edge collection in scope contains it",
                 value
             ));
         }
@@ -58,7 +58,7 @@ fn validate_block(value: &Block, ctx: &mut ValidationContext, errors: &mut Vec<S
     for value in value.succs.iter() {
         if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(&value)) {
             errors.push(format!(
-                "Block.succs references {:?} but no live Edge pool in scope contains it",
+                "Block.succs references {:?} but no live Edge collection in scope contains it",
                 value
             ));
         }
@@ -70,7 +70,7 @@ fn validate_block(value: &Block, ctx: &mut ValidationContext, errors: &mut Vec<S
         .any(|ids| ids.contains(&value.term))
     {
         errors.push(format!(
-            "Block.term references {:?} but no live Terminator pool in scope contains it",
+            "Block.term references {:?} but no live Terminator collection in scope contains it",
             value.term
         ));
     }
@@ -117,7 +117,7 @@ fn validate_edge(value: &Edge, ctx: &mut ValidationContext, errors: &mut Vec<Str
         .any(|ids| ids.contains(&value.from))
     {
         errors.push(format!(
-            "Edge.from references {:?} but no live Block pool in scope contains it",
+            "Edge.from references {:?} but no live Block collection in scope contains it",
             value.from
         ));
     }
@@ -128,7 +128,7 @@ fn validate_edge(value: &Edge, ctx: &mut ValidationContext, errors: &mut Vec<Str
         .any(|ids| ids.contains(&value.to))
     {
         errors.push(format!(
-            "Edge.to references {:?} but no live Block pool in scope contains it",
+            "Edge.to references {:?} but no live Block collection in scope contains it",
             value.to
         ));
     }
@@ -186,7 +186,7 @@ fn validate_function(value: &Function, ctx: &mut ValidationContext, errors: &mut
         .any(|ids| ids.contains(&value.entry))
     {
         errors.push(format!(
-            "Function.entry references {:?} but no live Block pool in scope contains it",
+            "Function.entry references {:?} but no live Block collection in scope contains it",
             value.entry
         ));
     }
@@ -302,7 +302,7 @@ fn validate_terminator(value: &Terminator, ctx: &mut ValidationContext, errors: 
                 errors
                     .push(
                         format!(
-                            "Terminator.Branch.edge references {:?} but no live Edge pool in scope contains it",
+                            "Terminator.Branch.edge references {:?} but no live Edge collection in scope contains it",
                             edge
                         ),
                     );
@@ -325,7 +325,7 @@ fn validate_terminator(value: &Terminator, ctx: &mut ValidationContext, errors: 
                 errors
                     .push(
                         format!(
-                            "Terminator.BranchIf.fallthrough references {:?} but no live Edge pool in scope contains it",
+                            "Terminator.BranchIf.fallthrough references {:?} but no live Edge collection in scope contains it",
                             fallthrough
                         ),
                     );
@@ -334,7 +334,7 @@ fn validate_terminator(value: &Terminator, ctx: &mut ValidationContext, errors: 
                 errors
                     .push(
                         format!(
-                            "Terminator.BranchIf.taken references {:?} but no live Edge pool in scope contains it",
+                            "Terminator.BranchIf.taken references {:?} but no live Edge collection in scope contains it",
                             taken
                         ),
                     );
@@ -357,7 +357,7 @@ fn validate_terminator(value: &Terminator, ctx: &mut ValidationContext, errors: 
                 errors
                     .push(
                         format!(
-                            "Terminator.BranchIfZero.fallthrough references {:?} but no live Edge pool in scope contains it",
+                            "Terminator.BranchIfZero.fallthrough references {:?} but no live Edge collection in scope contains it",
                             fallthrough
                         ),
                     );
@@ -366,7 +366,7 @@ fn validate_terminator(value: &Terminator, ctx: &mut ValidationContext, errors: 
                 errors
                     .push(
                         format!(
-                            "Terminator.BranchIfZero.taken references {:?} but no live Edge pool in scope contains it",
+                            "Terminator.BranchIfZero.taken references {:?} but no live Edge collection in scope contains it",
                             taken
                         ),
                     );
@@ -384,7 +384,7 @@ fn validate_terminator(value: &Terminator, ctx: &mut ValidationContext, errors: 
                 errors
                     .push(
                         format!(
-                            "Terminator.JumpTable.default references {:?} but no live Edge pool in scope contains it",
+                            "Terminator.JumpTable.default references {:?} but no live Edge collection in scope contains it",
                             default
                         ),
                     );
@@ -394,7 +394,7 @@ fn validate_terminator(value: &Terminator, ctx: &mut ValidationContext, errors: 
                     errors
                         .push(
                             format!(
-                                "Terminator.JumpTable.targets references {:?} but no live Edge pool in scope contains it",
+                                "Terminator.JumpTable.targets references {:?} but no live Edge collection in scope contains it",
                                 value
                             ),
                         );

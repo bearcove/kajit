@@ -127,8 +127,10 @@ fn render_value_parser(
         }
         SyntaxRule::Repeat { item, sep } => {
             let inner_ty = match ty {
-                SyntaxTypeUse::Seq(inner_ty) | SyntaxTypeUse::Order(inner_ty) => inner_ty,
-                SyntaxTypeUse::Pool { item: inner_ty, .. } => inner_ty,
+                SyntaxTypeUse::Seq(inner_ty)
+                | SyntaxTypeUse::Order(inner_ty)
+                | SyntaxTypeUse::Arena { item: inner_ty, .. }
+                | SyntaxTypeUse::Pool { item: inner_ty, .. } => inner_ty,
                 _ => return Err("repeat rule without repeated type".to_owned()),
             };
             let inner = render_value_parser(repr, item, inner_ty, rule_names, node_names, false)?;
@@ -141,6 +143,9 @@ fn render_value_parser(
             };
             Ok(match ty {
                 SyntaxTypeUse::Seq(_) => collected,
+                SyntaxTypeUse::Arena { .. } => {
+                    format!("({collected}).map(super::super::Arena::from)")
+                }
                 SyntaxTypeUse::Pool { .. } => {
                     format!("({collected}).map(super::super::Pool::from)")
                 }

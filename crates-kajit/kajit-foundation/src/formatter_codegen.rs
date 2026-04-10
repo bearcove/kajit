@@ -384,7 +384,9 @@ fn render_value_write_lines(
         SyntaxTypeUse::Optional(_) => {
             Err("optional formatting must be handled by TemplatePart::Optional".to_owned())
         }
-        SyntaxTypeUse::Seq(inner) | SyntaxTypeUse::Order(inner) => {
+        SyntaxTypeUse::Seq(inner)
+        | SyntaxTypeUse::Order(inner)
+        | SyntaxTypeUse::Arena { item: inner, .. } => {
             let sep = joiner.unwrap_or("\n");
             let mut lines = vec![format!(
                 "    for (idx, value) in {expr}.iter().enumerate() {{"
@@ -519,7 +521,9 @@ fn should_indent_value(ty: &SyntaxTypeUse, node_names: &[String]) -> bool {
         SyntaxTypeUse::Seq(inner)
         | SyntaxTypeUse::Order(inner)
         | SyntaxTypeUse::Optional(inner) => should_indent_value(inner, node_names),
-        SyntaxTypeUse::Pool { item: inner, .. } => should_indent_value(inner, node_names),
+        SyntaxTypeUse::Arena { item: inner, .. } | SyntaxTypeUse::Pool { item: inner, .. } => {
+            should_indent_value(inner, node_names)
+        }
         SyntaxTypeUse::RefTo { id, .. } => should_indent_value(id, node_names),
     }
 }

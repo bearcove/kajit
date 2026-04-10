@@ -224,7 +224,11 @@ fn collect_pool_infos(repr: &NormalizedRepr) -> std::collections::BTreeMap<Strin
                 for variant in variants.values() {
                     if let NormalizedNodeDecl::Record { fields, .. } = &variant.value {
                         for ty in fields.values() {
-                            if let SyntaxTypeUse::Pool {
+                            if let SyntaxTypeUse::Arena {
+                                item: inner,
+                                key: Some(key),
+                            }
+                            | SyntaxTypeUse::Pool {
                                 item: inner,
                                 key: Some(key),
                             } = &ty.value
@@ -246,7 +250,11 @@ fn collect_pool_infos(repr: &NormalizedRepr) -> std::collections::BTreeMap<Strin
         };
         if let Some(fields) = fields {
             for ty in fields.values() {
-                if let SyntaxTypeUse::Pool {
+                if let SyntaxTypeUse::Arena {
+                    item: inner,
+                    key: Some(key),
+                }
+                | SyntaxTypeUse::Pool {
                     item: inner,
                     key: Some(key),
                 } = &ty.value
@@ -271,7 +279,7 @@ fn render_validate_ref_check(id_expr: &str, target: &str, owner: &str, field: &s
     format!(
         r#"if !ctx.{ctx_name}.iter().rev().any(|ids| ids.contains(&{id_expr})) {{
     errors.push(format!(
-        "{}.{} references {{:?}} but no live {} pool in scope contains it",
+        "{}.{} references {{:?}} but no live {} collection in scope contains it",
         {id_expr}
     ));
 }}"#,
@@ -298,6 +306,7 @@ fn render_validate_value(
         }
         SyntaxTypeUse::Seq(inner)
         | SyntaxTypeUse::Order(inner)
+        | SyntaxTypeUse::Arena { item: inner, .. }
         | SyntaxTypeUse::Pool { item: inner, .. } => {
             let body =
                 render_validate_value("value", inner, owner, field, node_names, support_structs);
@@ -371,7 +380,11 @@ fn render_record_validate_body(
         } else {
             format!("value.{}", rust_ident(field_name))
         };
-        if let SyntaxTypeUse::Pool {
+        if let SyntaxTypeUse::Arena {
+            item: inner,
+            key: Some(_),
+        }
+        | SyntaxTypeUse::Pool {
             item: inner,
             key: Some(_),
         } = ty
@@ -613,7 +626,11 @@ fn collect_pool_specs(
     ty: &crate::normalize::SyntaxTypeUse,
 ) -> Vec<String> {
     match ty {
-        crate::normalize::SyntaxTypeUse::Pool {
+        crate::normalize::SyntaxTypeUse::Arena {
+            item,
+            key: Some(key),
+        }
+        | crate::normalize::SyntaxTypeUse::Pool {
             item,
             key: Some(key),
         } => {
@@ -649,7 +666,10 @@ fn collect_ref_specs(
         crate::normalize::SyntaxTypeUse::Optional(inner)
         | crate::normalize::SyntaxTypeUse::Seq(inner)
         | crate::normalize::SyntaxTypeUse::Order(inner) => collect_ref_specs(owner, field, inner),
-        crate::normalize::SyntaxTypeUse::Pool { item, .. } => collect_ref_specs(owner, field, item),
+        crate::normalize::SyntaxTypeUse::Arena { item, .. }
+        | crate::normalize::SyntaxTypeUse::Pool { item, .. } => {
+            collect_ref_specs(owner, field, item)
+        }
         crate::normalize::SyntaxTypeUse::RefTo { id, target } => vec![format!(
             "    RefSpec {{ owner: {owner:?}, field: {field:?}, id: {:?}, target: {target:?} }},",
             render_type_use_kind(id)
@@ -1280,6 +1300,62 @@ impl<'a, T> IntoIterator for &'a Pool<T> {{
 }}
 
 impl<'a, T> IntoIterator for &'a mut Pool<T> {{
+    type Item = &'a mut T;
+    type IntoIter = std::slice::IterMut<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {{
+        self.0.iter_mut()
+    }}
+}}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Arena<T>(pub Vec<T>);
+
+impl<T> Arena<T> {{
+    pub fn new() -> Self {{
+        Self(Vec::new())
+    }}
+}}
+
+impl<T> From<Vec<T>> for Arena<T> {{
+    fn from(value: Vec<T>) -> Self {{
+        Self(value)
+    }}
+}}
+
+impl<T> std::ops::Deref for Arena<T> {{
+    type Target = Vec<T>;
+
+    fn deref(&self) -> &Self::Target {{
+        &self.0
+    }}
+}}
+
+impl<T> std::ops::DerefMut for Arena<T> {{
+    fn deref_mut(&mut self) -> &mut Self::Target {{
+        &mut self.0
+    }}
+}}
+
+impl<T> IntoIterator for Arena<T> {{
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {{
+        self.0.into_iter()
+    }}
+}}
+
+impl<'a, T> IntoIterator for &'a Arena<T> {{
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {{
+        self.0.iter()
+    }}
+}}
+
+impl<'a, T> IntoIterator for &'a mut Arena<T> {{
     type Item = &'a mut T;
     type IntoIter = std::slice::IterMut<'a, T>;
 

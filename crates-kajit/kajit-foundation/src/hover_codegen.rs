@@ -48,7 +48,9 @@ fn recurse_calls_for_type(
                 )]
             }
         }
-        SyntaxTypeUse::Seq(inner) | SyntaxTypeUse::Order(inner) => {
+        SyntaxTypeUse::Seq(inner)
+        | SyntaxTypeUse::Order(inner)
+        | SyntaxTypeUse::Arena { item: inner, .. } => {
             let inner_calls = recurse_calls_for_type(inner, "value", node_names, true);
             if inner_calls.is_empty() {
                 Vec::new()
@@ -113,6 +115,7 @@ fn render_hover_line(
         SyntaxTypeUse::Optional(_)
         | SyntaxTypeUse::Seq(_)
         | SyntaxTypeUse::Order(_)
+        | SyntaxTypeUse::Arena { .. }
         | SyntaxTypeUse::Pool { .. } => None,
         SyntaxTypeUse::RefTo { id, .. } => {
             render_hover_line(repr, id, expr, markdown, priority, node_names)

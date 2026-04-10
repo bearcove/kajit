@@ -57,15 +57,24 @@ pub use kajit_types::{Prov, Span};
 /// The binary-op family used by the pilot text format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BinOpKind {
-    /// Greater-than-or-equal comparison.
+    /// Integer addition.
     #[default]
-    CmpGe,
-
-    /// Integer subtraction.
-    Sub,
+    Add,
 
     /// Bitwise AND.
     And,
+
+    /// Equality comparison.
+    CmpEq,
+
+    /// Greater-than-or-equal comparison.
+    CmpGe,
+
+    /// Greater-than comparison.
+    CmpGt,
+
+    /// Less-than-or-equal comparison.
+    CmpLe,
 
     /// Less-than comparison.
     CmpLt,
@@ -76,11 +85,8 @@ pub enum BinOpKind {
     /// Integer multiplication.
     Mul,
 
-    /// Less-than-or-equal comparison.
-    CmpLe,
-
-    /// Greater-than comparison.
-    CmpGt,
+    /// Bitwise OR.
+    Or,
 
     /// Arithmetic right shift.
     Sar,
@@ -88,17 +94,11 @@ pub enum BinOpKind {
     /// Logical left shift.
     Shl,
 
-    /// Bitwise OR.
-    Or,
-
-    /// Integer addition.
-    Add,
-
     /// Logical right shift.
     Shr,
 
-    /// Equality comparison.
-    CmpEq,
+    /// Integer subtraction.
+    Sub,
 
     /// Bitwise XOR.
     Xor,
@@ -288,14 +288,14 @@ pub enum Width {
     #[default]
     W1,
 
+    /// Two bytes.
+    W2,
+
     /// Four bytes.
     W4,
 
     /// Eight bytes.
     W8,
-
-    /// Two bytes.
-    W2,
 }
 
 /// A live basic block.
@@ -447,7 +447,7 @@ pub struct Function {
     pub function_id: FunctionId,
 
     /// Non-terminator instructions in arena order.
-    pub insts: super::super::Pool<Inst>,
+    pub insts: super::super::Arena<Inst>,
 
     /// Lowered lambda identifier.
     pub lambda_id: LambdaId,

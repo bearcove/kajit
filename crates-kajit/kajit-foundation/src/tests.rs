@@ -276,7 +276,7 @@ repr @module{
     nodes {
         Program @node{
             prov @Prov
-            blocks @pool(@Block @key(@BlockId))
+            blocks @arena(@Block @key(@BlockId))
         }
         Block @entity{
             prov @Prov
@@ -307,11 +307,11 @@ repr @module{
         .contents
         .clone();
 
-    assert!(ast.contains("pub blocks: super::super::Pool<Block>,"));
+    assert!(ast.contains("pub blocks: super::super::Arena<Block>,"));
     assert!(ast.contains("pub succs: super::super::Order<BlockId>,"));
     assert!(meta.contains("owner: \"Program\""));
     assert!(meta.contains("field: \"blocks\""));
-    assert!(meta.contains("kind: \"pool<Block key=BlockId>\""));
+    assert!(meta.contains("kind: \"arena<Block key=BlockId>\""));
     assert!(meta.contains("owner: \"Block\""));
     assert!(meta.contains("field: \"succs\""));
     assert!(meta.contains("kind: \"order<ref<BlockId -> Block>>\""));

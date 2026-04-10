@@ -679,7 +679,7 @@ repr @module{
             /// Live blocks in canonical order.
             blocks @pool(@Block @key(@BlockId))
             /// Non-terminator instructions in arena order.
-            insts @pool(@Inst @key(@InstId))
+            insts @arena(@Inst @key(@InstId))
             /// Terminators in arena order.
             terms @pool(@Terminator @key(@TermId))
             /// Control-flow edges in arena order.

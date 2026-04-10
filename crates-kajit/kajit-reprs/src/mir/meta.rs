@@ -515,7 +515,7 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     FieldSpec {
         owner: "Function",
         field: "insts",
-        kind: "pool<Inst key=InstId>",
+        kind: "arena<Inst key=InstId>",
     },
     FieldSpec {
         owner: "Function",

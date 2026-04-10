@@ -134,6 +134,51 @@ impl<'a, T> IntoIterator for &'a mut Pool<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Arena<T>(pub Vec<T>);
+impl<T> Arena<T> {
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+}
+impl<T> From<Vec<T>> for Arena<T> {
+    fn from(value: Vec<T>) -> Self {
+        Self(value)
+    }
+}
+impl<T> std::ops::Deref for Arena<T> {
+    type Target = Vec<T>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl<T> std::ops::DerefMut for Arena<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl<T> IntoIterator for Arena<T> {
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+impl<'a, T> IntoIterator for &'a Arena<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+impl<'a, T> IntoIterator for &'a mut Arena<T> {
+    type Item = &'a mut T;
+    type IntoIter = std::slice::IterMut<'a, T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Order<T>(pub Vec<T>);
 impl<T> Order<T> {
     pub fn new() -> Self {
