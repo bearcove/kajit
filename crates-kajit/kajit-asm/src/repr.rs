@@ -3,12 +3,12 @@ use std::collections::HashMap;
 use kajit_reprs::asm::{A64Item, A64Reg, Imm, LabelName, Program, X64Item, X64Reg};
 use kajit_types::{Prov, SourceLocation};
 
-pub enum FinalizedSchemaPocEmission {
+pub enum FinalizedReprEmission {
     AArch64(crate::aarch64::FinalizedEmission),
     X64(crate::x64::FinalizedEmission),
 }
 
-impl FinalizedSchemaPocEmission {
+impl FinalizedReprEmission {
     pub fn bytes(&self) -> &[u8] {
         match self {
             Self::AArch64(emission) => &emission.code,
@@ -31,16 +31,16 @@ impl FinalizedSchemaPocEmission {
     }
 }
 
-pub fn assemble_schema_poc_program(
+pub fn assemble_repr_program(
     program: &Program,
     source: &str,
-) -> Result<FinalizedSchemaPocEmission, String> {
+) -> Result<FinalizedReprEmission, String> {
     match program {
         Program::AArch64 { items, .. } => {
-            assemble_aarch64(items, source).map(FinalizedSchemaPocEmission::AArch64)
+            assemble_aarch64(items, source).map(FinalizedReprEmission::AArch64)
         }
         Program::X86_64 { items, .. } => {
-            assemble_x64(items, source).map(FinalizedSchemaPocEmission::X64)
+            assemble_x64(items, source).map(FinalizedReprEmission::X64)
         }
     }
 }

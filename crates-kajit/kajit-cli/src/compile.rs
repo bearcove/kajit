@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use kajit_asm::schema_poc::FinalizedSchemaPocEmission;
+use kajit_asm::repr::FinalizedReprEmission;
 use kajit_reprs::{self as reprs, ResolutionSet};
 use kajit_wares::{ObjectInput, PrintMainExecutableInput, TargetArch};
 
@@ -17,7 +17,7 @@ pub(crate) fn cmd_compile(path: &Path) -> Result<(), String> {
         ensure_all_references_resolved(path, &source, &resolutions)?;
         let program = reprs::asm::parse_root_text(&source)
             .map_err(|err| format!("{}:\n{err}", path.display()))?;
-        kajit_asm::schema_poc::assemble_schema_poc_program(&program, &source)?
+        kajit_asm::repr::assemble_repr_program(&program, &source)?
     } else {
         return match path.extension().and_then(|ext| ext.to_str()) {
             Some(other) => Err(format!(
@@ -28,7 +28,7 @@ pub(crate) fn cmd_compile(path: &Path) -> Result<(), String> {
         };
     };
 
-    let exe_path = write_schema_poc_asm_executable(path, &output)?;
+    let exe_path = write_repr_asm_executable(path, &output)?;
     println!("{}", exe_path.display());
     Ok(())
 }
@@ -79,9 +79,9 @@ fn offset_to_line_col(content: &str, offset: usize) -> (u32, u32) {
     (line, col)
 }
 
-fn write_schema_poc_asm_executable(
+fn write_repr_asm_executable(
     path: &Path,
-    output: &FinalizedSchemaPocEmission,
+    output: &FinalizedReprEmission,
 ) -> Result<std::path::PathBuf, String> {
     let output_dir = std::path::PathBuf::from("target").join("kajit-compile");
     let stem = path
@@ -90,7 +90,7 @@ fn write_schema_poc_asm_executable(
         .ok_or_else(|| format!("cannot determine output name for {}", path.display()))?;
 
     let (arch_suffix, object) = match output {
-        FinalizedSchemaPocEmission::AArch64(_) => (
+        FinalizedReprEmission::AArch64(_) => (
             "aarch64",
             ObjectInput {
                 target_arch: TargetArch::Aarch64,
@@ -102,7 +102,7 @@ fn write_schema_poc_asm_executable(
                 extern_addr_relocs: &[],
             },
         ),
-        FinalizedSchemaPocEmission::X64(_) => (
+        FinalizedReprEmission::X64(_) => (
             "x86_64",
             ObjectInput {
                 target_arch: TargetArch::X86_64,
@@ -126,26 +126,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn compiles_aarch64_schema_poc_asm() {
+    fn compiles_aarch64_repr_asm() {
         let path = Path::new("/tmp/example.k-asm");
         let source = "asm aarch64 { start: movz x0, 42 ret }";
         let program = reprs::asm::parse_root_text(source).expect("expected valid .k-asm");
-        let output =
-            kajit_asm::schema_poc::assemble_schema_poc_program(&program, source).expect("emit");
-        assert!(matches!(output, FinalizedSchemaPocEmission::AArch64(_)));
+        let output = kajit_asm::repr::assemble_repr_program(&program, source).expect("emit");
+        assert!(matches!(output, FinalizedReprEmission::AArch64(_)));
         assert!(output.len() > 0);
         assert!(output.trace_text().is_ok());
         assert!(path_matches_ext(path, reprs::asm::REPR_FILE_EXT));
     }
 
     #[test]
-    fn compiles_x64_schema_poc_asm() {
+    fn compiles_x64_repr_asm() {
         let path = Path::new("/tmp/example.k-asm");
         let source = "asm x86_64 { entry: mov rax, 42 ret }";
         let program = reprs::asm::parse_root_text(source).expect("expected valid .k-asm");
-        let output =
-            kajit_asm::schema_poc::assemble_schema_poc_program(&program, source).expect("emit");
-        assert!(matches!(output, FinalizedSchemaPocEmission::X64(_)));
+        let output = kajit_asm::repr::assemble_repr_program(&program, source).expect("emit");
+        assert!(matches!(output, FinalizedReprEmission::X64(_)));
         assert!(output.len() > 0);
         assert!(output.trace_text().is_ok());
         assert!(path_matches_ext(path, reprs::asm::REPR_FILE_EXT));
