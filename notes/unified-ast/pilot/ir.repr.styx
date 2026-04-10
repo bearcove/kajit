@@ -1,850 +1,646 @@
-meta {
-    /// Stable identifier for this pilot schema document.
-    id kajit:repr-schema/ir-pilot
-    /// Schema revision for the pilot format itself.
-    version 1
-    /// Human summary of the pilot's purpose.
-    description "Pilot representation schema for Kajit RVSDG IR"
-}
+/// Human-facing representation name.
+name IR
 
-/// Pilot schema for the RVSDG IR representation family.
-repr @module{
-    /// Human-facing representation name.
-    name IR
-    /// Canonical text file extension for IR documents.
-    file_ext .k-ir
+/// Canonical text file extension for IR documents.
+file_ext .k-ir
 
-    /// High-level stage contract for IR.
-    contract {
-        /// What this stage is for in the pipeline.
-        purpose "Human-debuggable RVSDG IR"
-        /// Names/identities that remain canonical in printed IR.
-        canonical_identities (lambda-id region-id node-id)
-        /// Required round-trip guarantee for the stage text format.
-        round_trip canonical-print
-    }
+/// High-level purpose of this representation.
+description "Human-debuggable RVSDG IR with explicit regions, scopes, and canonical print round-trip."
 
-    /// Text-format description for the pilot RVSDG subset.
-    ///
-    /// The first draft stays close to the current IR printer/parser:
-    /// a root program, an optional debug-scope block, and one or more lambdas
-    /// with nested regions and structured RVSDG nodes.
-    syntax {
-        /// Root rule and root AST node for parsed IR documents.
-        root Program
-
-        /// Token classes used by the pilot parser.
-        tokens {
-            /// A bare identifier used for debug labels and symbolic names.
-            ident @regex("[A-Za-z_][A-Za-z0-9_]*")
-            /// A decimal integer literal token.
-            int @regex("[0-9]+")
-            /// A quoted string token used for lambda shape labels.
-            string @regex("\"[^\"]*\"")
+/// Grammar rules for the current RVSDG IR text surface.
+rules {
+    templates {
+        Keyword {
+            syntax @template{
+                params ({text @Any})
+                body {
+                    syntax text
+                    highlight keyword
+                }
+            }
         }
 
-        /// Grammar rules for the currently supported pilot subset.
-        rules {
-            /// A whole IR document.
-            ///
-            /// The pilot keeps the debug-scope block explicit so the shared
-            /// resolver can work from structured scope declarations instead of
-            /// trying to infer them from text.
-            Program @seq(
-                @optional(@ref(ScopeBlock))
-                @field(lambdas @repeat(@ref(Lambda)))
-            )
-
-            /// The optional top-level debug-scope declaration block.
-            ScopeBlock @seq(
-                "scopes"
-                "{"
-                @field(scopes @repeat(@ref(DebugScope)))
-                "}"
-            )
-
-            /// A debug scope declaration.
-            DebugScope @choice(
-                /// A lambda-body scope.
-                @variant(LambdaBody @seq(
-                    "s"
-                    @field(id @token(int))
-                    "="
-                    "lambda_body"
-                    "("
-                    "@"
-                    @field(lambda_id @token(int))
-                    ")"
-                    @optional(@seq(
-                        "parent"
-                        "s"
-                        @field(parent @token(int))
-                    ))
-                ))
-                /// A gamma branch scope.
-                @variant(GammaBranch @seq(
-                    "s"
-                    @field(id @token(int))
-                    "="
-                    "gamma_branch"
-                    "("
-                    @field(branch_index @token(int))
-                    ")"
-                    @optional(@seq(
-                        "parent"
-                        "s"
-                        @field(parent @token(int))
-                    ))
-                ))
-                /// A theta body scope.
-                @variant(ThetaBody @seq(
-                    "s"
-                    @field(id @token(int))
-                    "="
-                    "theta_body"
-                    @optional(@seq(
-                        "parent"
-                        "s"
-                        @field(parent @token(int))
-                    ))
-                ))
-                /// A synthetic scope used by passes and generated scaffolding.
-                @variant(Synthetic @seq(
-                    "s"
-                    @field(id @token(int))
-                    "="
-                    "synthetic"
-                    @optional(@seq(
-                        "parent"
-                        "s"
-                        @field(parent @token(int))
-                    ))
-                ))
-            )
-
-            /// A lambda definition and its single body region.
-            Lambda @seq(
-                "lambda"
-                "@"
-                @field(id @token(int))
-                @optional(@seq(
-                    "@s"
-                    @field(scope @token(int))
-                ))
-                "("
-                "shape:"
-                @field(label @token(string))
-                @optional(@seq(
-                    ","
-                    "output_size:"
-                    @field(output_size @token(int))
-                ))
-                ")"
-                @field(body @ref(Region))
-            )
-
-            /// A region boundary and its ordered RVSDG contents.
-            Region @seq(
-                "region"
-                @optional(@seq("@s" @field(scope @token(int))))
-                "{"
-                "args:"
-                "["
-                @field(args @repeat(@ref(RegionArg) {sep ","}))
-                "]"
-                @field(nodes @repeat(@ref(Node)))
-                "results:"
-                "["
-                @field(results @repeat(@ref(RegionResult) {sep ","}))
-                "]"
-                "}"
-            )
-
-            /// A region argument visible at a boundary.
-            RegionArg @choice(
-                /// A data argument (`arg0`, `arg1`, ...).
-                @variant(Data @seq(
-                    "arg"
-                    @field(index @token(int))
-                ))
-                /// A state argument (`%ms`, `%s1`, ...).
-                @variant(State @seq(
-                    @field(domain @ref(StateDomain))
-                ))
-            )
-
-            /// A region result leaving the region to the outside.
-            RegionResult @choice(
-                /// A data result.
-                @variant(Data @seq(
-                    @field(source @ref(PortSource))
-                ))
-                /// A state result.
-                @variant(State @seq(
-                    @field(source @ref(PortSource))
-                ))
-            )
-
-            /// Where a port source comes from.
-            PortSource @choice(
-                /// A node output within the current graph.
-                @variant(NodeOutput @seq(
-                    "n"
-                    @field(node @token(int))
-                    "."
-                    @field(index @token(int))
-                ))
-                /// A region argument.
-                @variant(RegionArg @seq(
-                    "arg"
-                    @field(arg @token(int))
-                ))
-            )
-
-            /// An input port on a node.
-            InputPort @choice(
-                /// A data input.
-                @variant(Data @seq(
-                    @field(source @ref(PortSource))
-                ))
-                /// A state input.
-                @variant(State @seq(
-                    @field(source @ref(PortSource))
-                ))
-            )
-
-            /// An output port on a node.
-            OutputPort @choice(
-                /// A data output, optionally carrying a vreg annotation.
-                @variant(Data @seq(
-                    @optional(@seq(
-                        "v"
-                        @field(vreg @token(int))
-                    ))
-                    @optional(@seq(
-                        "@s"
-                        @field(scope @token(int))
-                    ))
-                ))
-                /// A state output.
-                @variant(State @seq(
-                    @optional(@seq(
-                        "@s"
-                        @field(scope @token(int))
-                    ))
-                ))
-            )
-
-            /// The structured RVSDG node vocabulary used by the pilot.
-            Node @choice(
-                /// A simple operation node.
-                @variant(Simple @seq(
-                    "n"
-                    @field(id @token(int))
-                    @optional(@seq("@s" @field(scope @token(int))))
-                    "="
-                    @field(op @ref(IrOp))
-                    "["
-                    @field(inputs @repeat(@ref(InputPort) {sep ","}))
-                    "]"
-                    "->"
-                    "["
-                    @field(outputs @repeat(@ref(OutputPort) {sep ","}))
-                    "]"
-                ))
-                /// A gamma (conditional) node.
-                @variant(Gamma @seq(
-                    "n"
-                    @field(id @token(int))
-                    @optional(@seq("@s" @field(scope @token(int))))
-                    "="
-                    "gamma"
-                    "["
-                    "pred:"
-                    @field(pred @ref(InputPort))
-                    @field(extra_inputs @repeat(@ref(InputPort) {sep ","}))
-                    "]"
-                    "{"
-                    @field(branches @repeat(@ref(Region)))
-                    "}"
-                    "->"
-                    "["
-                    @field(outputs @repeat(@ref(OutputPort) {sep ","}))
-                    "]"
-                ))
-                /// A theta (loop) node.
-                @variant(Theta @seq(
-                    "n"
-                    @field(id @token(int))
-                    @optional(@seq("@s" @field(scope @token(int))))
-                    "="
-                    "theta"
-                    @optional(@seq(
-                    "("
-                        "max="
-                        @field(max_iterations @token(int))
-                        ")"
-                    ))
-                    "["
-                    @field(inputs @repeat(@ref(InputPort) {sep ","}))
-                    "]"
-                    "{"
-                    @field(body @ref(Region))
-                    "}"
-                    "->"
-                    "["
-                    @field(outputs @repeat(@ref(OutputPort) {sep ","}))
-                    "]"
-                ))
-                /// An apply node calling a lambda by stable ID.
-                @variant(Apply @seq(
-                    "n"
-                    @field(id @token(int))
-                    @optional(@seq("@s" @field(scope @token(int))))
-                    "="
-                    "apply"
-                    "@"
-                    @field(target @token(int))
-                    "["
-                    @field(inputs @repeat(@ref(InputPort) {sep ","}))
-                    "]"
-                    "->"
-                    "["
-                    @field(outputs @repeat(@ref(OutputPort) {sep ","}))
-                    "]"
-                ))
-            )
-
-            /// The RVSDG simple-operation vocabulary used by the pilot.
-            IrOp @choice(
-                /// Load a constant value.
-                @variant(Const @seq(
-                    "Const"
-                    "("
-                    @field(value @token(int))
-                    ")"
-                ))
-                /// Address of an embedded data blob.
-                @variant(DataAddr @seq(
-                    "DataAddr"
-                    "("
-                    "blob_id="
-                    @field(blob_id @token(int))
-                    ")"
-                ))
-                /// Address of an external symbol.
-                @variant(ExternAddr @seq(
-                    "ExternAddr"
-                    "("
-                    "@"
-                    @field(symbol @token(ident))
-                    ")"
-                ))
-                /// Return the address of a stack allocation.
-                @variant(StackAlloc @seq(
-                    "StackAlloc"
-                    "("
-                    @field(id @token(int))
-                    ")"
-                ))
-                /// Store to a computed address.
-                @variant(StoreToAddr @seq(
-                    "StoreToAddr"
-                    "("
-                    @field(width @ref(Width))
-                    ")"
-                ))
-                /// Load from a computed address.
-                @variant(LoadFromAddr @seq(
-                    "LoadFromAddr"
-                    "("
-                    @field(width @ref(Width))
-                    ")"
-                ))
-                /// Integer addition.
-                @variant(Add @seq("Add"))
-                /// Integer subtraction.
-                @variant(Sub @seq("Sub"))
-                /// Integer multiplication.
-                @variant(Mul @seq("Mul"))
-                /// Bitwise AND.
-                @variant(And @seq("And"))
-                /// Bitwise OR.
-                @variant(Or @seq("Or"))
-                /// Logical left shift.
-                @variant(Shl @seq("Shl"))
-                /// Logical right shift.
-                @variant(Shr @seq("Shr"))
-                /// Arithmetic right shift.
-                @variant(Sar @seq("Sar"))
-                /// Bitwise XOR.
-                @variant(Xor @seq("Xor"))
-                /// Equality comparison.
-                @variant(CmpEq @seq("CmpEq"))
-                /// Inequality comparison.
-                @variant(CmpNe @seq("CmpNe"))
-                /// Less-than comparison.
-                @variant(CmpLt @seq("CmpLt"))
-                /// Less-than-or-equal comparison.
-                @variant(CmpLe @seq("CmpLe"))
-                /// Greater-than comparison.
-                @variant(CmpGt @seq("CmpGt"))
-                /// Greater-than-or-equal comparison.
-                @variant(CmpGe @seq("CmpGe"))
-                /// Sign extension from a narrower width.
-                @variant(SignExtend @seq(
-                    "SignExtend"
-                    "("
-                    "from="
-                    @field(from_width @ref(Width))
-                    ")"
-                ))
-                /// Call through a known external symbol or intrinsic reference.
-                @variant(Call @seq(
-                    "Call"
-                    "("
-                    "@"
-                    @field(func @token(ident))
-                    ")"
-                ))
-                /// No-op placeholder.
-                @variant(Nop @seq("Nop"))
-                /// Identity copy.
-                @variant(Identity @seq("Identity"))
-            )
+        Operator {
+            syntax @template{
+                params ({text @Any})
+                body {
+                    syntax text
+                    highlight operator
+                }
+            }
         }
 
-        /// Canonical printer templates for the pilot subset.
-        canonical_print {
-            /// Debug-scope block.
-            ScopeBlock "scopes {\n{scopes}\n}"
-            /// Lambda-body scope.
-            DebugScope.LambdaBody "s{id} = lambda_body(@{lambda_id}){parent? : parent s{parent}}"
-            /// Gamma-branch scope.
-            DebugScope.GammaBranch "s{id} = gamma_branch({branch_index}){parent? : parent s{parent}}"
-            /// Theta-body scope.
-            DebugScope.ThetaBody "s{id} = theta_body{parent? : parent s{parent}}"
-            /// Synthetic scope.
-            DebugScope.Synthetic "s{id} = synthetic{parent? : parent s{parent}}"
-
-            /// IR program layout.
-            Program "{scopes? : {scopes}\n}{lambdas}"
-            /// Lambda layout.
-            Lambda "lambda @{id}{scope? : @s{scope}} (shape: {label}{output_size? : , output_size: {output_size}}) {body}"
-            /// Region layout.
-            Region "region{scope? : @s{scope}} {\nargs: [{args:, }]\n{nodes}\nresults: [{results:, }]\n}"
-            /// Data region argument.
-            RegionArg.Data "arg{index}"
-            /// State region argument.
-            RegionArg.State "{domain}"
-            /// Data region result.
-            RegionResult.Data "{source}"
-            /// State region result.
-            RegionResult.State "{source}"
-            /// Node output reference.
-            PortSource.NodeOutput "{domain? : %s{domain}:}n{node}.{index}"
-            /// Region-argument reference.
-            PortSource.RegionArg "{domain? : %s{domain}:}arg{arg}"
-            /// Data input port.
-            InputPort.Data "{source}"
-            /// State input port.
-            InputPort.State "{source}"
-            /// Data output port.
-            OutputPort.Data "{vreg? :v{vreg}}{scope? :@s{scope}}"
-            /// State output port.
-            OutputPort.State "{domain}{scope? :@s{scope}}"
-
-            /// Simple node layout.
-            Node.Simple "n{id}{scope? : @s{scope}} = {op} [{inputs:, }] -> [{outputs:, }]"
-            /// Gamma node layout.
-            Node.Gamma "n{id}{scope? : @s{scope}} = gamma [pred: {pred}{extra_inputs? : , {extra_inputs:, }}] {\n{branches}\n} -> [{outputs:, }]"
-            /// Theta node layout.
-            Node.Theta "n{id}{scope? : @s{scope}} = theta{max_iterations? : (max={max_iterations})} [{inputs:, }] {\n{body}\n} -> [{outputs:, }]"
-            /// Apply node layout.
-            Node.Apply "n{id}{scope? : @s{scope}} = apply @{target} [{inputs:, }] -> [{outputs:, }]"
-
-            /// Simple-op layouts.
-            IrOp.Const "Const({value})"
-            IrOp.DataAddr "DataAddr(blob_id={blob_id})"
-            IrOp.ExternAddr "ExternAddr(@{symbol})"
-            IrOp.StackAlloc "StackAlloc({id})"
-            IrOp.StoreToAddr "StoreToAddr({width})"
-            IrOp.LoadFromAddr "LoadFromAddr({width})"
-            IrOp.Add "Add"
-            IrOp.Sub "Sub"
-            IrOp.Mul "Mul"
-            IrOp.And "And"
-            IrOp.Or "Or"
-            IrOp.Shl "Shl"
-            IrOp.Shr "Shr"
-            IrOp.Sar "Sar"
-            IrOp.Xor "Xor"
-            IrOp.CmpEq "CmpEq"
-            IrOp.CmpNe "CmpNe"
-            IrOp.CmpLt "CmpLt"
-            IrOp.CmpLe "CmpLe"
-            IrOp.CmpGt "CmpGt"
-            IrOp.CmpGe "CmpGe"
-            IrOp.SignExtend "SignExtend(from={from_width})"
-            IrOp.Call "Call(@{func})"
-            IrOp.Nop "Nop"
-            IrOp.Identity "Identity"
-            /// The default memory-state domain.
-            StateDomain.Memory "%ms"
-            /// A numbered state domain.
-            StateDomain.Named "%s{index}"
+        NumberToken {
+            syntax @template{
+                params ({inner @Any})
+                body {
+                    syntax inner
+                    highlight number
+                }
+            }
         }
     }
 
-    /// Shared scalar-ish building blocks reused by the IR graph model.
-    support {
-        /// A debug-scope identifier.
-        ScopeId @int
-        /// A lambda identifier.
-        LambdaId @int
-        /// A region identifier.
-        RegionId @int
-        /// A node identifier.
-        NodeId @int
-        /// A region-argument identifier.
-        ArgId @int
-        /// A region-result identifier.
-        ResultId @int
-        /// A stable virtual register number.
-        VReg @int
-        /// A stack-allocation table entry.
-        StackAllocId @int
-        /// A state-domain identifier, printed as `%ms` or `%sN`.
-        StateDomain @choice(
-            /// The default memory-state domain.
-            @variant(Memory @unit)
-            /// A numbered state domain.
-            @variant(Named @struct{
-                /// State-domain number after the `%s` prefix.
-                index @int
-            })
-        )
-        /// The width of a memory access.
-        Width @enum{
-            /// 1 byte.
-            W1 @unit
-            /// 2 bytes.
-            W2 @unit
-            /// 4 bytes.
-            W4 @unit
-            /// 8 bytes.
-            W8 @unit
-        }
-        /// A port's coarse kind.
-        PortKind @enum{
-            /// Data-carrying port.
-            Data @unit
-            /// State-token port.
-            State @unit
-        }
-        /// The kind of a declared debug scope.
-        DebugScopeKind @enum{
-            /// Scope for a lambda body.
-            LambdaBody @unit
-            /// Scope for a gamma branch body.
-            GammaBranch @unit
-            /// Scope for a theta body.
-            ThetaBody @unit
-            /// Synthetic scope inserted by tooling.
-            Synthetic @unit
-        }
+    ScopesKw @Keyword("scopes")
+    LambdaKw @Keyword("lambda")
+    RegionKw @Keyword("region")
+    ArgsKw @Keyword("args")
+    ResultsKw @Keyword("results")
+    PredKw @Keyword("pred")
+    BranchKw @Keyword("branch")
+    GammaKw @Keyword("gamma")
+    ThetaKw @Keyword("theta")
+    ApplyKw @Keyword("apply")
+    LambdaBodyKw @Keyword("lambda_body")
+    GammaBranchKw @Keyword("gamma_branch")
+    ThetaBodyKw @Keyword("theta_body")
+    SyntheticKw @Keyword("synthetic")
+    ShapeKw @Keyword("shape")
+    OutputSizeKw @Keyword("output_size")
+    ParentKw @Keyword("parent")
+    InKw @Keyword("in")
+    MaxKw @Keyword("max")
+    BlobIdKw @Keyword("blob_id")
+    FromKw @Keyword("from")
+    StackAllocKw @Keyword("StackAlloc")
+    StoreToAddrKw @Keyword("StoreToAddr")
+    LoadFromAddrKw @Keyword("LoadFromAddr")
+    DataAddrKw @Keyword("DataAddr")
+    ConstKw @Keyword("Const")
+    ExternAddrKw @Keyword("ExternAddr")
+    AddKw @Keyword("Add")
+    SubKw @Keyword("Sub")
+    MulKw @Keyword("Mul")
+    AndKw @Keyword("And")
+    OrKw @Keyword("Or")
+    ShrKw @Keyword("Shr")
+    ShlKw @Keyword("Shl")
+    SarKw @Keyword("Sar")
+    XorKw @Keyword("Xor")
+    CmpEqKw @Keyword("CmpEq")
+    CmpNeKw @Keyword("CmpNe")
+    CmpLtKw @Keyword("CmpLt")
+    CmpLeKw @Keyword("CmpLe")
+    CmpGtKw @Keyword("CmpGt")
+    CmpGeKw @Keyword("CmpGe")
+    SignExtendKw @Keyword("SignExtend")
+    CallIntrinsicKw @Keyword("CallIntrinsic")
+    CallPureKw @Keyword("CallPure")
+    CallEffectKw @Keyword("CallEffect")
+    NopKw @Keyword("Nop")
+    IdentityKw @Keyword("Identity")
+    W1Kw @Keyword("W1")
+    W2Kw @Keyword("W2")
+    W4Kw @Keyword("W4")
+    W8Kw @Keyword("W8")
+
+    LBrace @Operator("{")
+    RBrace @Operator("}")
+    LBracket @Operator("[")
+    RBracket @Operator("]")
+    LParen @Operator("(")
+    RParen @Operator(")")
+    Colon @Operator(":")
+    Comma @Operator(",")
+    Equals @Operator("=")
+    Arrow @Operator("->")
+    At @Operator("@")
+    Dot @Operator(".")
+
+    Ident {
+        syntax @regex("[A-Za-z0-9_:.]+")
     }
 
-    /// Structural AST nodes for the RVSDG graph.
-    nodes {
-        /// The root IR document.
-        Program @node{
-            /// Declared debug scopes used by the graph.
-            scopes @seq(@DebugScope)
-            /// Lambda bodies in the document, with lambda @0 as the root.
-            lambdas @seq(@Lambda)
-        }
+    QuotedString {
+        syntax @regex("\"[^\"]*\"")
+    }
 
-        /// A declared debug scope.
-        DebugScope @choice(
-            /// A lambda-body scope.
-            @variant(LambdaBody @struct{
-                /// Scope ID used by node/region annotations.
-                id @ScopeId
-                /// Parent scope, if any.
-                parent @optional(@ScopeId)
-                /// The lambda this scope belongs to.
-                lambda_id @LambdaId
-            })
-            /// A gamma branch scope.
-            @variant(GammaBranch @struct{
-                /// Scope ID used by node/region annotations.
-                id @ScopeId
-                /// Parent scope, if any.
-                parent @optional(@ScopeId)
-                /// Branch index within the gamma.
-                branch_index @int
-            })
-            /// A theta body scope.
-            @variant(ThetaBody @struct{
-                /// Scope ID used by node/region annotations.
-                id @ScopeId
-                /// Parent scope, if any.
-                parent @optional(@ScopeId)
-            })
-            /// A synthetic scope used by tooling.
-            @variant(Synthetic @struct{
-                /// Scope ID used by node/region annotations.
-                id @ScopeId
-                /// Parent scope, if any.
-                parent @optional(@ScopeId)
-            })
+    Nat @NumberToken(@regex("0x[0-9A-Fa-f]+|[0-9]+"))
+
+    Symbol @struct{
+        syntax ({name @Ident})
+    }
+
+    ScopeId @struct{
+        syntax ("s" {index @Nat})
+    }
+
+    LambdaId @struct{
+        syntax (@At {index @Nat})
+    }
+
+    NodeId @struct{
+        syntax ("n" {index @Nat})
+    }
+
+    VReg @struct{
+        syntax ("v" {index @Nat})
+    }
+
+    Width @enum
+    Width.W1 @struct{ syntax (@W1Kw) }
+    Width.W2 @struct{ syntax (@W2Kw) }
+    Width.W4 @struct{ syntax (@W4Kw) }
+    Width.W8 @struct{ syntax (@W8Kw) }
+
+    StateDomain @enum
+    StateDomain.Memory @struct{
+        syntax ("%ms")
+    }
+    StateDomain.Named @struct{
+        syntax ("%s" {index @Nat})
+    }
+
+    Program @struct{
+        syntax (
+            @optional({scopes @ScopeBlock} @newline)
+            {lambdas @many(@Lambda @newline)}
         )
+    }
 
-        /// A lambda definition and its body region.
-        Lambda @node{
-            /// Lambda ID.
-            id @LambdaId
-            /// Debug scope for the lambda node itself.
-            scope @ScopeId
-            /// Human-readable shape label printed in the current IR text format.
-            label @string
-            /// Optional output buffer size, used by decoder-style lambdas.
-            output_size @optional(@int)
-            /// Single body region.
-            body @Region
-        }
-
-        /// A region with ordered nodes and boundary ports.
-        Region @node{
-            /// Debug scope for the region body.
-            scope @ScopeId
-            /// Region boundary arguments.
-            args @seq(@RegionArg)
-            /// Ordered RVSDG nodes inside the region.
-            nodes @seq(@Node)
-            /// Region boundary results.
-            results @seq(@RegionResult)
-        }
-
-        /// A region argument.
-        RegionArg @choice(
-            /// A data argument (`arg0`, `arg1`, ...).
-            @variant(Data @struct{
-                /// Argument position.
-                index @ArgId
-            })
-            /// A state argument (`%ms`, `%s1`, ...).
-            @variant(State @struct{
-                /// State-domain number (`0` for `%ms`).
-                domain @int
-            })
+    ScopeBlock @struct{
+        syntax @brace_block(
+            prefix (@ScopesKw @soft_space)
+            body {scopes @many(@DebugScope @newline)}
         )
+    }
 
-        /// A region result.
-        RegionResult @choice(
-            /// A data result.
-            @variant(Data @struct{
-                /// Source flowing out of the region.
-                source @PortSource
-            })
-            /// A state result.
-            @variant(State @struct{
-                /// Source flowing out of the region.
-                source @PortSource
-            })
-        )
+    DebugScope @enum
 
-        /// Where a port source comes from.
-            PortSource @choice(
-                /// A node output within the current function.
-                @variant(NodeOutput @struct{
-                    /// Optional state-domain qualifier for `%ms:n5` / `%s2:n8`.
-                    domain @optional(@StateDomain)
-                    /// Producing node.
-                    node @NodeId
-                    /// Output index within the producing node.
-                    index @int
-                })
-                /// A region argument.
-                @variant(RegionArg @struct{
-                    /// Optional state-domain qualifier for `%ms:arg` / `%s2:arg`.
-                    domain @optional(@StateDomain)
-                    /// Region that owns the argument.
-                    region @RegionId
-                    /// Argument index within that region.
-                    arg @ArgId
-                })
+    DebugScope.LambdaBody @struct{
+        syntax (
+            {id @ScopeId}
+            @soft_space
+            @Equals
+            @soft_space
+            @LambdaBodyKw
+            {lambda_id @paren(@LambdaId)}
+            @optional(
+                @soft_space
+                @ParentKw
+                @soft_space
+                {parent @ScopeId}
+            )
         )
+    }
 
-        /// An input port on a node.
-        InputPort @choice(
-            /// A data input.
-            @variant(Data @struct{
-                /// The unique producer for this input.
-                source @PortSource
-            })
-            /// A state input.
-            @variant(State @struct{
-                /// The unique producer for this input.
-                source @PortSource
-            })
+    DebugScope.GammaBranch @struct{
+        syntax (
+            {id @ScopeId}
+            @soft_space
+            @Equals
+            @soft_space
+            @GammaBranchKw
+            {branch_index @paren(@Nat)}
+            @optional(
+                @soft_space
+                @ParentKw
+                @soft_space
+                {parent @ScopeId}
+            )
         )
+    }
 
-        /// An output port on a node.
-            OutputPort @choice(
-                /// A data output.
-                @variant(Data @struct{
-                    /// Assigned virtual register, if this output has one.
-                    vreg @optional(@VReg)
-                    /// Debug scope carried by this output.
-                    scope @ScopeId
-                })
-            /// A state output.
-            @variant(State @struct{
-                /// State-domain qualifier (`%ms` or `%sN`).
-                domain @StateDomain
-                /// Debug scope carried by this output.
-                scope @ScopeId
-            })
+    DebugScope.ThetaBody @struct{
+        syntax (
+            {id @ScopeId}
+            @soft_space
+            @Equals
+            @soft_space
+            @ThetaBodyKw
+            @optional(
+                @soft_space
+                @ParentKw
+                @soft_space
+                {parent @ScopeId}
+            )
         )
+    }
 
-        /// The structured RVSDG node vocabulary used by the pilot.
-        Node @choice(
-            /// A simple operation node.
-            @variant(Simple @struct{
-                /// Node ID.
-                id @NodeId
-                /// Debug scope for the node.
-                scope @optional(@ScopeId)
-                /// The simple operation carried by this node.
-                op @IrOp
-                /// Ordered input ports.
-                inputs @seq(@InputPort)
-                /// Ordered output ports.
-                outputs @seq(@OutputPort)
-            })
-            /// A conditional node.
-            @variant(Gamma @struct{
-                /// Node ID.
-                id @NodeId
-                /// Debug scope for the node.
-                scope @optional(@ScopeId)
-                /// Predicate input.
-                pred @InputPort
-                /// Passthrough inputs threaded to all branches.
-                extra_inputs @seq(@InputPort)
-                /// Branch regions in predicate order.
-                branches @seq(@Region)
-                /// Node outputs after branch merging.
-                outputs @seq(@OutputPort)
-            })
-            /// A tail-controlled loop node.
-            @variant(Theta @struct{
-                /// Node ID.
-                id @NodeId
-                /// Debug scope for the node.
-                scope @optional(@ScopeId)
-                /// Optional upper bound on iterations.
-                max_iterations @optional(@int)
-                /// Loop inputs (predicate/state first, then loop-carried values).
-                inputs @seq(@InputPort)
-                /// Loop body region.
-                body @Region
-                /// Node outputs after the loop body exits.
-                outputs @seq(@OutputPort)
-            })
-            /// A lambda application node.
-            @variant(Apply @struct{
-                /// Node ID.
-                id @NodeId
-                /// Debug scope for the node.
-                scope @optional(@ScopeId)
-                /// Target lambda.
-                target @LambdaId
-                /// Call-site inputs.
-                inputs @seq(@InputPort)
-                /// Call-site outputs.
-                outputs @seq(@OutputPort)
-            })
+    DebugScope.Synthetic @struct{
+        syntax (
+            {id @ScopeId}
+            @soft_space
+            @Equals
+            @soft_space
+            @SyntheticKw
+            @optional(
+                @soft_space
+                @ParentKw
+                @soft_space
+                {parent @ScopeId}
+            )
         )
+    }
 
-        /// The RVSDG simple-operation vocabulary used by the pilot.
-        IrOp @choice(
-            /// Load a constant value.
-            @variant(Const @struct{
-                /// Constant value.
-                value @int
-            })
-            /// Load the runtime address of an embedded data blob.
-            @variant(DataAddr @struct{
-                /// Data blob identifier.
-                blob_id @int
-            })
-            /// Load the address of an external symbol.
-            @variant(ExternAddr @struct{
-                /// External symbol name.
-                symbol @string
-            })
-            /// Return the address of a stack allocation.
-            @variant(StackAlloc @struct{
-                /// Stack allocation identifier.
-                id @StackAllocId
-            })
-            /// Store to a computed address.
-            @variant(StoreToAddr @struct{
-                /// Memory access width.
-                width @Width
-            })
-            /// Load from a computed address.
-            @variant(LoadFromAddr @struct{
-                /// Memory access width.
-                width @Width
-            })
-            /// Binary addition.
-            @variant(Add @unit)
-            /// Binary subtraction.
-            @variant(Sub @unit)
-            /// Binary multiplication.
-            @variant(Mul @unit)
-            /// Bitwise AND.
-            @variant(And @unit)
-            /// Bitwise OR.
-            @variant(Or @unit)
-            /// Logical left shift.
-            @variant(Shl @unit)
-            /// Logical right shift.
-            @variant(Shr @unit)
-            /// Arithmetic right shift.
-            @variant(Sar @unit)
-            /// Bitwise XOR.
-            @variant(Xor @unit)
-            /// Equality comparison.
-            @variant(CmpEq @unit)
-            /// Inequality comparison.
-            @variant(CmpNe @unit)
-            /// Less-than comparison.
-            @variant(CmpLt @unit)
-            /// Less-than-or-equal comparison.
-            @variant(CmpLe @unit)
-            /// Greater-than comparison.
-            @variant(CmpGt @unit)
-            /// Greater-than-or-equal comparison.
-            @variant(CmpGe @unit)
-            /// Sign extension from a narrower width.
-            @variant(SignExtend @struct{
-                /// Source width.
-                from_width @Width
-            })
-            /// Call through a symbolic target.
-            @variant(Call @struct{
-                /// Callee reference.
-                func @string
-            })
-            /// No-op placeholder.
-            @variant(Nop @unit)
-            /// Identity copy.
-            @variant(Identity @unit)
+    Lambda @struct{
+        syntax @brace_block(
+            prefix (
+                @LambdaKw
+                @soft_space
+                {id @LambdaId}
+                @soft_space
+                {scope @ScopeId}
+                @soft_space
+                {shape @LambdaShape}
+                @optional(
+                    @Comma
+                    @soft_space
+                    @OutputSizeKw
+                    @Colon
+                    @soft_space
+                    {output_size @Nat}
+                )
+                @soft_space
+            )
+            body ({body @Region})
         )
+    }
+
+    LambdaShape @struct{
+        syntax (
+            @LParen
+            @ShapeKw
+            @Colon
+            @soft_space
+            {label @QuotedString}
+            @RParen
+        )
+    }
+
+    Region @struct{
+        syntax @brace_block(
+            prefix (
+                @RegionKw
+                @soft_space
+                {scope @ScopeId}
+                @soft_space
+            )
+            body (
+                {args @RegionArgsLine}
+                @newline
+                {nodes @many(@Node @newline)}
+                {results @RegionResultsLine}
+            )
+        )
+    }
+
+    RegionArgsLine @struct{
+        syntax (
+            @ArgsKw
+            @Colon
+            @soft_space
+            {args @bracket_list(@RegionArg ",")}
+        )
+    }
+
+    RegionResultsLine @struct{
+        syntax (
+            @ResultsKw
+            @Colon
+            @soft_space
+            {results @bracket_list(@PortSource ",")}
+        )
+    }
+
+    RegionArg @enum
+
+    RegionArg.Data @struct{
+        syntax ("arg" {index @Nat})
+    }
+
+    RegionArg.State @struct{
+        syntax ({domain @StateDomain})
+    }
+
+    PortSource @enum
+
+    PortSource.VReg @struct{
+        syntax ({vreg @VReg})
+    }
+
+    PortSource.StateNode @struct{
+        syntax (
+            {domain @StateDomain}
+            @Colon
+            {node @NodeId}
+        )
+    }
+
+    PortSource.StateArg @struct{
+        syntax (
+            {domain @StateDomain}
+            @Colon
+            "arg"
+        )
+    }
+
+    PortSource.QualifiedRegionArg @struct{
+        syntax (
+            @At
+            {scope @ScopeId}
+            @Dot
+            "arg"
+            {arg_index @Nat}
+        )
+    }
+
+    PortSource.QualifiedStateArg @struct{
+        syntax (
+            {domain @StateDomain}
+            @Colon
+            @At
+            {scope @ScopeId}
+            @Dot
+            "arg"
+        )
+    }
+
+    PortSource.NodeOutput @struct{
+        syntax (
+            {node @NodeId}
+            @Dot
+            {index @Nat}
+        )
+    }
+
+    ScopedOutput @enum
+
+    ScopedOutput.VReg @struct{
+        syntax (
+            {vreg @VReg}
+            @optional({scope @ScopeId})
+        )
+    }
+
+    ScopedOutput.State @struct{
+        syntax (
+            "%ms"
+            @optional({scope @ScopeId})
+        )
+    }
+
+    ScopedOutput.Unknown @struct{
+        syntax (
+            "?"
+            @optional({scope @ScopeId})
+        )
+    }
+
+    Node @enum
+
+    Node.Simple @struct{
+        syntax (
+            {id @NodeId}
+            @optional(
+                @soft_space
+                {scope @ScopeId}
+            )
+            @soft_space
+            @Equals
+            @soft_space
+            {op @IrOp}
+            @soft_space
+            {inputs @bracket_list(@PortSource ",")}
+            @soft_space
+            @Arrow
+            @soft_space
+            {outputs @bracket_list(@ScopedOutput ",")}
+        )
+    }
+
+    Node.Gamma @struct{
+        syntax (
+            {id @NodeId}
+            @optional(
+                @soft_space
+                {scope @ScopeId}
+            )
+            @soft_space
+            @Equals
+            @soft_space
+            @GammaKw
+            @soft_space
+            @LBracket
+            @newline
+            @indent(
+                @PredKw
+                @Colon
+                @soft_space
+                {pred @PortSource}
+                @newline
+                {extra_inputs @many(@GammaInputLine @newline)}
+            )
+            @RBracket
+            @soft_space
+            @brace_block(
+                body {branches @many(@GammaBranch @newline)}
+            )
+            @soft_space
+            @Arrow
+            @soft_space
+            {outputs @bracket_list(@ScopedOutput ",")}
+        )
+    }
+
+    GammaInputLine @struct{
+        syntax (
+            @InKw
+            {index @Nat}
+            @Colon
+            @soft_space
+            {source @PortSource}
+        )
+    }
+
+    GammaBranch @struct{
+        syntax (
+            @BranchKw
+            @soft_space
+            {index @Nat}
+            @Colon
+            @newline
+            @indent({body @Region})
+        )
+    }
+
+    Node.Theta @struct{
+        syntax (
+            {id @NodeId}
+            @optional(
+                @soft_space
+                {scope @ScopeId}
+            )
+            @soft_space
+            @Equals
+            @soft_space
+            @ThetaKw
+            @optional(
+                @LParen
+                @MaxKw
+                @Equals
+                {max_iterations @Nat}
+                @RParen
+            )
+            @soft_space
+            {inputs @bracket_list(@PortSource ",")}
+            @soft_space
+            @brace_block(
+                body ({body @Region})
+            )
+            @soft_space
+            @Arrow
+            @soft_space
+            {outputs @bracket_list(@ScopedOutput ",")}
+        )
+    }
+
+    Node.Apply @struct{
+        syntax (
+            {id @NodeId}
+            @optional(
+                @soft_space
+                {scope @ScopeId}
+            )
+            @soft_space
+            @Equals
+            @soft_space
+            @ApplyKw
+            @soft_space
+            {target @LambdaId}
+            @soft_space
+            {inputs @bracket_list(@PortSource ",")}
+            @soft_space
+            @Arrow
+            @soft_space
+            {outputs @bracket_list(@ScopedOutput ",")}
+        )
+    }
+
+    IrOp @enum
+
+    IrOp.StackAlloc @struct{
+        syntax (
+            @StackAllocKw
+            {id @paren(@Nat)}
+        )
+    }
+
+    IrOp.StoreToAddr @struct{
+        syntax (
+            @StoreToAddrKw
+            {width @paren(@Width)}
+        )
+    }
+
+    IrOp.LoadFromAddr @struct{
+        syntax (
+            @LoadFromAddrKw
+            {width @paren(@Width)}
+        )
+    }
+
+    IrOp.DataAddr @struct{
+        syntax (
+            @DataAddrKw
+            @LParen
+            @BlobIdKw
+            @Equals
+            {blob_id @Nat}
+            @RParen
+        )
+    }
+
+    IrOp.Const @struct{
+        syntax (
+            @ConstKw
+            {value @paren(@ConstRef)}
+        )
+    }
+
+    IrOp.ExternAddr @struct{
+        syntax (
+            @ExternAddrKw
+            @LParen
+            @At
+            {symbol @Symbol}
+            @RParen
+        )
+    }
+
+    IrOp.CallIntrinsic @struct{
+        syntax (
+            @CallIntrinsicKw
+            {func @paren(@IntrinsicRef)}
+        )
+    }
+
+    IrOp.CallPure @struct{
+        syntax (
+            @CallPureKw
+            {func @paren(@IntrinsicRef)}
+        )
+    }
+
+    IrOp.CallEffect @struct{
+        syntax (
+            @CallEffectKw
+            {func @paren(@IntrinsicRef)}
+        )
+    }
+
+    IrOp.SignExtend @struct{
+        syntax (
+            @SignExtendKw
+            @LParen
+            @FromKw
+            @Equals
+            {from_width @Width}
+            @RParen
+        )
+    }
+
+    IrOp.Add @struct{ syntax (@AddKw) }
+    IrOp.Sub @struct{ syntax (@SubKw) }
+    IrOp.Mul @struct{ syntax (@MulKw) }
+    IrOp.And @struct{ syntax (@AndKw) }
+    IrOp.Or @struct{ syntax (@OrKw) }
+    IrOp.Shr @struct{ syntax (@ShrKw) }
+    IrOp.Shl @struct{ syntax (@ShlKw) }
+    IrOp.Sar @struct{ syntax (@SarKw) }
+    IrOp.Xor @struct{ syntax (@XorKw) }
+    IrOp.CmpEq @struct{ syntax (@CmpEqKw) }
+    IrOp.CmpNe @struct{ syntax (@CmpNeKw) }
+    IrOp.CmpLt @struct{ syntax (@CmpLtKw) }
+    IrOp.CmpLe @struct{ syntax (@CmpLeKw) }
+    IrOp.CmpGt @struct{ syntax (@CmpGtKw) }
+    IrOp.CmpGe @struct{ syntax (@CmpGeKw) }
+    IrOp.Nop @struct{ syntax (@NopKw) }
+    IrOp.Identity @struct{ syntax (@IdentityKw) }
+
+    ConstRef @enum
+
+    ConstRef.Named @struct{
+        syntax (
+            @At
+            {name @Symbol}
+        )
+    }
+
+    ConstRef.Value @struct{
+        syntax ({value @Nat})
+    }
+
+    IntrinsicRef @enum
+
+    IntrinsicRef.Named @struct{
+        syntax (
+            @At
+            {name @Symbol}
+        )
+    }
+
+    IntrinsicRef.Address @struct{
+        syntax ({value @Nat})
     }
 }

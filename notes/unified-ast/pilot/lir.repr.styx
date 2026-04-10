@@ -1,0 +1,429 @@
+/// Human-facing representation name.
+name LIR
+
+/// Canonical text file extension for LIR documents.
+file_ext .k-lir
+
+/// High-level purpose of this representation.
+description "Linearized IR listing with labels, branch phi traffic, and display-faithful syntax."
+
+/// Grammar rules for the current LIR text surface.
+///
+/// This draft is display-faithful to the legacy formatter. The legacy parser is
+/// still only a placeholder, so this file is intentionally a sketch of the
+/// printed surface rather than a proven round-trip grammar.
+rules {
+    templates {
+        Keyword {
+            syntax @template{
+                params ({text @Any})
+                body {
+                    syntax text
+                    highlight keyword
+                }
+            }
+        }
+
+        Operator {
+            syntax @template{
+                params ({text @Any})
+                body {
+                    syntax text
+                    highlight operator
+                }
+            }
+        }
+
+        NumberToken {
+            syntax @template{
+                params ({inner @Any})
+                body {
+                    syntax inner
+                    highlight number
+                }
+            }
+        }
+    }
+
+    FuncKw @Keyword("func")
+    EndKw @Keyword("end")
+    ConstKw @Keyword("const")
+    DataAddrKw @Keyword("data_addr")
+    ExternAddrKw @Keyword("extern_addr")
+    CopyKw @Keyword("copy")
+    StackAllocKw @Keyword("stack_alloc")
+    StoreAddrKw @Keyword("store_addr")
+    LoadAddrKw @Keyword("load_addr")
+    CallKw @Keyword("call")
+    BrKw @Keyword("br")
+    BrIfKw @Keyword("br_if")
+    BrZeroKw @Keyword("br_zero")
+    JumpTableKw @Keyword("jump_table")
+    PhiKw @Keyword("phi")
+    FallKw @Keyword("fall")
+    DefaultKw @Keyword("default")
+    W1Kw @Keyword("W1")
+    W2Kw @Keyword("W2")
+    W4Kw @Keyword("W4")
+    W8Kw @Keyword("W8")
+    AddKw @Keyword("Add")
+    SubKw @Keyword("Sub")
+    MulKw @Keyword("Mul")
+    AndKw @Keyword("And")
+    OrKw @Keyword("Or")
+    ShrKw @Keyword("Shr")
+    ShlKw @Keyword("Shl")
+    SarKw @Keyword("Sar")
+    XorKw @Keyword("Xor")
+    CmpEqKw @Keyword("CmpEq")
+    CmpNeKw @Keyword("CmpNe")
+    CmpLtKw @Keyword("CmpLt")
+    CmpLeKw @Keyword("CmpLe")
+    CmpGtKw @Keyword("CmpGt")
+    CmpGeKw @Keyword("CmpGe")
+    SignExtendKw @Keyword("SignExtend")
+
+    LParen @Operator("(")
+    RParen @Operator(")")
+    LBracket @Operator("[")
+    RBracket @Operator("]")
+    Colon @Operator(":")
+    Comma @Operator(",")
+    Equals @Operator("=")
+
+    Ident {
+        syntax @regex("[A-Za-z0-9_:.]+")
+    }
+
+    QuotedString {
+        syntax @regex("[^\\n:]+")
+    }
+
+    Nat @NumberToken(@regex("0x[0-9A-Fa-f]+|[0-9]+"))
+
+    Symbol @struct{
+        syntax ({name @Ident})
+    }
+
+    VReg @struct{
+        syntax ("v" {index @Nat})
+    }
+
+    LabelId @struct{
+        syntax ("L" {index @Nat})
+    }
+
+    LambdaId @struct{
+        syntax ("λ" {index @Nat})
+    }
+
+    Width @enum
+    Width.W1 @struct{ syntax (@W1Kw) }
+    Width.W2 @struct{ syntax (@W2Kw) }
+    Width.W4 @struct{ syntax (@W4Kw) }
+    Width.W8 @struct{ syntax (@W8Kw) }
+
+    BinOpKind @enum
+    BinOpKind.Add @struct{ syntax (@AddKw) }
+    BinOpKind.Sub @struct{ syntax (@SubKw) }
+    BinOpKind.Mul @struct{ syntax (@MulKw) }
+    BinOpKind.And @struct{ syntax (@AndKw) }
+    BinOpKind.Or @struct{ syntax (@OrKw) }
+    BinOpKind.Shr @struct{ syntax (@ShrKw) }
+    BinOpKind.Shl @struct{ syntax (@ShlKw) }
+    BinOpKind.Sar @struct{ syntax (@SarKw) }
+    BinOpKind.Xor @struct{ syntax (@XorKw) }
+    BinOpKind.CmpEq @struct{ syntax (@CmpEqKw) }
+    BinOpKind.CmpNe @struct{ syntax (@CmpNeKw) }
+    BinOpKind.CmpLt @struct{ syntax (@CmpLtKw) }
+    BinOpKind.CmpLe @struct{ syntax (@CmpLeKw) }
+    BinOpKind.CmpGt @struct{ syntax (@CmpGtKw) }
+    BinOpKind.CmpGe @struct{ syntax (@CmpGeKw) }
+
+    Program @struct{
+        syntax ({ops @many(@LirOp @newline)})
+    }
+
+    LirOp @enum
+
+    LirOp.Label @struct{
+        syntax ({label @LabelId} @Colon)
+    }
+
+    LirOp.FuncStart @struct{
+        syntax (
+            @FuncKw
+            @soft_space
+            {lambda_id @LambdaId}
+            @soft_space
+            @LParen
+            {label @QuotedString}
+            @RParen
+            @Colon
+        )
+    }
+
+    LirOp.FuncEnd @struct{
+        syntax (@EndKw)
+    }
+
+    LirOp.Const @struct{
+        syntax (
+            {dst @VReg}
+            @soft_space
+            @Equals
+            @soft_space
+            @ConstKw
+            @soft_space
+            {value @ConstRef}
+        )
+    }
+
+    LirOp.DataAddr @struct{
+        syntax (
+            {dst @VReg}
+            @soft_space
+            @Equals
+            @soft_space
+            @DataAddrKw
+            {blob_id @paren(@Nat)}
+        )
+    }
+
+    LirOp.ExternAddr @struct{
+        syntax (
+            {dst @VReg}
+            @soft_space
+            @Equals
+            @soft_space
+            @ExternAddrKw
+            @LParen
+            "@"
+            {symbol @Symbol}
+            @RParen
+        )
+    }
+
+    LirOp.BinOp @struct{
+        syntax (
+            {dst @VReg}
+            @soft_space
+            @Equals
+            @soft_space
+            {lhs @VReg}
+            @soft_space
+            {op @BinOpKind}
+            @soft_space
+            {rhs @VReg}
+        )
+    }
+
+    LirOp.UnaryOp @struct{
+        syntax (
+            {dst @VReg}
+            @soft_space
+            @Equals
+            @soft_space
+            {op @UnaryOp}
+            @soft_space
+            {src @VReg}
+        )
+    }
+
+    LirOp.Copy @struct{
+        syntax (
+            {dst @VReg}
+            @soft_space
+            @Equals
+            @soft_space
+            @CopyKw
+            @soft_space
+            {src @VReg}
+        )
+    }
+
+    LirOp.StackAlloc @struct{
+        syntax (
+            {dst @VReg}
+            @soft_space
+            @Equals
+            @soft_space
+            @StackAllocKw
+            {id @paren(@Nat)}
+        )
+    }
+
+    LirOp.StoreToAddr @struct{
+        syntax (
+            @StoreAddrKw
+            @soft_space
+            {width @bracket(@Width)}
+            @soft_space
+            {addr @VReg}
+            @Comma
+            @soft_space
+            {src @VReg}
+        )
+    }
+
+    LirOp.LoadFromAddr @struct{
+        syntax (
+            {dst @VReg}
+            @soft_space
+            @Equals
+            @soft_space
+            @LoadAddrKw
+            @soft_space
+            {width @bracket(@Width)}
+            @soft_space
+            {addr @VReg}
+        )
+    }
+
+    LirOp.Call @struct{
+        syntax (
+            {dst @VReg}
+            @soft_space
+            @Equals
+            @soft_space
+            @CallKw
+            @soft_space
+            {func @CallTarget}
+            {args @paren_list(@VReg ",")}
+        )
+    }
+
+    LirOp.Branch @struct{
+        syntax (
+            @BrKw
+            @soft_space
+            {target @LabelId}
+            @optional(
+                @soft_space
+                {phi_args @PhiArgs}
+            )
+        )
+    }
+
+    LirOp.BranchIf @struct{
+        syntax (
+            @BrIfKw
+            @soft_space
+            {cond @VReg}
+            @soft_space
+            {target @LabelId}
+            @optional(
+                @soft_space
+                {phi_args @PhiArgs}
+            )
+            @optional(
+                @soft_space
+                {fallthrough_phi_args @FallArgs}
+            )
+        )
+    }
+
+    LirOp.BranchIfZero @struct{
+        syntax (
+            @BrZeroKw
+            @soft_space
+            {cond @VReg}
+            @soft_space
+            {target @LabelId}
+            @optional(
+                @soft_space
+                {phi_args @PhiArgs}
+            )
+            @optional(
+                @soft_space
+                {fallthrough_phi_args @FallArgs}
+            )
+        )
+    }
+
+    LirOp.JumpTable @struct{
+        syntax (
+            @JumpTableKw
+            @soft_space
+            {predicate @VReg}
+            @soft_space
+            {labels @bracket_list(@LabelId ",")}
+            @soft_space
+            @DefaultKw
+            @soft_space
+            {default @LabelId}
+        )
+    }
+
+    LirOp.CallLambda @struct{
+        syntax (
+            @optional({results @separated_by(@VReg ",")} @soft_space @Equals @soft_space)
+            @CallKw
+            @soft_space
+            {target @LambdaId}
+            {args @paren_list(@VReg ",")}
+        )
+    }
+
+    CallTarget @enum
+
+    CallTarget.Named @struct{
+        syntax (
+            "@"
+            {name @Symbol}
+        )
+    }
+
+    CallTarget.Address @struct{
+        syntax ({value @Nat})
+    }
+
+    ConstRef @enum
+
+    ConstRef.Named @struct{
+        syntax (
+            "@"
+            {name @Symbol}
+        )
+    }
+
+    ConstRef.Value @struct{
+        syntax ({value @Nat})
+    }
+
+    UnaryOp @enum
+
+    UnaryOp.SignExtend @struct{
+        syntax (
+            @SignExtendKw
+            @soft_space
+            @LBrace
+            "from_width:"
+            @soft_space
+            {from_width @Width}
+            @RBrace
+        )
+    }
+
+    PhiArgs @struct{
+        syntax (
+            @PhiKw
+            {pairs @bracket_list(@PhiPair ",")}
+        )
+    }
+
+    FallArgs @struct{
+        syntax (
+            @FallKw
+            {pairs @bracket_list(@PhiPair ",")}
+        )
+    }
+
+    PhiPair @struct{
+        syntax (
+            {src @VReg}
+            "→"
+            {dst @VReg}
+        )
+    }
+}

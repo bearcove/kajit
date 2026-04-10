@@ -9,87 +9,111 @@ description "Canonical executable CFG IR with canonical print round-trip and req
 
 /// Grammar rules for the canonical CFG-MIR subset.
 rules {
-    keyword @group{
-        CfgProgramKw "cfg_program"
-        CfgFuncKw "cfg_func"
-        DataArgsKw "data_args"
-        DataResultsKw "data_results"
-        BlockKw "block"
-        EdgeKw "edge"
-        InstKw "inst"
-        TermKw "term"
-        ReturnKw "return"
-        BranchKw "branch"
-        BranchIfKw "branch_if"
-        BranchIfZeroKw "branch_if_zero"
-        JumpTableKw "jump_table"
-        FallthroughKw "fallthrough"
-        CopyKw "copy"
-        ConstKw "const"
-        DataAddrKw "data_addr"
-        ExternAddrKw "extern_addr"
-        StackAllocKw "stack_alloc"
-        StoreAddrKw "store_addr"
-        LoadAddrKw "load_addr"
-        WriteSlotKw "write_slot"
-        ReadSlotKw "read_slot"
-        CallIntrinsicKw "call_intrinsic"
-        CallPureKw "call_pure"
-        CallEffectKw "call_effect"
-        CallLambdaKw "call_lambda"
-        SignExtendKw "SignExtend"
-        AbiArgKw "arg"
-        AbiRetKw "ret"
-        HwKw "hw"
-        GprKw "gpr"
-        SimdKw "simd"
-        BothKw "both"
-        AddKw "add"
-        SubKw "sub"
-        MulKw "mul"
-        AndKw "and"
-        OrKw "or"
-        SarKw "sar"
-        ShrKw "shr"
-        ShlKw "shl"
-        XorKw "xor"
-        CmpEqKw "cmpeq"
-        CmpNeKw "cmpne"
-        CmpLtKw "cmplt"
-        CmpLeKw "cmple"
-        CmpGtKw "cmpgt"
-        CmpGeKw "cmpge"
-        W1Kw "w1"
-        W2Kw "w2"
-        W4Kw "w4"
-        W8Kw "w8"
-    }
+    templates {
+        Keyword {
+            syntax @template{
+                params ({text @Any})
+                body {
+                    syntax text
+                    highlight keyword
+                }
+            }
+        }
 
-    operator @group{
-        LBrace "{"
-        RBrace "}"
-        LBracket "["
-        RBracket "]"
-        LParen "("
-        RParen ")"
-        Colon ":"
-        Comma ","
-        Arrow "->"
-        Equals "="
-        Bang "!"
-        Slash "/"
-        At "@"
-    }
+        Operator {
+            syntax @template{
+                params ({text @Any})
+                body {
+                    syntax text
+                    highlight operator
+                }
+            }
+        }
 
-    Ident {
-        syntax @regex("[A-Za-z_][A-Za-z0-9_]*")
-    }
-
-    number @group{
-        Nat {
-            syntax @regex("[0-9]+")
+        NumberToken {
+            syntax @template{
+                params ({inner @Any})
+                body {
+                    syntax inner
+                    highlight number
+                }
+            }
         }
     }
+
+    CfgProgramKw @Keyword("cfg_program")
+    CfgFuncKw @Keyword("cfg_func")
+    DataArgsKw @Keyword("data_args")
+    DataResultsKw @Keyword("data_results")
+    BlockKw @Keyword("block")
+    EdgeKw @Keyword("edge")
+    InstKw @Keyword("inst")
+    TermKw @Keyword("term")
+    ReturnKw @Keyword("return")
+    BranchKw @Keyword("branch")
+    BranchIfKw @Keyword("branch_if")
+    BranchIfZeroKw @Keyword("branch_if_zero")
+    JumpTableKw @Keyword("jump_table")
+    FallthroughKw @Keyword("fallthrough")
+    CopyKw @Keyword("copy")
+    ConstKw @Keyword("const")
+    DataAddrKw @Keyword("data_addr")
+    ExternAddrKw @Keyword("extern_addr")
+    SlotAddrKw @Keyword("slot_addr")
+    StackAllocKw @Keyword("stack_alloc")
+    StoreAddrKw @Keyword("store_addr")
+    LoadAddrKw @Keyword("load_addr")
+    WriteSlotKw @Keyword("write_slot")
+    ReadSlotKw @Keyword("read_slot")
+    CallIntrinsicKw @Keyword("call_intrinsic")
+    CallPureKw @Keyword("call_pure")
+    CallEffectKw @Keyword("call_effect")
+    CallLambdaKw @Keyword("call_lambda")
+    SignExtendKw @Keyword("SignExtend")
+    AbiArgKw @Keyword("arg")
+    AbiRetKw @Keyword("ret")
+    HwKw @Keyword("hw")
+    GprKw @Keyword("gpr")
+    SimdKw @Keyword("simd")
+    AddKw @Keyword("Add")
+    SubKw @Keyword("Sub")
+    MulKw @Keyword("Mul")
+    AndKw @Keyword("And")
+    OrKw @Keyword("Or")
+    SarKw @Keyword("Sar")
+    ShrKw @Keyword("Shr")
+    ShlKw @Keyword("Shl")
+    XorKw @Keyword("Xor")
+    CmpEqKw @Keyword("CmpEq")
+    CmpNeKw @Keyword("CmpNe")
+    CmpLtKw @Keyword("CmpLt")
+    CmpLeKw @Keyword("CmpLe")
+    CmpGtKw @Keyword("CmpGt")
+    CmpGeKw @Keyword("CmpGe")
+    W1Kw @Keyword("W1")
+    W2Kw @Keyword("W2")
+    W4Kw @Keyword("W4")
+    W8Kw @Keyword("W8")
+
+    LBrace @Operator("{")
+    RBrace @Operator("}")
+    LBracket @Operator("[")
+    RBracket @Operator("]")
+    LParen @Operator("(")
+    RParen @Operator(")")
+    Colon @Operator(":")
+    Comma @Operator(",")
+    Arrow @Operator("->")
+    Equals @Operator("=")
+    Bang @Operator("!")
+    Slash @Operator("/")
+    At @Operator("@")
+
+    Ident {
+        syntax @regex("[A-Za-z0-9_:.]+")
+    }
+
+    Nat @NumberToken(@regex("0x[0-9A-Fa-f]+|[0-9]+"))
 
     Symbol @struct{
         syntax ({name @Ident})
@@ -148,7 +172,13 @@ rules {
     ClobberKind @enum
     ClobberKind.Gpr @struct{ syntax (@GprKw) }
     ClobberKind.Simd @struct{ syntax (@SimdKw) }
-    ClobberKind.Both @struct{ syntax (@BothKw) }
+    ClobberKind.Both @struct{
+        syntax (
+            @GprKw
+            @Comma
+            @SimdKw
+        )
+    }
 
     BinOpKind @enum
     BinOpKind.Add @struct{ syntax (@AddKw) }
@@ -397,6 +427,13 @@ rules {
         syntax (
             @StackAllocKw
             {id @paren(@StackAllocId)}
+        )
+    }
+
+    InstOp.SlotAddr @struct{
+        syntax (
+            @SlotAddrKw
+            {slot @paren(@SlotId)}
         )
     }
 

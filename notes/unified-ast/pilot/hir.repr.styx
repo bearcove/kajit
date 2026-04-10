@@ -9,22 +9,90 @@ description "Human-semantic structured IR; canonical print round-trip with requi
 
 /// Grammar rules for the currently supported pilot subset.
 rules {
-    keyword @group{
-        ModuleKw "module"
-        FnKw "fn"
-        ReturnKw "return"
-        CallKw "call"
+    templates {
+        Keyword {
+            syntax @template{
+                params ({text @Any})
+                body {
+                    syntax text
+                    highlight keyword
+                }
+            }
+        }
+
+        Operator {
+            syntax @template{
+                params ({text @Any})
+                body {
+                    syntax text
+                    highlight operator
+                }
+            }
+        }
+
+        FunctionToken {
+            syntax @template{
+                params ({inner @Any})
+                body {
+                    syntax inner
+                    highlight function
+                }
+            }
+        }
+
+        TypeToken {
+            syntax @template{
+                params ({inner @Any})
+                body {
+                    syntax inner
+                    highlight type
+                }
+            }
+        }
+
+        ParameterToken {
+            syntax @template{
+                params ({inner @Any})
+                body {
+                    syntax inner
+                    highlight parameter
+                }
+            }
+        }
+
+        VariableToken {
+            syntax @template{
+                params ({inner @Any})
+                body {
+                    syntax inner
+                    highlight variable
+                }
+            }
+        }
+
+        NumberToken {
+            syntax @template{
+                params ({inner @Any})
+                body {
+                    syntax inner
+                    highlight number
+                }
+            }
+        }
     }
 
-    operator @group{
-        LBrace "{"
-        RBrace "}"
-        LParen "("
-        RParen ")"
-        Comma ","
-        Colon ":"
-        Arrow "->"
-    }
+    ModuleKw @Keyword("module")
+    FnKw @Keyword("fn")
+    ReturnKw @Keyword("return")
+    CallKw @Keyword("call")
+
+    LBrace @Operator("{")
+    RBrace @Operator("}")
+    LParen @Operator("(")
+    RParen @Operator(")")
+    Comma @Operator(",")
+    Colon @Operator(":")
+    Arrow @Operator("->")
 
     Ident {
         syntax @regex("[A-Za-z_][A-Za-z0-9_]*")
@@ -38,26 +106,16 @@ rules {
         syntax @regex("[0-9]+")
     }
 
-    function @group{
-        FunctionName {syntax @Ident}
-        Callee {syntax @Symbol}
-    }
+    FunctionName @FunctionToken(@Ident)
+    Callee @FunctionToken(@Symbol)
 
-    type @group{
-        TypeName {syntax @Ident}
-    }
+    TypeName @TypeToken(@Ident)
 
-    parameter @group{
-        ParamName {syntax @Ident}
-    }
+    ParamName @ParameterToken(@Ident)
 
-    variable @group{
-        LocalName {syntax @Ident}
-    }
+    LocalName @VariableToken(@Ident)
 
-    number @group{
-        IntLiteral {syntax @Int}
-    }
+    IntLiteral @NumberToken(@Int)
 
     /// A module with a flat list of functions.
     Module @struct{

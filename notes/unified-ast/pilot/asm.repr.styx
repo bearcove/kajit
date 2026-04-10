@@ -9,45 +9,46 @@ description "Symbolic architecture-specific assembly with canonical print round-
 
 /// Grammar rules for the currently supported pilot subset.
 rules {
-    keyword @group{
-        AsmKw "asm"
-        RetKw "ret"
-        NopKw "nop"
-        MovKw "mov"
-        MovzKw "movz"
-        AddKw "add"
-        SubKw "sub"
-        BKw "b"
-        JmpKw "jmp"
-    }
-
-    AArch64Dialect "aarch64"
-    X86_64Dialect "x86_64"
-
-    operator @group{
-        LBrace "{"
-        RBrace "}"
-        Colon ":"
-        Comma ","
-    }
-
-    Ident {
-        syntax @regex("[A-Za-z_][A-Za-z0-9_]*")
-    }
-
-    Int {
-        syntax @regex("[0-9]+")
-    }
-
-    label @group{
-        LabelName {syntax @Ident}
-    }
-
-    number @group{
-        Imm {syntax @Int}
-    }
-
     templates {
+        Keyword {
+            syntax @template{
+                params ({text @Any})
+                body {
+                    syntax text
+                    highlight keyword
+                }
+            }
+        }
+
+        Operator {
+            syntax @template{
+                params ({text @Any})
+                body {
+                    syntax text
+                    highlight operator
+                }
+            }
+        }
+
+        LabelToken {
+            syntax @template{
+                params ({inner @Any})
+                body {
+                    syntax inner
+                    highlight label
+                }
+            }
+        }
+
+        NumberToken {
+            syntax @template{
+                params ({inner @Any})
+                body {
+                    syntax inner
+                    highlight number
+                }
+            }
+        }
         ZeroOperand {
             syntax @template{
                 params (
@@ -113,6 +114,36 @@ rules {
             }
         }
     }
+
+    AsmKw @Keyword("asm")
+    RetKw @Keyword("ret")
+    NopKw @Keyword("nop")
+    MovKw @Keyword("mov")
+    MovzKw @Keyword("movz")
+    AddKw @Keyword("add")
+    SubKw @Keyword("sub")
+    BKw @Keyword("b")
+    JmpKw @Keyword("jmp")
+
+    AArch64Dialect "aarch64"
+    X86_64Dialect "x86_64"
+
+    LBrace @Operator("{")
+    RBrace @Operator("}")
+    Colon @Operator(":")
+    Comma @Operator(",")
+
+    Ident {
+        syntax @regex("[A-Za-z_][A-Za-z0-9_]*")
+    }
+
+    Int {
+        syntax @regex("[0-9]+")
+    }
+
+    LabelName @LabelToken(@Ident)
+
+    Imm @NumberToken(@Int)
 
     A64Reg @enum
 
