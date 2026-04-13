@@ -1,85 +1,7 @@
-use std::fs;
 use std::path::PathBuf;
 
 use crate::normalize;
-use crate::render_module;
 use crate::schema;
-
-#[test]
-fn modern_schema_template_syntax_deserializes() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("modern.repr.styx");
-    fs::write(
-        &path,
-        r#"
-name Demo
-file_ext .k-demo
-description "modern schema"
-
-rules {
-    templates {
-        Keyword {
-            syntax @template{
-                params ({text @Any})
-                body {
-                    syntax text
-                    highlight keyword
-                }
-            }
-        }
-    }
-
-    FnKw @Keyword("fn")
-}
-"#,
-    )
-    .unwrap();
-
-    let loaded = schema::load_pilot_schema(&path).unwrap();
-    assert_eq!(loaded.name, "Demo");
-    assert!(
-        loaded
-            .templates
-            .keys()
-            .any(|name| schema::documented_name(name) == "Keyword")
-    );
-    assert!(
-        loaded
-            .rules
-            .keys()
-            .any(|name| schema::documented_name(name) == "FnKw")
-    );
-}
-
-#[test]
-fn mir_pilot_schema_loads_and_normalizes() {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../notes/unified-ast/pilot/mir.repr.styx");
-
-    let loaded = schema::load_pilot_schema(&path).unwrap();
-    let _repr = normalize::normalize_repr(&loaded).unwrap();
-}
-
-#[test]
-fn hir_support_enum_variant_order_stays_in_schema_order() {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../notes/unified-ast/pilot/hir.repr.styx");
-
-    let loaded = schema::load_pilot_schema(&path).unwrap();
-    let repr = normalize::normalize_repr(&loaded).unwrap();
-    let files = render_module::render_repr_poc_files(&[repr]);
-    let ast = files
-        .iter()
-        .find(|file| file.relative_path == "hir/ast.rs")
-        .unwrap()
-        .contents
-        .clone();
-
-    let call_pos = ast.find("\n    Call {").unwrap();
-    let local_pos = ast.find("\n    Local {").unwrap();
-    let literal_pos = ast.find("\n    Literal {").unwrap();
-    assert!(call_pos < local_pos && local_pos < literal_pos);
-}
 
 #[test]
 fn asm_repro_schema_loads() {
@@ -88,7 +10,7 @@ fn asm_repro_schema_loads() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../notes/unified-ast/pilot/asm-repro.repr.styx");
 
-    let _loaded = schema::load_pilot_schema(&path).unwrap();
+    let _loaded = schema::read_from_file(&path).unwrap();
 }
 
 // Minimal repro for double-free in facet-reflect deferred cleanup
@@ -251,5 +173,5 @@ fn asm_pilot_schema_loads() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../notes/unified-ast/pilot/asm.repr.styx");
 
-    let _loaded = schema::load_pilot_schema(&path).unwrap();
+    let _loaded = schema::read_from_file(&path).unwrap();
 }

@@ -1,14 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-mod formatter_codegen;
-mod hover_codegen;
-mod normalize;
-mod parser_codegen;
-mod render_helpers;
-mod render_module;
 mod schema;
-mod semantic_codegen;
 
 #[cfg(test)]
 mod tests;
@@ -19,14 +12,13 @@ pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> 
         workspace_root.join("notes/unified-ast/pilot/asm.repr.styx"),
         workspace_root.join("notes/unified-ast/pilot/mir.repr.styx"),
     ];
-    let mut reprs = Vec::new();
+    let mut schemas = Vec::new();
     for schema_path in schema_paths {
         if !schema_path.exists() {
             continue;
         }
-        let loaded = schema::load_pilot_schema(&schema_path)?;
-        let repr = normalize::normalize_repr(&loaded)?;
-        reprs.push(repr);
+        let schema = schema::read_from_file(&schema_path)?;
+        schemas.push(schema);
     }
 
     let out_dir = workspace_root.join("crates-kajit/kajit-reprs/src");
@@ -40,7 +32,7 @@ pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> 
     }
 
     let mut written = Vec::new();
-    for generated in render_module::render_repr_poc_files(&reprs) {
+    for generated in render_module::render_repr_poc_files(&schemas) {
         let path = out_dir.join(&generated.relative_path);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
@@ -51,7 +43,7 @@ pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> 
         written.push(path);
     }
 
-    for repr in &reprs {
+    for repr in &schemas {
         let module_dir = out_dir.join(repr.name.to_ascii_lowercase());
         let resolve_path = module_dir.join("resolve.rs");
         if !resolve_path.exists() {

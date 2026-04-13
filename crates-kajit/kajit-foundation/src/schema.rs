@@ -75,7 +75,7 @@ pub(crate) enum ModernRuleDecl {
 
 #[derive(Facet, Debug, Clone)]
 #[allow(dead_code)]
-pub(crate) struct ModernReprBody {
+pub(crate) struct Schema {
     pub(crate) name: String,
     pub(crate) file_ext: String,
     pub(crate) description: String,
@@ -131,7 +131,7 @@ pub(crate) enum SyntaxPayload {
     Object(SyntaxObject),
 }
 
-pub(crate) fn load_pilot_schema(schema_path: &Path) -> Result<ModernReprBody, String> {
+pub(crate) fn read_from_file(schema_path: &Path) -> Result<Schema, String> {
     let schema_source = fs::read_to_string(schema_path)
         .map_err(|e| format!("failed to read {}: {e}", schema_path.display()))?;
     match facet_styx::from_str::<ModernPilotSchemaDocument>(&schema_source) {
@@ -147,7 +147,7 @@ pub(crate) fn load_pilot_schema(schema_path: &Path) -> Result<ModernReprBody, St
 fn validate_modern_repr_schema(
     schema: &ModernPilotSchemaDocument,
     path: &Path,
-) -> Result<ModernReprBody, String> {
+) -> Result<Schema, String> {
     if schema.name.trim().is_empty() {
         return Err(format!("expected {} name to be non-empty", path.display()));
     }
@@ -174,7 +174,7 @@ fn validate_modern_repr_schema(
         ));
     }
 
-    Ok(ModernReprBody {
+    Ok(Schema {
         name: schema.name.clone(),
         file_ext: schema.file_ext.clone(),
         description: schema.description.clone(),
