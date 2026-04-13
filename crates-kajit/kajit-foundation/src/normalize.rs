@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 
 use crate::schema::{
-    LoadedReprBody, ModernReprBody, ModernRuleDecl, NodeDecl, NodeFields, ReprBody, RuleExpr,
-    SupportDecl, SupportVariantDecl, SyntaxExpr, SyntaxObject, SyntaxPayload, TemplateDecl,
-    TemplateSyntaxDecl, TypeUse, documented_doc, documented_name, rule_named_parts,
+    ModernReprBody, ModernRuleDecl, NodeDecl, NodeFields, ReprBody, RuleExpr, SupportDecl,
+    SupportVariantDecl, SyntaxExpr, SyntaxObject, SyntaxPayload, TemplateDecl, TemplateSyntaxDecl,
+    TypeUse, documented_doc, documented_name, rule_named_parts,
 };
 
 #[derive(Debug, Clone)]
@@ -452,153 +452,6 @@ fn normalize_node_decl(decl: &NodeDecl) -> Result<NormalizedNodeDecl, String> {
             tag.as_deref().unwrap_or("<unknown>")
         )),
     }
-}
-
-fn normalize_legacy_repr(repr: &ReprBody) -> Result<NormalizedRepr, String> {
-    let common = repr
-        .common
-        .as_ref()
-        .ok_or_else(|| "repr.common missing after validation".to_owned())?
-        .iter()
-        .map(|(name, ty)| Ok((name.clone(), normalize_type_use(ty)?)))
-        .collect::<Result<HashMap<_, _>, String>>()?;
-
-    let nodes = repr
-        .nodes
-        .as_ref()
-        .ok_or_else(|| "repr.nodes missing after validation".to_owned())?
-        .iter()
-        .map(|(name, decl)| {
-            Ok((
-                documented_name(name).to_owned(),
-                DocumentedValue {
-                    value: normalize_node_decl(decl)?,
-                    doc: documented_doc(name).map(|lines| lines.to_vec()),
-                },
-            ))
-        })
-        .collect::<Result<HashMap<_, _>, String>>()?;
-
-    let mut support = repr
-        .support
-        .clone()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(name, decl)| {
-            Ok((
-                documented_name(&name).to_owned(),
-                DocumentedValue {
-                    value: normalize_support_decl(&decl)?,
-                    doc: documented_doc(&name).map(|lines| lines.to_vec()),
-                },
-            ))
-        })
-        .collect::<Result<HashMap<_, _>, String>>()?;
-
-    let rules = repr
-        .syntax
-        .rules
-        .iter()
-        .map(|(name, rule)| Ok((name.clone(), normalize_rule(rule)?)))
-        .collect::<Result<HashMap<_, _>, String>>()?;
-
-    let mut semantic_tokens = HashMap::new();
-    let mut rule_names = rules.keys().cloned().collect::<Vec<_>>();
-    rule_names.sort();
-    for rule_name in rule_names {
-        collect_inline_semantic_tokens(
-            &mut semantic_tokens,
-            &rule_name,
-            None,
-            &rules[&rule_name],
-            None,
-        );
-    }
-
-    for (name, decl) in &mut support {
-        let NormalizedSupportDecl::Enum(variants) = &mut decl.value else {
-            continue;
-        };
-        let mut ordered = Vec::new();
-        if let Some(SyntaxRule::Choice(items)) = rules.get(name) {
-            for item in items {
-                let SyntaxRule::Variant(named) = item else {
-                    continue;
-                };
-                if let Some(pos) = variants
-                    .iter()
-                    .position(|variant| variant.value == named.name)
-                {
-                    ordered.push(variants.remove(pos));
-                }
-            }
-        }
-        variants.sort_by(|a, b| a.value.cmp(&b.value));
-        ordered.extend(variants.drain(..));
-        for preset in [
-            ["Enum", "Struct", "Alias"].as_slice(),
-            ["Local", "Temp"].as_slice(),
-        ] {
-            if preset
-                .iter()
-                .all(|name| ordered.iter().any(|variant| variant.value == *name))
-            {
-                let mut prioritized = Vec::new();
-                for name in preset {
-                    if let Some(pos) = ordered.iter().position(|variant| variant.value == *name) {
-                        prioritized.push(ordered.remove(pos));
-                    }
-                }
-                prioritized.extend(ordered.drain(..));
-                ordered = prioritized;
-                break;
-            }
-        }
-        *variants = ordered;
-    }
-
-    let token_specs = repr
-        .syntax
-        .tokens
-        .iter()
-        .map(|(name, token)| {
-            let spec = match token {
-                crate::schema::TokenExpr::Regex(patterns) => match patterns.first() {
-                    Some(regex) if !regex.trim().is_empty() => NormalizedTokenSpec {
-                        regex: regex.clone(),
-                    },
-                    Some(_) => return Err("regex token missing pattern".to_owned()),
-                    None => return Err("regex token missing pattern".to_owned()),
-                },
-                crate::schema::TokenExpr::Other { name, .. } => {
-                    return Err(format!("unsupported token expression kind {:?}", name));
-                }
-            };
-            Ok((name.clone(), spec))
-        })
-        .collect::<Result<HashMap<_, _>, String>>()?;
-
-    Ok(NormalizedRepr {
-        doc: None,
-        name: repr.name.clone(),
-        file_ext: repr.file_ext.clone(),
-        contract: NormalizedContract {
-            purpose: repr.contract.purpose.clone(),
-            canonical_identities: repr.contract.canonical_identities.clone(),
-            round_trip: repr.contract.round_trip.clone(),
-            provenance: repr.contract.provenance.clone(),
-        },
-        syntax: NormalizedSyntax {
-            root: repr.syntax.root.clone(),
-            token_specs,
-            rules,
-            canonical_print: repr.syntax.canonical_print.clone(),
-            semantic_tokens,
-        },
-        common,
-        support,
-        nodes,
-    })
 }
 
 #[derive(Debug, Clone)]
@@ -1536,19 +1389,8 @@ fn modern_normalize_repr(repr: &ModernReprBody) -> Result<NormalizedRepr, String
     })
 }
 
-pub(crate) fn normalize_repr(repr: &LoadedReprBody) -> Result<NormalizedRepr, String> {
-    match repr {
-        LoadedReprBody::Legacy(repr) => normalize_legacy_repr(repr),
-        LoadedReprBody::Modern(repr) => modern_normalize_repr(repr),
-    }
-}
-
-pub(crate) fn with_module_doc(
-    mut repr: NormalizedRepr,
-    doc: Option<Vec<String>>,
-) -> NormalizedRepr {
-    repr.doc = doc;
-    repr
+pub(crate) fn normalize_repr(repr: &ModernReprBody) -> Result<NormalizedRepr, String> {
+    normalize_modern_repr(repr)
 }
 
 pub(crate) fn render_default_value(ty: &SyntaxTypeUse, provenance_tag: &str) -> Option<String> {

@@ -17,25 +17,6 @@ pub(crate) struct WithDoc<T> {
 
 #[derive(Facet, Debug, Clone)]
 #[allow(dead_code)]
-pub(crate) struct PilotSchemaDocument {
-    pub(crate) meta: PilotMeta,
-    pub(crate) repr: Documented<ReprDecl>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct LoadedRepr {
-    pub(crate) doc: Option<Vec<String>>,
-    pub(crate) body: LoadedReprBody,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum LoadedReprBody {
-    Legacy(ReprBody),
-    Modern(ModernReprBody),
-}
-
-#[derive(Facet, Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct PilotMeta {
     pub(crate) id: String,
     pub(crate) version: u64,
@@ -317,22 +298,16 @@ pub(crate) struct NodeVariants {
     pub(crate) variants: HashMap<Documented<String>, NodeDecl>,
 }
 
-pub(crate) fn load_pilot_schema(schema_path: &Path) -> Result<LoadedRepr, String> {
+pub(crate) fn load_pilot_schema(schema_path: &Path) -> Result<ModernReprBody, String> {
     let schema_source = fs::read_to_string(schema_path)
         .map_err(|e| format!("failed to read {}: {e}", schema_path.display()))?;
-    match facet_styx::from_str::<PilotSchemaDocument>(&schema_source) {
-        Ok(schema) => validate_repr_schema(&schema, schema_path),
-        Err(legacy_err) => {
-            match facet_styx::from_str::<ModernPilotSchemaDocument>(&schema_source) {
-                Ok(schema) => validate_modern_repr_schema(&schema, schema_path),
-                Err(modern_err) => Err(format!(
-                    "failed to parse {} as Styx\nlegacy schema:\n{}\n\nmodern schema:\n{}",
-                    schema_path.display(),
-                    legacy_err.render(&schema_path.display().to_string(), &schema_source),
-                    modern_err.render(&schema_path.display().to_string(), &schema_source),
-                )),
-            }
-        }
+    match facet_styx::from_str::<ModernPilotSchemaDocument>(&schema_source) {
+        Ok(schema) => validate_modern_repr_schema(&schema, schema_path),
+        Err(err) => Err(format!(
+            "failed to parse {} as Styx:\n{}",
+            schema_path.display(),
+            err.render(&schema_path.display().to_string(), &schema_source),
+        )),
     }
 }
 
@@ -524,7 +499,7 @@ fn validate_repr_schema(schema: &PilotSchemaDocument, path: &Path) -> Result<Loa
 fn validate_modern_repr_schema(
     schema: &ModernPilotSchemaDocument,
     path: &Path,
-) -> Result<LoadedRepr, String> {
+) -> Result<ModernReprBody, String> {
     if schema.name.trim().is_empty() {
         return Err(format!("expected {} name to be non-empty", path.display()));
     }
@@ -551,15 +526,12 @@ fn validate_modern_repr_schema(
         ));
     }
 
-    Ok(LoadedRepr {
-        doc: None,
-        body: LoadedReprBody::Modern(ModernReprBody {
-            name: schema.name.clone(),
-            file_ext: schema.file_ext.clone(),
-            description: schema.description.clone(),
-            templates: schema.rules.templates.clone().unwrap_or_default(),
-            rules: schema.rules.rules.clone(),
-        }),
+    Ok(ModernReprBody {
+        name: schema.name.clone(),
+        file_ext: schema.file_ext.clone(),
+        description: schema.description.clone(),
+        templates: schema.rules.templates.clone().unwrap_or_default(),
+        rules: schema.rules.rules.clone(),
     })
 }
 
