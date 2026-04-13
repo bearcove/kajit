@@ -13,6 +13,6 @@ default = []
 hir-legacy-tests = []
 
 [dependencies]
-ariadne = "0.5"
-chumsky = "1.0.0-alpha.8"
-kajit-types = { path = "../kajit-types" }
+ariadne = { workspace = true }
+chumsky = { workspace = true }
+kajit-types = { workspace = true }

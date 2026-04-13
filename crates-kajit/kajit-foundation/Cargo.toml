@@ -9,13 +9,13 @@ edition = "2024"
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
-facet = { version = "0.44", features = ["indexmap"] }
-facet-styx = "3.0.1"
-indexmap = "2"
-prettyplease = "0.2"
-styx-tree = { version = "3.0.1", features = ["facet"] }
-syn = { version = "2", features = ["full"] }
-tracing-subscriber.workspace = true
+facet = { workspace = true, features = ["indexmap"] }
+facet-styx = { workspace = true }
+indexmap = { workspace = true }
+prettyplease = { workspace = true }
+styx-tree = { workspace = true }
+syn = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }

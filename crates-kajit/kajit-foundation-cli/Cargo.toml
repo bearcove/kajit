@@ -9,4 +9,4 @@ edition = "2024"
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
-kajit-foundation = { path = "../kajit-foundation" }
+kajit-foundation = { workspace = true }

@@ -35,6 +35,30 @@ exclude = [
 resolver = "3"
 
 [workspace.dependencies]
+# Internal
+kajit-asm = { path = "crates-kajit/kajit-asm" }
+kajit-foundation = { path = "crates-kajit/kajit-foundation" }
+kajit-hir = { path = "crates-kajit/kajit-hir" }
+kajit-mir = { path = "crates-kajit/kajit-mir" }
+kajit-reprs = { path = "crates-kajit/kajit-reprs" }
+kajit-types = { path = "crates-kajit/kajit-types" }
+kajit-wares = { path = "crates-kajit/kajit-wares" }
+
+# Third-party
+ariadne = "0.6"
+chumsky = "1.0.0-alpha.8"
+facet = "0.44"
+facet-styx = "3.0.1"
+figue = "2"
+indexmap = "2"
+object = { version = "0.39", features = ["write"] }
+prettyplease = "0.2"
+proptest = "1"
+styx-tree = { version = "3.0.1", features = ["facet"] }
+syn = { version = "2", features = ["full"] }
+tempfile = "3"
+tokio = { version = "1", features = ["io-std", "macros", "rt-multi-thread", "sync"] }
+tower-lsp = "0.20"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
@@ -42,18 +66,18 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 inherits = "release"
 debug = "line-tables-only"
 
-[patch.crates-io]
-facet-styx = { path = "../styx/crates/facet-styx" }
-facet = { path = "../facet/facet" }
-facet-core = { path = "../facet/facet-core" }
-facet-error = { path = "../facet/facet-error" }
-facet-macro-parse = { path = "../facet/facet-macro-parse" }
-facet-macro-types = { path = "../facet/facet-macro-types" }
-facet-macros = { path = "../facet/facet-macros" }
-facet-macros-impl = { path = "../facet/facet-macros-impl" }
-facet-path = { path = "../facet/facet-path" }
-facet-pretty = { path = "../facet/facet-pretty" }
-facet-reflect = { path = "../facet/facet-reflect" }
-facet-solver = { path = "../facet/facet-solver" }
-facet-testhelpers = { path = "../facet/facet-testhelpers" }
-facet-testhelpers-macros = { path = "../facet/facet-testhelpers-macros" }
+# [patch.crates-io]
+# facet-styx = { path = "../styx/crates/facet-styx" }
+# facet = { path = "../facet/facet" }
+# facet-core = { path = "../facet/facet-core" }
+# facet-error = { path = "../facet/facet-error" }
+# facet-macro-parse = { path = "../facet/facet-macro-parse" }
+# facet-macro-types = { path = "../facet/facet-macro-types" }
+# facet-macros = { path = "../facet/facet-macros" }
+# facet-macros-impl = { path = "../facet/facet-macros-impl" }
+# facet-path = { path = "../facet/facet-path" }
+# facet-pretty = { path = "../facet/facet-pretty" }
+# facet-reflect = { path = "../facet/facet-reflect" }
+# facet-solver = { path = "../facet/facet-solver" }
+# facet-testhelpers = { path = "../facet/facet-testhelpers" }
+# facet-testhelpers-macros = { path = "../facet/facet-testhelpers-macros" }

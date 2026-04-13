@@ -9,4 +9,4 @@ edition = "2024"
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
-object = { version = "0.36", features = ["write"] }
+object = { workspace = true }
