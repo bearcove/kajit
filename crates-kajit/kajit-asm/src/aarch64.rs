@@ -419,9 +419,6 @@ pub struct Emitter {
     fixups: Vec<Fixup>,
     /// Label aliases: (from, to) — `from` resolves to whatever `to` resolves to.
     label_aliases: Vec<(LabelId, LabelId)>,
-    /// Optional instruction capture for assembly dump/parse
-    #[cfg(feature = "old-asm-adapter")]
-    captured_instructions: Option<Vec<kajit_reprs::asm::aarch64_asm::Item>>,
 }
 
 impl Emitter {
@@ -439,40 +436,9 @@ impl Emitter {
         self.core.emit_raw_bytes(bytes);
     }
 
-    /// Enable instruction capture for assembly dump/parse workflow
-    #[cfg(feature = "old-asm-adapter")]
-    pub fn enable_capture(&mut self) {
-        self.captured_instructions = Some(Vec::new());
+    fn capture_label(&mut self, _label: LabelId) {
+        todo!()
     }
-
-    /// Get captured instructions and labels
-    #[cfg(feature = "old-asm-adapter")]
-    pub fn take_captured_program(&mut self) -> Option<kajit_reprs::asm::aarch64_asm::Program> {
-        self.captured_instructions
-            .take()
-            .map(|items| kajit_reprs::asm::aarch64_asm::Program { items })
-    }
-
-    /// Capture an instruction (if capture is enabled)
-    #[cfg(feature = "old-asm-adapter")]
-    fn capture(&mut self, inst: kajit_reprs::asm::aarch64_asm::Instruction) {
-        if let Some(ref mut captured) = self.captured_instructions {
-            captured.push(kajit_reprs::asm::aarch64_asm::Item::Instruction(inst));
-        }
-    }
-
-    /// Capture a label (if capture is enabled)
-    #[cfg(feature = "old-asm-adapter")]
-    fn capture_label(&mut self, label: LabelId) {
-        if let Some(ref mut captured) = self.captured_instructions {
-            captured.push(kajit_reprs::asm::aarch64_asm::Item::Label(
-                kajit_reprs::asm::aarch64_asm::Label(label.0),
-            ));
-        }
-    }
-
-    #[cfg(not(feature = "old-asm-adapter"))]
-    fn capture_label(&mut self, _label: LabelId) {}
 
     pub fn current_offset(&self) -> u32 {
         self.core.current_offset()
@@ -2933,45 +2899,5 @@ mod tests {
         emitter.bind_label(label).unwrap();
         let err = emitter.bind_label(label).unwrap_err();
         assert!(matches!(err, EmitError::LabelAlreadyBound { .. }));
-    }
-
-    #[cfg(feature = "old-asm-adapter")]
-    #[test]
-    fn emitter_captures_instructions() {
-        let mut emitter = Emitter::new();
-        emitter.enable_capture();
-
-        let label0 = emitter.new_label();
-        let label1 = emitter.new_label();
-
-        emitter.bind_label(label0).unwrap();
-        emitter.emit_movz_imm(Width::X64, Reg::X0, 0x42, 0).unwrap();
-        emitter
-            .emit_add_imm(Width::X64, Reg::X1, Reg::X0, 7, false)
-            .unwrap();
-        emitter
-            .emit_ldr_imm(Width::W32, Reg::X2, Reg::X1, 0)
-            .unwrap();
-        emitter.emit_cbz_label(Width::X64, Reg::X2, label1).unwrap();
-        emitter.emit_ret().unwrap();
-        emitter.bind_label(label1).unwrap();
-        emitter.emit_mov_reg(Width::X64, Reg::X0, Reg::X2).unwrap();
-        emitter.emit_b_label(label0).unwrap();
-
-        let program = emitter.take_captured_program().unwrap();
-        assert_eq!(program.items.len(), 9);
-
-        // Verify we can format it
-        let formatted = format!("{}", program);
-        println!("{}", formatted);
-        assert!(formatted.contains(".L0:"));
-        assert!(formatted.contains(".L1:"));
-        assert!(formatted.contains("movz x0, #0x42"));
-        assert!(formatted.contains("add x1, x0, #7"));
-        assert!(formatted.contains("ldr w2, [x1]"));
-        assert!(formatted.contains("cbz x2, .L1"));
-        assert!(formatted.contains("ret"));
-        assert!(formatted.contains("mov x0, x2"));
-        assert!(formatted.contains("b .L0"));
     }
 }

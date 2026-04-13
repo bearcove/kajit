@@ -610,17 +610,15 @@ fn render_scalar_support_rule_expr(
         SyntaxRule::Token { .. }
         | SyntaxRule::Ref { .. }
         | SyntaxRule::Optional { .. }
-        | SyntaxRule::Repeat { .. } => {
-            return render_value_parser(
-                repr,
-                rule,
-                &support_ty,
-                rule_names,
-                node_names,
-                false,
-                arena_infos,
-            );
-        }
+        | SyntaxRule::Repeat { .. } => render_value_parser(
+            repr,
+            rule,
+            &support_ty,
+            rule_names,
+            node_names,
+            false,
+            arena_infos,
+        ),
         SyntaxRule::Seq(items) => {
             let expected_field = match decl {
                 NormalizedSupportDecl::String => "text",
@@ -726,12 +724,12 @@ fn render_struct_parser_expr(
     provenance_tag: &str,
     arena_infos: &[ArenaParserInfo],
 ) -> Result<String, String> {
-    if is_prov_only_struct(fields, provenance_tag) {
-        if let Some(text) = extract_single_literal(rule) {
-            return Ok(format!(
-                "(just({text:?}).to(())).map_with(move |(), e| {type_name} {{ prov: prov_from_span(e.span(), file_id) }}).then_ignore(ws()).boxed()"
-            ));
-        }
+    if is_prov_only_struct(fields, provenance_tag)
+        && let Some(text) = extract_single_literal(rule)
+    {
+        return Ok(format!(
+            "(just({text:?}).to(())).map_with(move |(), e| {type_name} {{ prov: prov_from_span(e.span(), file_id) }}).then_ignore(ws()).boxed()"
+        ));
     }
 
     let mut items =
@@ -740,20 +738,19 @@ fn render_struct_parser_expr(
         && !items
             .iter()
             .any(|item| matches!(item, SeqItem::Bind { name, .. } if name == "docs"))
-    {
-        if let Some(parser) = render_implicit_docs_parser(
+        && let Some(parser) = render_implicit_docs_parser(
             repr,
             "docs",
             &fields.get("docs").expect("docs field should exist").value,
-        ) {
-            items.insert(
-                0,
-                SeqItem::Bind {
-                    name: "docs".to_owned(),
-                    parser,
-                },
-            );
-        }
+        )
+    {
+        items.insert(
+            0,
+            SeqItem::Bind {
+                name: "docs".to_owned(),
+                parser,
+            },
+        );
     }
     let (chain, bound_names) = render_binding_chain(&items)?;
     let bound_set = bound_names.iter().cloned().collect::<BTreeSet<_>>();
@@ -844,20 +841,19 @@ fn render_enum_parser_expr(
             && !items
                 .iter()
                 .any(|item| matches!(item, SeqItem::Bind { name, .. } if name == "docs"))
-        {
-            if let Some(parser) = render_implicit_docs_parser(
+            && let Some(parser) = render_implicit_docs_parser(
                 repr,
                 "docs",
                 &fields.get("docs").expect("docs field should exist").value,
-            ) {
-                items.insert(
-                    0,
-                    SeqItem::Bind {
-                        name: "docs".to_owned(),
-                        parser,
-                    },
-                );
-            }
+            )
+        {
+            items.insert(
+                0,
+                SeqItem::Bind {
+                    name: "docs".to_owned(),
+                    parser,
+                },
+            );
         }
         let (chain, bound_names) = render_binding_chain(&items)?;
         let bound_set = bound_names.iter().cloned().collect::<BTreeSet<_>>();

@@ -883,12 +883,12 @@ fn parse_template(template: &str) -> Result<Vec<TemplatePart>, String> {
 
     while cursor < template.len() {
         if bytes[cursor] == b'{' {
-            if let Some((end, inner)) = extract_braced(template, cursor) {
-                if let Ok(part) = parse_template_expr(inner) {
-                    parts.push(part);
-                    cursor = end + 1;
-                    continue;
-                }
+            if let Some((end, inner)) = extract_braced(template, cursor)
+                && let Ok(part) = parse_template_expr(inner)
+            {
+                parts.push(part);
+                cursor = end + 1;
+                continue;
             }
             parts.push(TemplatePart::Literal("{".to_owned()));
             cursor += 1;
