@@ -15,9 +15,9 @@ fn validate_a64_item(value: &A64Item, ctx: &mut ValidationContext, errors: &mut 
             rn,
             ..
         } => {
-            validate_add_keyword(&op, ctx, errors);
-            validate_a64_reg(&rd, ctx, errors);
-            validate_a64_reg(&rn, ctx, errors);
+            validate_add_keyword(op, ctx, errors);
+            validate_a64_reg(rd, ctx, errors);
+            validate_a64_reg(rn, ctx, errors);
         }
         A64Item::AddReg {
             op,
@@ -27,15 +27,15 @@ fn validate_a64_item(value: &A64Item, ctx: &mut ValidationContext, errors: &mut 
             rn,
             ..
         } => {
-            validate_add_keyword(&op, ctx, errors);
-            validate_a64_reg(&rd, ctx, errors);
-            validate_a64_reg(&rm, ctx, errors);
-            validate_a64_reg(&rn, ctx, errors);
+            validate_add_keyword(op, ctx, errors);
+            validate_a64_reg(rd, ctx, errors);
+            validate_a64_reg(rm, ctx, errors);
+            validate_a64_reg(rn, ctx, errors);
         }
         A64Item::B {
             op, prov, target, ..
         } => {
-            validate_b_keyword(&op, ctx, errors);
+            validate_b_keyword(op, ctx, errors);
         }
         A64Item::Label { name, prov, .. } => {
             let _ = (ctx, errors);
@@ -43,21 +43,21 @@ fn validate_a64_item(value: &A64Item, ctx: &mut ValidationContext, errors: &mut 
         A64Item::Mov {
             op, prov, rd, rm, ..
         } => {
-            validate_mov_keyword(&op, ctx, errors);
-            validate_a64_reg(&rd, ctx, errors);
-            validate_a64_reg(&rm, ctx, errors);
+            validate_mov_keyword(op, ctx, errors);
+            validate_a64_reg(rd, ctx, errors);
+            validate_a64_reg(rm, ctx, errors);
         }
         A64Item::Movz {
             imm, op, prov, rd, ..
         } => {
-            validate_movz_keyword(&op, ctx, errors);
-            validate_a64_reg(&rd, ctx, errors);
+            validate_movz_keyword(op, ctx, errors);
+            validate_a64_reg(rd, ctx, errors);
         }
         A64Item::Nop { op, prov, .. } => {
-            validate_nop_keyword(&op, ctx, errors);
+            validate_nop_keyword(op, ctx, errors);
         }
         A64Item::Ret { op, prov, .. } => {
-            validate_ret_keyword(&op, ctx, errors);
+            validate_ret_keyword(op, ctx, errors);
         }
         A64Item::SubReg {
             op,
@@ -67,10 +67,10 @@ fn validate_a64_item(value: &A64Item, ctx: &mut ValidationContext, errors: &mut 
             rn,
             ..
         } => {
-            validate_sub_keyword(&op, ctx, errors);
-            validate_a64_reg(&rd, ctx, errors);
-            validate_a64_reg(&rm, ctx, errors);
-            validate_a64_reg(&rn, ctx, errors);
+            validate_sub_keyword(op, ctx, errors);
+            validate_a64_reg(rd, ctx, errors);
+            validate_a64_reg(rm, ctx, errors);
+            validate_a64_reg(rn, ctx, errors);
         }
     }
 }
@@ -139,12 +139,12 @@ fn validate_program(value: &Program, ctx: &mut ValidationContext, errors: &mut V
             prov,
             ..
         } => {
-            validate_a_arch64_dialect_keyword(&dialect, ctx, errors);
+            validate_a_arch64_dialect_keyword(dialect, ctx, errors);
             if let Some(value) = docs.as_ref() {}
             for value in items.iter() {
-                validate_a64_item(&value, ctx, errors);
+                validate_a64_item(value, ctx, errors);
             }
-            validate_asm_keyword(&keyword, ctx, errors);
+            validate_asm_keyword(keyword, ctx, errors);
         }
         Program::X86_64 {
             dialect,
@@ -154,12 +154,12 @@ fn validate_program(value: &Program, ctx: &mut ValidationContext, errors: &mut V
             prov,
             ..
         } => {
-            validate_x86_64_dialect_keyword(&dialect, ctx, errors);
+            validate_x86_64_dialect_keyword(dialect, ctx, errors);
             if let Some(value) = docs.as_ref() {}
             for value in items.iter() {
-                validate_x64_item(&value, ctx, errors);
+                validate_x64_item(value, ctx, errors);
             }
-            validate_asm_keyword(&keyword, ctx, errors);
+            validate_asm_keyword(keyword, ctx, errors);
         }
     }
 }
@@ -174,20 +174,20 @@ fn validate_x64_item(value: &X64Item, ctx: &mut ValidationContext, errors: &mut 
         X64Item::AddImm {
             imm, op, prov, rd, ..
         } => {
-            validate_add_keyword(&op, ctx, errors);
-            validate_x64_reg(&rd, ctx, errors);
+            validate_add_keyword(op, ctx, errors);
+            validate_x64_reg(rd, ctx, errors);
         }
         X64Item::AddReg {
             op, prov, rd, rm, ..
         } => {
-            validate_add_keyword(&op, ctx, errors);
-            validate_x64_reg(&rd, ctx, errors);
-            validate_x64_reg(&rm, ctx, errors);
+            validate_add_keyword(op, ctx, errors);
+            validate_x64_reg(rd, ctx, errors);
+            validate_x64_reg(rm, ctx, errors);
         }
         X64Item::Jmp {
             op, prov, target, ..
         } => {
-            validate_jmp_keyword(&op, ctx, errors);
+            validate_jmp_keyword(op, ctx, errors);
         }
         X64Item::Label { name, prov, .. } => {
             let _ = (ctx, errors);
@@ -195,28 +195,28 @@ fn validate_x64_item(value: &X64Item, ctx: &mut ValidationContext, errors: &mut 
         X64Item::MovImm {
             imm, op, prov, rd, ..
         } => {
-            validate_mov_keyword(&op, ctx, errors);
-            validate_x64_reg(&rd, ctx, errors);
+            validate_mov_keyword(op, ctx, errors);
+            validate_x64_reg(rd, ctx, errors);
         }
         X64Item::MovReg {
             op, prov, rd, rm, ..
         } => {
-            validate_mov_keyword(&op, ctx, errors);
-            validate_x64_reg(&rd, ctx, errors);
-            validate_x64_reg(&rm, ctx, errors);
+            validate_mov_keyword(op, ctx, errors);
+            validate_x64_reg(rd, ctx, errors);
+            validate_x64_reg(rm, ctx, errors);
         }
         X64Item::Nop { op, prov, .. } => {
-            validate_nop_keyword(&op, ctx, errors);
+            validate_nop_keyword(op, ctx, errors);
         }
         X64Item::Ret { op, prov, .. } => {
-            validate_ret_keyword(&op, ctx, errors);
+            validate_ret_keyword(op, ctx, errors);
         }
         X64Item::SubReg {
             op, prov, rd, rm, ..
         } => {
-            validate_sub_keyword(&op, ctx, errors);
-            validate_x64_reg(&rd, ctx, errors);
-            validate_x64_reg(&rm, ctx, errors);
+            validate_sub_keyword(op, ctx, errors);
+            validate_x64_reg(rd, ctx, errors);
+            validate_x64_reg(rm, ctx, errors);
         }
     }
 }

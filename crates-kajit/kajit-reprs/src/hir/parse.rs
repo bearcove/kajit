@@ -93,8 +93,8 @@ fn parse_root_value_rich(
             ))
             .then_ignore(just(")").padded()))
             .map_with(move |(callee, args), e| Expr::Call {
-                args: args,
-                callee: callee,
+                args,
+                callee,
                 prov: prov_from_span(e.span(), file_id),
             }),
             (token_ident()
@@ -104,7 +104,7 @@ fn parse_root_value_rich(
                 })
                 .then_ignore(ws()))
             .map_with(move |name, e| Expr::Local {
-                name: name,
+                name,
                 prov: prov_from_span(e.span(), file_id),
             }),
             (token_int()
@@ -121,7 +121,7 @@ fn parse_root_value_rich(
                 .then_ignore(ws()))
             .map_with(move |value, e| Expr::Literal {
                 prov: prov_from_span(e.span(), file_id),
-                value: value,
+                value,
             }),
         ))
         .boxed()
@@ -130,11 +130,11 @@ fn parse_root_value_rich(
         ((just("return").padded()).ignore_then(((expr_parser.clone()).map(Box::new)).or_not()))
             .map_with(move |value, e| Stmt::Return {
                 prov: prov_from_span(e.span(), file_id),
-                value: value,
+                value,
             }),
         ((expr_parser.clone()).map(Box::new)).map_with(move |value, e| Stmt::Expr {
             prov: prov_from_span(e.span(), file_id),
-            value: value,
+            value,
         }),
     ))
     .boxed();
@@ -143,7 +143,7 @@ fn parse_root_value_rich(
     .then_ignore(just("}").padded()))
     .map_with(move |statements, e| Block {
         prov: prov_from_span(e.span(), file_id),
-        statements: statements,
+        statements,
     })
     .boxed();
     let param_parser = (((token_ident()
@@ -162,9 +162,9 @@ fn parse_root_value_rich(
             .then_ignore(ws()),
     ))
     .map_with(move |(name, ty), e| Param {
-        name: name,
+        name,
         prov: prov_from_span(e.span(), file_id),
-        ty: ty,
+        ty,
     })
     .boxed();
     let function_parser = (((((((((doc_block()).then_ignore(just("fn").padded())).then(
@@ -195,13 +195,13 @@ fn parse_root_value_rich(
     .then((block_parser.clone()).map(Box::new)))
     .map_with(
         move |((((docs, name), params), return_type), body), e| Function {
-            body: body,
-            docs: docs,
+            body,
+            docs,
             locals: Vec::new(),
-            name: name,
-            params: params,
+            name,
+            params,
             prov: prov_from_span(e.span(), file_id),
-            return_type: return_type,
+            return_type,
         },
     )
     .boxed();
@@ -210,8 +210,8 @@ fn parse_root_value_rich(
     .then((function_parser.clone()).repeated().collect::<Vec<_>>()))
     .then_ignore(just("}").padded()))
     .map_with(move |(docs, functions), e| Module {
-        docs: docs,
-        functions: functions,
+        docs,
+        functions,
         prov: prov_from_span(e.span(), file_id),
         type_defs: Vec::new(),
     })

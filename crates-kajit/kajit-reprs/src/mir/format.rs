@@ -253,7 +253,7 @@ fn write_edge(w: &mut Writer, node: &Edge) {
         if idx != 0 {
             w.text(", ");
         }
-        write_edge_arg(w, &value);
+        write_edge_arg(w, value);
     }
     w.text("]");
 }
@@ -274,7 +274,7 @@ fn write_edge_in_graph(w: &mut Writer, graph: &Graph, node: &Edge) {
         if idx != 0 {
             w.text(", ");
         }
-        write_edge_arg_in_graph(w, graph, &value);
+        write_edge_arg_in_graph(w, graph, value);
     }
     w.text("]");
 }
@@ -380,7 +380,7 @@ fn write_function(w: &mut Writer, node: &Function) {
             w.text("\n");
         }
         w.with_indent(|w| {
-            write_block(w, &value);
+            write_block(w, value);
         });
     }
     w.text("\n");
@@ -396,7 +396,7 @@ fn write_function(w: &mut Writer, node: &Function) {
             w.text("\n");
         }
         w.with_indent(|w| {
-            write_terminator(w, &value);
+            write_terminator(w, value);
         });
     }
     w.text("\n");
@@ -405,7 +405,7 @@ fn write_function(w: &mut Writer, node: &Function) {
             w.text("\n");
         }
         w.with_indent(|w| {
-            write_edge(w, &value);
+            write_edge(w, value);
         });
     }
     w.text("\n}");
@@ -434,7 +434,7 @@ fn write_function_in_graph(w: &mut Writer, graph: &Graph, node: &Function) {
             w.text("\n");
         }
         w.with_indent(|w| {
-            write_block_in_graph(w, graph, &value);
+            write_block_in_graph(w, graph, value);
         });
     }
     w.text("\n");
@@ -446,7 +446,7 @@ fn write_function_in_graph(w: &mut Writer, graph: &Graph, node: &Function) {
             continue;
         };
         w.with_indent(|w| {
-            write_inst_in_graph(w, graph, &value);
+            write_inst_in_graph(w, graph, value);
         });
     }
     w.text("\n");
@@ -455,7 +455,7 @@ fn write_function_in_graph(w: &mut Writer, graph: &Graph, node: &Function) {
             w.text("\n");
         }
         w.with_indent(|w| {
-            write_terminator_in_graph(w, graph, &value);
+            write_terminator_in_graph(w, graph, value);
         });
     }
     w.text("\n");
@@ -464,7 +464,7 @@ fn write_function_in_graph(w: &mut Writer, graph: &Graph, node: &Function) {
             w.text("\n");
         }
         w.with_indent(|w| {
-            write_edge_in_graph(w, graph, &value);
+            write_edge_in_graph(w, graph, value);
         });
     }
     w.text("\n}");
@@ -483,7 +483,7 @@ fn write_inst(w: &mut Writer, node: &Inst) {
             if idx != 0 {
                 w.text(", ");
             }
-            write_operand(w, &value);
+            write_operand(w, value);
         }
         w.text(" =");
     }
@@ -493,12 +493,12 @@ fn write_inst(w: &mut Writer, node: &Inst) {
             if idx != 0 {
                 w.text(", ");
             }
-            write_operand(w, &value);
+            write_operand(w, value);
         }
     }
     if let Some(value) = node.clobbers.as_ref() {
         w.text("!");
-        write_clobber_kind(w, &value);
+        write_clobber_kind(w, value);
     }
 }
 pub fn format_inst_in_graph_node(graph: &Graph, node: &Inst) -> String {
@@ -515,7 +515,7 @@ fn write_inst_in_graph(w: &mut Writer, graph: &Graph, node: &Inst) {
             if idx != 0 {
                 w.text(", ");
             }
-            write_operand_in_graph(w, graph, &value);
+            write_operand_in_graph(w, graph, value);
         }
         w.text(" =");
     }
@@ -525,12 +525,12 @@ fn write_inst_in_graph(w: &mut Writer, graph: &Graph, node: &Inst) {
             if idx != 0 {
                 w.text(", ");
             }
-            write_operand_in_graph(w, graph, &value);
+            write_operand_in_graph(w, graph, value);
         }
     }
     if let Some(value) = node.clobbers.as_ref() {
         w.text("!");
-        write_clobber_kind(w, &value);
+        write_clobber_kind(w, value);
     }
 }
 pub fn format_inst_op(node: &InstOp) -> String {
@@ -542,16 +542,16 @@ fn write_inst_op(w: &mut Writer, node: &InstOp) {
     match node {
         InstOp::BinOp { op, .. } => {
             w.text(" ");
-            write_bin_op_kind(w, &op);
+            write_bin_op_kind(w, op);
         }
         InstOp::CallEffect { func, .. } => {
             w.text(" call_effect(");
-            write_intrinsic_ref(w, &func);
+            write_intrinsic_ref(w, func);
             w.text(")");
         }
         InstOp::CallIntrinsic { func, .. } => {
             w.text(" call_intrinsic(");
-            write_intrinsic_ref(w, &func);
+            write_intrinsic_ref(w, func);
             w.text(")");
         }
         InstOp::CallLambda { target, .. } => {
@@ -561,12 +561,12 @@ fn write_inst_op(w: &mut Writer, node: &InstOp) {
         }
         InstOp::CallPure { func, .. } => {
             w.text(" call_pure(");
-            write_intrinsic_ref(w, &func);
+            write_intrinsic_ref(w, func);
             w.text(")");
         }
         InstOp::Const { value, .. } => {
             w.text(" const(");
-            write_const_ref(w, &value);
+            write_const_ref(w, value);
             w.text(")");
         }
         InstOp::Copy(_value) => {
@@ -579,12 +579,12 @@ fn write_inst_op(w: &mut Writer, node: &InstOp) {
         }
         InstOp::ExternAddr { symbol, .. } => {
             w.text(" extern_addr(");
-            write_intrinsic_ref(w, &symbol);
+            write_intrinsic_ref(w, symbol);
             w.text(")");
         }
         InstOp::LoadFromAddr { width, .. } => {
             w.text(" load_addr([");
-            write_width(w, &width);
+            write_width(w, width);
             w.text("])");
         }
         InstOp::ReadFromSlot { slot, .. } => {
@@ -599,12 +599,12 @@ fn write_inst_op(w: &mut Writer, node: &InstOp) {
         }
         InstOp::StoreToAddr { width, .. } => {
             w.text(" store_addr([");
-            write_width(w, &width);
+            write_width(w, width);
             w.text("])");
         }
         InstOp::UnaryOp { op, .. } => {
             w.text(" ");
-            write_unary_op(w, &op);
+            write_unary_op(w, op);
         }
         InstOp::WriteToSlot { slot, .. } => {
             w.text(" write_slot(");
@@ -623,16 +623,16 @@ fn write_inst_op_in_graph(w: &mut Writer, graph: &Graph, node: &InstOp) {
     match node {
         InstOp::BinOp { op, .. } => {
             w.text(" ");
-            write_bin_op_kind(w, &op);
+            write_bin_op_kind(w, op);
         }
         InstOp::CallEffect { func, .. } => {
             w.text(" call_effect(");
-            write_intrinsic_ref_in_graph(w, graph, &func);
+            write_intrinsic_ref_in_graph(w, graph, func);
             w.text(")");
         }
         InstOp::CallIntrinsic { func, .. } => {
             w.text(" call_intrinsic(");
-            write_intrinsic_ref_in_graph(w, graph, &func);
+            write_intrinsic_ref_in_graph(w, graph, func);
             w.text(")");
         }
         InstOp::CallLambda { target, .. } => {
@@ -642,12 +642,12 @@ fn write_inst_op_in_graph(w: &mut Writer, graph: &Graph, node: &InstOp) {
         }
         InstOp::CallPure { func, .. } => {
             w.text(" call_pure(");
-            write_intrinsic_ref_in_graph(w, graph, &func);
+            write_intrinsic_ref_in_graph(w, graph, func);
             w.text(")");
         }
         InstOp::Const { value, .. } => {
             w.text(" const(");
-            write_const_ref_in_graph(w, graph, &value);
+            write_const_ref_in_graph(w, graph, value);
             w.text(")");
         }
         InstOp::Copy(_value) => {
@@ -660,12 +660,12 @@ fn write_inst_op_in_graph(w: &mut Writer, graph: &Graph, node: &InstOp) {
         }
         InstOp::ExternAddr { symbol, .. } => {
             w.text(" extern_addr(");
-            write_intrinsic_ref_in_graph(w, graph, &symbol);
+            write_intrinsic_ref_in_graph(w, graph, symbol);
             w.text(")");
         }
         InstOp::LoadFromAddr { width, .. } => {
             w.text(" load_addr([");
-            write_width(w, &width);
+            write_width(w, width);
             w.text("])");
         }
         InstOp::ReadFromSlot { slot, .. } => {
@@ -680,12 +680,12 @@ fn write_inst_op_in_graph(w: &mut Writer, graph: &Graph, node: &InstOp) {
         }
         InstOp::StoreToAddr { width, .. } => {
             w.text(" store_addr([");
-            write_width(w, &width);
+            write_width(w, width);
             w.text("])");
         }
         InstOp::UnaryOp { op, .. } => {
             w.text(" ");
-            write_unary_op_in_graph(w, graph, &op);
+            write_unary_op_in_graph(w, graph, op);
         }
         InstOp::WriteToSlot { slot, .. } => {
             w.text(" write_slot(");
@@ -739,7 +739,7 @@ fn write_operand(w: &mut Writer, node: &Operand) {
     write_reg_class(w, &node.class);
     if let Some(value) = node.fixed.as_ref() {
         w.text("/");
-        write_fixed_reg(w, &value);
+        write_fixed_reg(w, value);
     }
 }
 pub fn format_operand_in_graph_node(graph: &Graph, node: &Operand) -> String {
@@ -754,7 +754,7 @@ fn write_operand_in_graph(w: &mut Writer, graph: &Graph, node: &Operand) {
     write_reg_class(w, &node.class);
     if let Some(value) = node.fixed.as_ref() {
         w.text("/");
-        write_fixed_reg_in_graph(w, graph, &value);
+        write_fixed_reg_in_graph(w, graph, value);
     }
 }
 pub fn format_program(node: &Program) -> String {
@@ -775,7 +775,7 @@ fn write_program(w: &mut Writer, node: &Program) {
             w.text("\n");
         }
         w.with_indent(|w| {
-            write_function(w, &value);
+            write_function(w, value);
         });
     }
     w.text("\n}");
@@ -798,7 +798,7 @@ fn write_program_in_graph(w: &mut Writer, graph: &Graph, node: &Program) {
             w.text("\n");
         }
         w.with_indent(|w| {
-            write_function_in_graph(w, graph, &value);
+            write_function_in_graph(w, graph, value);
         });
     }
     w.text("\n}");
@@ -959,7 +959,7 @@ fn write_unary_op(w: &mut Writer, node: &UnaryOp) {
     match node {
         UnaryOp::SignExtend { from_width, .. } => {
             w.text("SignExtend ");
-            write_width(w, &from_width);
+            write_width(w, from_width);
         }
     }
 }
@@ -973,7 +973,7 @@ fn write_unary_op_in_graph(w: &mut Writer, graph: &Graph, node: &UnaryOp) {
     match node {
         UnaryOp::SignExtend { from_width, .. } => {
             w.text("SignExtend ");
-            write_width(w, &from_width);
+            write_width(w, from_width);
         }
     }
 }

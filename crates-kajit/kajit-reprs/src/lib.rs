@@ -4,7 +4,6 @@ use chumsky::prelude::Rich;
 pub mod asm;
 mod generated;
 pub mod hir;
-pub mod hir_legacy;
 pub mod mir;
 
 pub use generated::*;

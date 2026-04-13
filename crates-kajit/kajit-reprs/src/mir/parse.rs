@@ -183,14 +183,14 @@ fn parse_root_value_rich(
     .then_ignore(just("]").padded()))
     .map_with(
         move |((((((docs, id), params), insts), term), preds), succs), e| Block {
-            docs: docs,
-            id: id,
-            insts: insts,
-            params: params,
-            preds: preds,
+            docs,
+            id,
+            insts,
+            params,
+            preds,
             prov: prov_from_span(e.span(), file_id),
-            succs: succs,
-            term: term,
+            succs,
+            term,
         },
     )
     .boxed();
@@ -222,13 +222,13 @@ fn parse_root_value_rich(
     let const_ref_parser = choice((
         ((just("@").padded()).ignore_then(symbol_parser.clone())).map_with(move |name, e| {
             ConstRef::Named {
-                name: name,
+                name,
                 prov: prov_from_span(e.span(), file_id),
             }
         }),
         (nat_parser.clone()).map_with(move |value, e| ConstRef::Value {
             prov: prov_from_span(e.span(), file_id),
-            value: value,
+            value,
         }),
     ))
     .boxed();
@@ -243,8 +243,8 @@ fn parse_root_value_rich(
     ))
     .then_ignore(just("]").padded()))
     .map_with(move |(docs, args), e| DataArgsLine {
-        args: args,
-        docs: docs,
+        args,
+        docs,
         prov: prov_from_span(e.span(), file_id),
     })
     .boxed();
@@ -260,21 +260,21 @@ fn parse_root_value_rich(
     ))
     .then_ignore(just("]").padded()))
     .map_with(move |(docs, results), e| DataResultsLine {
-        docs: docs,
+        docs,
         prov: prov_from_span(e.span(), file_id),
-        results: results,
+        results,
     })
     .boxed();
     let edge_arg_parser = choice((
         (v_reg_parser.clone()).map_with(move |vreg, e| EdgeArg::Identity {
             prov: prov_from_span(e.span(), file_id),
-            vreg: vreg,
+            vreg,
         }),
         (((v_reg_parser.clone()).then_ignore(just("=>").padded())).then(v_reg_parser.clone()))
             .map_with(move |(target, source), e| EdgeArg::Mapped {
                 prov: prov_from_span(e.span(), file_id),
-                source: source,
-                target: target,
+                source,
+                target,
             }),
     ))
     .boxed();
@@ -297,30 +297,30 @@ fn parse_root_value_rich(
     ))
     .then_ignore(just("]").padded()))
     .map_with(move |((((docs, id), from), to), args), e| Edge {
-        args: args,
-        docs: docs,
-        from: from,
-        id: id,
+        args,
+        docs,
+        from,
+        id,
         prov: prov_from_span(e.span(), file_id),
-        to: to,
+        to,
     })
     .boxed();
     let fixed_reg_parser = choice((
         ((just("arg").padded()).ignore_then(nat_parser.clone())).map_with(move |index, e| {
             FixedReg::AbiArg {
-                index: index,
+                index,
                 prov: prov_from_span(e.span(), file_id),
             }
         }),
         ((just("ret").padded()).ignore_then(nat_parser.clone())).map_with(move |index, e| {
             FixedReg::AbiRet {
-                index: index,
+                index,
                 prov: prov_from_span(e.span(), file_id),
             }
         }),
         ((just("hw").padded()).ignore_then(nat_parser.clone())).map_with(move |index, e| {
             FixedReg::HwReg {
-                index: index,
+                index,
                 prov: prov_from_span(e.span(), file_id),
             }
         }),
@@ -329,13 +329,13 @@ fn parse_root_value_rich(
     let intrinsic_ref_parser = choice((
         ((just("@").padded()).ignore_then(symbol_parser.clone())).map_with(move |name, e| {
             IntrinsicRef::Named {
-                name: name,
+                name,
                 prov: prov_from_span(e.span(), file_id),
             }
         }),
         (nat_parser.clone()).map_with(move |value, e| IntrinsicRef::Address {
             prov: prov_from_span(e.span(), file_id),
-            value: value,
+            value,
         }),
     ))
     .boxed();
@@ -380,7 +380,7 @@ fn parse_root_value_rich(
     ))
     .then_ignore(just("}").padded()))
     .map_with(move |from_width, e| UnaryOp::SignExtend {
-        from_width: from_width,
+        from_width,
         prov: prov_from_span(e.span(), file_id),
     }))
     .boxed();
@@ -389,12 +389,12 @@ fn parse_root_value_rich(
             .then_ignore(just(")").padded()))
         .map_with(move |value, e| InstOp::Const {
             prov: prov_from_span(e.span(), file_id),
-            value: value,
+            value,
         }),
         (((just("data_addr(").padded()).ignore_then(blob_id_parser.clone()))
             .then_ignore(just(")").padded()))
         .map_with(move |blob_id, e| InstOp::DataAddr {
-            blob_id: blob_id,
+            blob_id,
             prov: prov_from_span(e.span(), file_id),
         }),
         (((just("extern_addr(").padded())
@@ -402,14 +402,14 @@ fn parse_root_value_rich(
         .then_ignore(just(")").padded()))
         .map_with(move |symbol, e| InstOp::ExternAddr {
             prov: prov_from_span(e.span(), file_id),
-            symbol: symbol,
+            symbol,
         }),
         (bin_op_kind_parser.clone()).map_with(move |op, e| InstOp::BinOp {
-            op: op,
+            op,
             prov: prov_from_span(e.span(), file_id),
         }),
         ((unary_op_parser.clone()).map(Box::new)).map_with(move |op, e| InstOp::UnaryOp {
-            op: op,
+            op,
             prov: prov_from_span(e.span(), file_id),
         }),
         (just("copy").to(()))
@@ -422,58 +422,58 @@ fn parse_root_value_rich(
         (((just("stack_alloc(").padded()).ignore_then(stack_alloc_id_parser.clone()))
             .then_ignore(just(")").padded()))
         .map_with(move |id, e| InstOp::StackAlloc {
-            id: id,
+            id,
             prov: prov_from_span(e.span(), file_id),
         }),
         (((just("store_addr([").padded()).ignore_then(width_parser.clone()))
             .then_ignore(just("])").padded()))
         .map_with(move |width, e| InstOp::StoreToAddr {
             prov: prov_from_span(e.span(), file_id),
-            width: width,
+            width,
         }),
         (((just("load_addr([").padded()).ignore_then(width_parser.clone()))
             .then_ignore(just("])").padded()))
         .map_with(move |width, e| InstOp::LoadFromAddr {
             prov: prov_from_span(e.span(), file_id),
-            width: width,
+            width,
         }),
         (((just("write_slot(").padded()).ignore_then(slot_id_parser.clone()))
             .then_ignore(just(")").padded()))
         .map_with(move |slot, e| InstOp::WriteToSlot {
             prov: prov_from_span(e.span(), file_id),
-            slot: slot,
+            slot,
         }),
         (((just("read_slot(").padded()).ignore_then(slot_id_parser.clone()))
             .then_ignore(just(")").padded()))
         .map_with(move |slot, e| InstOp::ReadFromSlot {
             prov: prov_from_span(e.span(), file_id),
-            slot: slot,
+            slot,
         }),
         (((just("call_intrinsic(").padded())
             .ignore_then((intrinsic_ref_parser.clone()).map(Box::new)))
         .then_ignore(just(")").padded()))
         .map_with(move |func, e| InstOp::CallIntrinsic {
-            func: func,
+            func,
             prov: prov_from_span(e.span(), file_id),
         }),
         (((just("call_pure(").padded()).ignore_then((intrinsic_ref_parser.clone()).map(Box::new)))
             .then_ignore(just(")").padded()))
         .map_with(move |func, e| InstOp::CallPure {
-            func: func,
+            func,
             prov: prov_from_span(e.span(), file_id),
         }),
         (((just("call_effect(").padded())
             .ignore_then((intrinsic_ref_parser.clone()).map(Box::new)))
         .then_ignore(just(")").padded()))
         .map_with(move |func, e| InstOp::CallEffect {
-            func: func,
+            func,
             prov: prov_from_span(e.span(), file_id),
         }),
         (((just("call_lambda(@").padded()).ignore_then(lambda_id_parser.clone()))
             .then_ignore(just(")").padded()))
         .map_with(move |target, e| InstOp::CallLambda {
             prov: prov_from_span(e.span(), file_id),
-            target: target,
+            target,
         }),
     ))
     .boxed();
@@ -488,10 +488,10 @@ fn parse_root_value_rich(
     .then(reg_class_parser.clone()))
     .then(((just("/").padded()).ignore_then((fixed_reg_parser.clone()).map(Box::new))).or_not()))
     .map_with(move |((vreg, class), fixed), e| Operand {
-        class: class,
-        fixed: fixed,
+        class,
+        fixed,
         prov: prov_from_span(e.span(), file_id),
-        vreg: vreg,
+        vreg,
     })
     .boxed();
     let inst_parser = (((((((((doc_block()).then_ignore(just("inst").padded()))
@@ -519,13 +519,13 @@ fn parse_root_value_rich(
     .then(((just("!").padded()).ignore_then(clobber_kind_parser.clone())).or_not()))
     .map_with(
         move |(((((docs, id), defs), op), uses), clobbers), e| Inst {
-            clobbers: clobbers,
-            defs: defs,
-            docs: docs,
-            id: id,
-            op: op,
+            clobbers,
+            defs,
+            docs,
+            id,
+            op,
             prov: prov_from_span(e.span(), file_id),
-            uses: uses,
+            uses,
         },
     )
     .boxed();
@@ -535,7 +535,7 @@ fn parse_root_value_rich(
         .then_ignore(just(":").padded()))
         .then_ignore(just("return").padded()))
         .map_with(move |id, e| Terminator::Return {
-            id: id,
+            id,
             prov: prov_from_span(e.span(), file_id),
         }),
         ((((((just("term").padded())
@@ -545,8 +545,8 @@ fn parse_root_value_rich(
         .then_ignore(just("e").padded()))
         .then(edge_id_parser.clone()))
         .map_with(move |(id, edge), e| Terminator::Branch {
-            edge: edge,
-            id: id,
+            edge,
+            id,
             prov: prov_from_span(e.span(), file_id),
         }),
         ((((((((((((just("term").padded())
@@ -563,11 +563,11 @@ fn parse_root_value_rich(
         .then(edge_id_parser.clone()))
         .map_with(
             move |(((id, cond), taken), fallthrough), e| Terminator::BranchIf {
-                cond: cond,
-                fallthrough: fallthrough,
-                id: id,
+                cond,
+                fallthrough,
+                id,
                 prov: prov_from_span(e.span(), file_id),
-                taken: taken,
+                taken,
             },
         ),
         ((((((((((((just("term").padded())
@@ -584,11 +584,11 @@ fn parse_root_value_rich(
         .then(edge_id_parser.clone()))
         .map_with(
             move |(((id, cond), taken), fallthrough), e| Terminator::BranchIfZero {
-                cond: cond,
-                fallthrough: fallthrough,
-                id: id,
+                cond,
+                fallthrough,
+                id,
                 prov: prov_from_span(e.span(), file_id),
-                taken: taken,
+                taken,
             },
         ),
         ((((((((((((just("term").padded())
@@ -611,11 +611,11 @@ fn parse_root_value_rich(
         .then(edge_id_parser.clone()))
         .map_with(
             move |(((id, predicate), targets), default), e| Terminator::JumpTable {
-                default: default,
-                id: id,
-                predicate: predicate,
+                default,
+                id,
+                predicate,
                 prov: prov_from_span(e.span(), file_id),
-                targets: targets,
+                targets,
             },
         ),
     ))
@@ -698,17 +698,17 @@ fn parse_root_value_rich(
             edges,
         ),
               e| Function {
-            blocks: blocks,
-            data_args: data_args,
-            data_results: data_results,
-            docs: docs,
-            edges: edges,
-            entry: entry,
-            function_id: function_id,
-            insts: insts,
-            lambda_id: lambda_id,
+            blocks,
+            data_args,
+            data_results,
+            docs,
+            edges,
+            entry,
+            function_id,
+            insts,
+            lambda_id,
             prov: prov_from_span(e.span(), file_id),
-            terms: terms,
+            terms,
         },
     )
     .boxed();
@@ -759,11 +759,11 @@ fn parse_root_value_rich(
     .then_ignore(just("}").padded()))
     .map_with(
         move |(((docs, vreg_count), slot_count), functions), e| Program {
-            docs: docs,
-            functions: functions,
+            docs,
+            functions,
             prov: prov_from_span(e.span(), file_id),
-            slot_count: slot_count,
-            vreg_count: vreg_count,
+            slot_count,
+            vreg_count,
         },
     )
     .boxed();

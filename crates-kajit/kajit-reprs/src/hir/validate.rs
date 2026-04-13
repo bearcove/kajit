@@ -7,7 +7,7 @@ use super::*;
 struct ValidationContext {}
 fn validate_block(value: &Block, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     for value in value.statements.iter() {
-        validate_stmt(&value, ctx, errors);
+        validate_stmt(value, ctx, errors);
     }
 }
 fn validate_expr(value: &Expr, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
@@ -15,20 +15,20 @@ fn validate_expr(value: &Expr, ctx: &mut ValidationContext, errors: &mut Vec<Str
         Expr::Binary {
             lhs, op, prov, rhs, ..
         } => {
-            validate_expr(&lhs, ctx, errors);
-            validate_expr(&rhs, ctx, errors);
+            validate_expr(lhs, ctx, errors);
+            validate_expr(rhs, ctx, errors);
         }
         Expr::Call {
             args, callee, prov, ..
         } => {
             for value in args.iter() {
-                validate_expr(&value, ctx, errors);
+                validate_expr(value, ctx, errors);
             }
         }
         Expr::Field {
             base, field, prov, ..
         } => {
-            validate_expr(&base, ctx, errors);
+            validate_expr(base, ctx, errors);
         }
         Expr::Literal { prov, value, .. } => {
             let _ = (ctx, errors);
@@ -42,10 +42,10 @@ fn validate_function(value: &Function, ctx: &mut ValidationContext, errors: &mut
     validate_block(&value.body, ctx, errors);
     if let Some(value) = value.docs.as_ref() {}
     for value in value.locals.iter() {
-        validate_local(&value, ctx, errors);
+        validate_local(value, ctx, errors);
     }
     for value in value.params.iter() {
-        validate_param(&value, ctx, errors);
+        validate_param(value, ctx, errors);
     }
 }
 fn validate_local(value: &Local, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
@@ -54,10 +54,10 @@ fn validate_local(value: &Local, ctx: &mut ValidationContext, errors: &mut Vec<S
 fn validate_module(value: &Module, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     if let Some(value) = value.docs.as_ref() {}
     for value in value.functions.iter() {
-        validate_function(&value, ctx, errors);
+        validate_function(value, ctx, errors);
     }
     for value in value.type_defs.iter() {
-        validate_type_def(&value, ctx, errors);
+        validate_type_def(value, ctx, errors);
     }
 }
 fn validate_param(value: &Param, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
@@ -68,7 +68,7 @@ fn validate_place(value: &Place, ctx: &mut ValidationContext, errors: &mut Vec<S
         Place::Field {
             base, field, prov, ..
         } => {
-            validate_place(&base, ctx, errors);
+            validate_place(base, ctx, errors);
         }
         Place::Local { name, prov, .. } => {
             let _ = (ctx, errors);
@@ -80,11 +80,11 @@ fn validate_stmt(value: &Stmt, ctx: &mut ValidationContext, errors: &mut Vec<Str
         Stmt::Assign {
             place, prov, value, ..
         } => {
-            validate_place(&place, ctx, errors);
-            validate_expr(&value, ctx, errors);
+            validate_place(place, ctx, errors);
+            validate_expr(value, ctx, errors);
         }
         Stmt::Expr { prov, value, .. } => {
-            validate_expr(&value, ctx, errors);
+            validate_expr(value, ctx, errors);
         }
         Stmt::If {
             condition,
@@ -93,21 +93,21 @@ fn validate_stmt(value: &Stmt, ctx: &mut ValidationContext, errors: &mut Vec<Str
             then,
             ..
         } => {
-            validate_expr(&condition, ctx, errors);
+            validate_expr(condition, ctx, errors);
             if let Some(value) = r#else.as_ref() {
-                validate_block(&value, ctx, errors);
+                validate_block(value, ctx, errors);
             }
-            validate_block(&then, ctx, errors);
+            validate_block(then, ctx, errors);
         }
         Stmt::Init {
             place, prov, value, ..
         } => {
-            validate_place(&place, ctx, errors);
-            validate_expr(&value, ctx, errors);
+            validate_place(place, ctx, errors);
+            validate_expr(value, ctx, errors);
         }
         Stmt::Return { prov, value, .. } => {
             if let Some(value) = value.as_ref() {
-                validate_expr(&value, ctx, errors);
+                validate_expr(value, ctx, errors);
             }
         }
     }

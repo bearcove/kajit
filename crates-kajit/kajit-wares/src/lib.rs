@@ -557,7 +557,7 @@ fn add_target_arch_flags(
             TargetArch::Aarch64 => "arm64",
             TargetArch::X86_64 => "x86_64",
         });
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(target_os = "macos"))]

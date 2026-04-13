@@ -64,25 +64,25 @@ fn write_a64_item(w: &mut Writer, node: &A64Item) {
         A64Item::AddImm {
             imm, op, rd, rn, ..
         } => {
-            write_add_keyword(w, &op);
+            write_add_keyword(w, op);
             w.text(" ");
-            write_a64_reg(w, &rd);
+            write_a64_reg(w, rd);
             w.text(", ");
-            write_a64_reg(w, &rn);
+            write_a64_reg(w, rn);
             w.text(", ");
             w.text(&imm.value.to_string());
         }
         A64Item::AddReg { op, rd, rm, rn, .. } => {
-            write_add_keyword(w, &op);
+            write_add_keyword(w, op);
             w.text(" ");
-            write_a64_reg(w, &rd);
+            write_a64_reg(w, rd);
             w.text(", ");
-            write_a64_reg(w, &rn);
+            write_a64_reg(w, rn);
             w.text(", ");
-            write_a64_reg(w, &rm);
+            write_a64_reg(w, rm);
         }
         A64Item::B { op, target, .. } => {
-            write_b_keyword(w, &op);
+            write_b_keyword(w, op);
             w.text(" ");
             w.text(&target.text);
         }
@@ -91,33 +91,33 @@ fn write_a64_item(w: &mut Writer, node: &A64Item) {
             w.text(":");
         }
         A64Item::Mov { op, rd, rm, .. } => {
-            write_mov_keyword(w, &op);
+            write_mov_keyword(w, op);
             w.text(" ");
-            write_a64_reg(w, &rd);
+            write_a64_reg(w, rd);
             w.text(", ");
-            write_a64_reg(w, &rm);
+            write_a64_reg(w, rm);
         }
         A64Item::Movz { imm, op, rd, .. } => {
-            write_movz_keyword(w, &op);
+            write_movz_keyword(w, op);
             w.text(" ");
-            write_a64_reg(w, &rd);
+            write_a64_reg(w, rd);
             w.text(", ");
             w.text(&imm.value.to_string());
         }
         A64Item::Nop { op, .. } => {
-            write_nop_keyword(w, &op);
+            write_nop_keyword(w, op);
         }
         A64Item::Ret { op, .. } => {
-            write_ret_keyword(w, &op);
+            write_ret_keyword(w, op);
         }
         A64Item::SubReg { op, rd, rm, rn, .. } => {
-            write_sub_keyword(w, &op);
+            write_sub_keyword(w, op);
             w.text(" ");
-            write_a64_reg(w, &rd);
+            write_a64_reg(w, rd);
             w.text(", ");
-            write_a64_reg(w, &rn);
+            write_a64_reg(w, rn);
             w.text(", ");
-            write_a64_reg(w, &rm);
+            write_a64_reg(w, rm);
         }
     }
 }
@@ -222,9 +222,9 @@ fn write_program(w: &mut Writer, node: &Program) {
             keyword,
             ..
         } => {
-            write_asm_keyword(w, &keyword);
+            write_asm_keyword(w, keyword);
             w.text(" ");
-            write_a_arch64_dialect_keyword(w, &dialect);
+            write_a_arch64_dialect_keyword(w, dialect);
             w.text(" ");
             w.text("{");
             w.text("\n");
@@ -233,7 +233,7 @@ fn write_program(w: &mut Writer, node: &Program) {
                     w.text("\n");
                 }
                 w.with_indent(|w| {
-                    write_a64_item(w, &value);
+                    write_a64_item(w, value);
                 });
             }
             w.text("\n}");
@@ -244,9 +244,9 @@ fn write_program(w: &mut Writer, node: &Program) {
             keyword,
             ..
         } => {
-            write_asm_keyword(w, &keyword);
+            write_asm_keyword(w, keyword);
             w.text(" ");
-            write_x86_64_dialect_keyword(w, &dialect);
+            write_x86_64_dialect_keyword(w, dialect);
             w.text(" ");
             w.text("{");
             w.text("\n");
@@ -255,7 +255,7 @@ fn write_program(w: &mut Writer, node: &Program) {
                     w.text("\n");
                 }
                 w.with_indent(|w| {
-                    write_x64_item(w, &value);
+                    write_x64_item(w, value);
                 });
             }
             w.text("\n}");
@@ -286,21 +286,21 @@ pub fn format_x64_item(node: &X64Item) -> String {
 fn write_x64_item(w: &mut Writer, node: &X64Item) {
     match node {
         X64Item::AddImm { imm, op, rd, .. } => {
-            write_add_keyword(w, &op);
+            write_add_keyword(w, op);
             w.text(" ");
-            write_x64_reg(w, &rd);
+            write_x64_reg(w, rd);
             w.text(", ");
             w.text(&imm.value.to_string());
         }
         X64Item::AddReg { op, rd, rm, .. } => {
-            write_add_keyword(w, &op);
+            write_add_keyword(w, op);
             w.text(" ");
-            write_x64_reg(w, &rd);
+            write_x64_reg(w, rd);
             w.text(", ");
-            write_x64_reg(w, &rm);
+            write_x64_reg(w, rm);
         }
         X64Item::Jmp { op, target, .. } => {
-            write_jmp_keyword(w, &op);
+            write_jmp_keyword(w, op);
             w.text(" ");
             w.text(&target.text);
         }
@@ -309,31 +309,31 @@ fn write_x64_item(w: &mut Writer, node: &X64Item) {
             w.text(":");
         }
         X64Item::MovImm { imm, op, rd, .. } => {
-            write_mov_keyword(w, &op);
+            write_mov_keyword(w, op);
             w.text(" ");
-            write_x64_reg(w, &rd);
+            write_x64_reg(w, rd);
             w.text(", ");
             w.text(&imm.value.to_string());
         }
         X64Item::MovReg { op, rd, rm, .. } => {
-            write_mov_keyword(w, &op);
+            write_mov_keyword(w, op);
             w.text(" ");
-            write_x64_reg(w, &rd);
+            write_x64_reg(w, rd);
             w.text(", ");
-            write_x64_reg(w, &rm);
+            write_x64_reg(w, rm);
         }
         X64Item::Nop { op, .. } => {
-            write_nop_keyword(w, &op);
+            write_nop_keyword(w, op);
         }
         X64Item::Ret { op, .. } => {
-            write_ret_keyword(w, &op);
+            write_ret_keyword(w, op);
         }
         X64Item::SubReg { op, rd, rm, .. } => {
-            write_sub_keyword(w, &op);
+            write_sub_keyword(w, op);
             w.text(" ");
-            write_x64_reg(w, &rd);
+            write_x64_reg(w, rd);
             w.text(", ");
-            write_x64_reg(w, &rm);
+            write_x64_reg(w, rm);
         }
     }
 }

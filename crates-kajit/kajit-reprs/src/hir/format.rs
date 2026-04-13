@@ -67,7 +67,7 @@ fn write_block(w: &mut Writer, node: &Block) {
             w.text("\n");
         }
         w.with_indent(|w| {
-            write_stmt(w, &value);
+            write_stmt(w, value);
         });
     }
     w.text("\n}");
@@ -90,7 +90,7 @@ fn write_expr(w: &mut Writer, node: &Expr) {
                 if idx != 0 {
                     w.text(", ");
                 }
-                write_expr(w, &value);
+                write_expr(w, value);
             }
             w.text(")");
         }
@@ -118,7 +118,7 @@ fn write_function(w: &mut Writer, node: &Function) {
         if idx != 0 {
             w.text(", ");
         }
-        write_param(w, &value);
+        write_param(w, value);
     }
     w.text(") -> ");
     w.text(&node.return_type.text);
@@ -145,7 +145,7 @@ fn write_module(w: &mut Writer, node: &Module) {
             w.text("\n");
         }
         w.with_indent(|w| {
-            write_function(w, &value);
+            write_function(w, value);
         });
     }
     w.text("\n}");
@@ -186,7 +186,7 @@ fn write_stmt(w: &mut Writer, node: &Stmt) {
             w.text(&format!("{:?}", other));
         }
         Stmt::Expr { value, .. } => {
-            write_expr(w, &value);
+            write_expr(w, value);
         }
         other @ Stmt::If { .. } => {
             w.text(&format!("{:?}", other));
@@ -198,7 +198,7 @@ fn write_stmt(w: &mut Writer, node: &Stmt) {
             w.text("return");
             if let Some(value) = value.as_ref() {
                 w.text(" ");
-                write_expr(w, &value);
+                write_expr(w, value);
             }
         }
     }

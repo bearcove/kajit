@@ -4,11 +4,6 @@ use std::process::{Command, Stdio};
 
 use proc_macro2::TokenStream;
 
-#[cfg(feature = "debug-cfg-mir")]
-use kajit::ir::{LambdaId, VReg};
-#[cfg(feature = "debug-cfg-mir")]
-use kajit_mir::DebugCfgMirCommand;
-
 mod cases;
 
 struct Case {
@@ -152,17 +147,8 @@ fn main() {
             let sanitize = !command_args.iter().any(|a| a == "--no-sanitize");
             install(dev, sanitize);
         }
-        Some("gen") => {
-            generate_synthetic();
-        }
-        Some("corpus-cfg-mir") => print_corpus_cfg_mir(&command_args),
-        Some("corpus-input") => print_corpus_input(&command_args),
-        Some("minimize-cfg-mir") => minimize_cfg_mir(&command_args),
-        Some("debug-cfg-mir") => debug_cfg_mir_command(&command_args),
         _ => {
-            eprintln!(
-                "usage: cargo run --manifest-path xtask/Cargo.toml -- <install|gen|corpus-cfg-mir|corpus-input|minimize-cfg-mir|debug-cfg-mir>"
-            );
+            eprintln!("usage: cargo xtask install");
             std::process::exit(2);
         }
     }
@@ -278,133 +264,6 @@ fn parse_debug_cfg_mir_args(args: &[String]) -> Option<DebugCfgMirArgs> {
         input_label,
         corpus_test,
     })
-}
-
-#[cfg(feature = "debug-cfg-mir")]
-fn debug_cfg_mir_locally(parsed: &DebugCfgMirArgs) -> Result<String, String> {
-    let text = fs::read_to_string(&parsed.path)
-        .map_err(|err| format!("failed to read {}: {err}", parsed.path))?;
-    let registry = kajit::known_intrinsic_registry();
-    let program = kajit_reprs::mir::parse::parse_cfg_mir_with_registry(&text, &registry).map_err(|err| {
-        format!(
-            "failed to parse CFG-MIR from {}: {err}\nIf this file contains shape-derived symbols, rerun with --corpus-test <exact-corpus-test-name>.",
-            parsed.path
-        )
-    })?;
-    kajit_mir::run_debug_cfg_mir_command_with_registry(
-        &program,
-        &parsed.input,
-        &parsed.command,
-        Some(&registry),
-    )
-}
-
-#[cfg(feature = "debug-cfg-mir")]
-fn debug_cfg_mir_via_corpus_test(
-    parsed: &DebugCfgMirArgs,
-    test_name: &str,
-) -> Result<String, String> {
-    let filter = format!("test(={test_name})");
-    let root = workspace_root();
-    let path = fs::canonicalize(&parsed.path)
-        .map_err(|err| format!("failed to canonicalize {}: {err}", parsed.path))?;
-
-    let list_output = Command::new("cargo")
-        .args([
-            "nextest", "list", "-p", "kajit", "--test", "corpus", "-E", &filter,
-        ])
-        .current_dir(&root)
-        .output()
-        .map_err(|err| format!("failed to run cargo nextest list: {err}"))?;
-    if !list_output.status.success() {
-        let stderr = String::from_utf8_lossy(&list_output.stderr);
-        return Err(format!("cargo nextest list failed:\n{stderr}"));
-    }
-
-    let mut command = Command::new("cargo");
-    command
-        .args([
-            "nextest",
-            "run",
-            "-p",
-            "kajit",
-            "--test",
-            "corpus",
-            "--run-ignored",
-            "all",
-            "--no-capture",
-            "-E",
-            &filter,
-        ])
-        .env("KAJIT_DEBUG_CFG_MIR", &path)
-        .env(
-            "KAJIT_DEBUG_CFG_MIR_COMMAND",
-            debug_cfg_mir_command_name(&parsed.command),
-        )
-        .current_dir(&root);
-    match &parsed.command {
-        DebugCfgMirCommand::WhyVreg { vreg } => {
-            command.env("KAJIT_DEBUG_CFG_MIR_VREG", vreg.index().to_string());
-        }
-        DebugCfgMirCommand::Block { lambda, block } => {
-            command.env("KAJIT_DEBUG_CFG_MIR_BLOCK", block.0.to_string());
-            command.env("KAJIT_DEBUG_CFG_MIR_LAMBDA", lambda.index().to_string());
-        }
-        DebugCfgMirCommand::Run | DebugCfgMirCommand::Trace | DebugCfgMirCommand::LldbRef => {}
-    }
-
-    let run_output = command
-        .output()
-        .map_err(|err| format!("failed to run cargo nextest run: {err}"))?;
-
-    let stdout = String::from_utf8_lossy(&run_output.stdout);
-    let stderr = String::from_utf8_lossy(&run_output.stderr);
-    let Some(output) = extract_case_debug_cfg_mir_output(&stdout)
-        .or_else(|| extract_case_debug_cfg_mir_output(&stderr))
-    else {
-        let mut message = if !run_output.status.success() {
-            format!(
-                "cargo nextest run failed before emitting debug CFG-MIR output for `{test_name}`"
-            )
-        } else {
-            format!("debug CFG-MIR output block was not found for `{test_name}`")
-        };
-        if !stdout.trim().is_empty() {
-            message.push_str("\nstdout:\n");
-            message.push_str(&stdout);
-        }
-        if !stderr.trim().is_empty() {
-            message.push_str("\nstderr:\n");
-            message.push_str(&stderr);
-        }
-        return Err(message);
-    };
-
-    Ok(output)
-}
-
-#[cfg(feature = "debug-cfg-mir")]
-fn debug_cfg_mir_command_name(command: &DebugCfgMirCommand) -> &'static str {
-    match command {
-        DebugCfgMirCommand::Run => "run",
-        DebugCfgMirCommand::Trace => "trace",
-        DebugCfgMirCommand::LldbRef => "lldb-ref",
-        DebugCfgMirCommand::WhyVreg { .. } => "why-vreg",
-        DebugCfgMirCommand::Block { .. } => "block",
-    }
-}
-
-#[cfg(feature = "debug-cfg-mir")]
-fn debug_cfg_mir_command(args: &[String]) {
-    debug_cfg_mir(args);
-}
-
-#[cfg(not(feature = "debug-cfg-mir"))]
-fn debug_cfg_mir_command(_args: &[String]) {
-    eprintln!(
-        "debug-cfg-mir support is disabled in this xtask build; rebuild xtask with --features debug-cfg-mir"
-    );
-    std::process::exit(2);
 }
 
 fn minimize_cfg_mir(args: &[String]) {

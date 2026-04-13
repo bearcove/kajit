@@ -145,15 +145,15 @@ fn parse_root_value_rich(
             .then_ignore(ws()))
         .then_ignore(just(":").padded()))
         .map_with(move |name, e| A64Item::Label {
-            name: name,
+            name,
             prov: prov_from_span(e.span(), file_id),
         }),
         ((ret_keyword_parser.clone()).map(Box::new)).map_with(move |op, e| A64Item::Ret {
-            op: op,
+            op,
             prov: prov_from_span(e.span(), file_id),
         }),
         ((nop_keyword_parser.clone()).map(Box::new)).map_with(move |op, e| A64Item::Nop {
-            op: op,
+            op,
             prov: prov_from_span(e.span(), file_id),
         }),
         (((((movz_keyword_parser.clone()).map(Box::new))
@@ -174,20 +174,20 @@ fn parse_root_value_rich(
                 .then_ignore(ws()),
         ))
         .map_with(move |((op, rd), imm), e| A64Item::Movz {
-            imm: imm,
-            op: op,
+            imm,
+            op,
             prov: prov_from_span(e.span(), file_id),
-            rd: rd,
+            rd,
         }),
         (((((mov_keyword_parser.clone()).map(Box::new))
             .then((a64_reg_parser.clone()).map(Box::new)))
         .then_ignore(just(",").padded()))
         .then((a64_reg_parser.clone()).map(Box::new)))
         .map_with(move |((op, rd), rm), e| A64Item::Mov {
-            op: op,
+            op,
             prov: prov_from_span(e.span(), file_id),
-            rd: rd,
-            rm: rm,
+            rd,
+            rm,
         }),
         (((((((add_keyword_parser.clone()).map(Box::new))
             .then((a64_reg_parser.clone()).map(Box::new)))
@@ -209,11 +209,11 @@ fn parse_root_value_rich(
                 .then_ignore(ws()),
         ))
         .map_with(move |(((op, rd), rn), imm), e| A64Item::AddImm {
-            imm: imm,
-            op: op,
+            imm,
+            op,
             prov: prov_from_span(e.span(), file_id),
-            rd: rd,
-            rn: rn,
+            rd,
+            rn,
         }),
         (((((((add_keyword_parser.clone()).map(Box::new))
             .then((a64_reg_parser.clone()).map(Box::new)))
@@ -222,11 +222,11 @@ fn parse_root_value_rich(
         .then_ignore(just(",").padded()))
         .then((a64_reg_parser.clone()).map(Box::new)))
         .map_with(move |(((op, rd), rn), rm), e| A64Item::AddReg {
-            op: op,
+            op,
             prov: prov_from_span(e.span(), file_id),
-            rd: rd,
-            rm: rm,
-            rn: rn,
+            rd,
+            rm,
+            rn,
         }),
         (((((((sub_keyword_parser.clone()).map(Box::new))
             .then((a64_reg_parser.clone()).map(Box::new)))
@@ -235,11 +235,11 @@ fn parse_root_value_rich(
         .then_ignore(just(",").padded()))
         .then((a64_reg_parser.clone()).map(Box::new)))
         .map_with(move |(((op, rd), rn), rm), e| A64Item::SubReg {
-            op: op,
+            op,
             prov: prov_from_span(e.span(), file_id),
-            rd: rd,
-            rm: rm,
-            rn: rn,
+            rd,
+            rm,
+            rn,
         }),
         (((b_keyword_parser.clone()).map(Box::new)).then(
             token_ident()
@@ -250,9 +250,9 @@ fn parse_root_value_rich(
                 .then_ignore(ws()),
         ))
         .map_with(move |(op, target), e| A64Item::B {
-            op: op,
+            op,
             prov: prov_from_span(e.span(), file_id),
-            target: target,
+            target,
         }),
     ))
     .boxed();
@@ -328,15 +328,15 @@ fn parse_root_value_rich(
             .then_ignore(ws()))
         .then_ignore(just(":").padded()))
         .map_with(move |name, e| X64Item::Label {
-            name: name,
+            name,
             prov: prov_from_span(e.span(), file_id),
         }),
         ((ret_keyword_parser.clone()).map(Box::new)).map_with(move |op, e| X64Item::Ret {
-            op: op,
+            op,
             prov: prov_from_span(e.span(), file_id),
         }),
         ((nop_keyword_parser.clone()).map(Box::new)).map_with(move |op, e| X64Item::Nop {
-            op: op,
+            op,
             prov: prov_from_span(e.span(), file_id),
         }),
         (((((mov_keyword_parser.clone()).map(Box::new))
@@ -357,20 +357,20 @@ fn parse_root_value_rich(
                 .then_ignore(ws()),
         ))
         .map_with(move |((op, rd), imm), e| X64Item::MovImm {
-            imm: imm,
-            op: op,
+            imm,
+            op,
             prov: prov_from_span(e.span(), file_id),
-            rd: rd,
+            rd,
         }),
         (((((mov_keyword_parser.clone()).map(Box::new))
             .then((x64_reg_parser.clone()).map(Box::new)))
         .then_ignore(just(",").padded()))
         .then((x64_reg_parser.clone()).map(Box::new)))
         .map_with(move |((op, rd), rm), e| X64Item::MovReg {
-            op: op,
+            op,
             prov: prov_from_span(e.span(), file_id),
-            rd: rd,
-            rm: rm,
+            rd,
+            rm,
         }),
         (((((add_keyword_parser.clone()).map(Box::new))
             .then((x64_reg_parser.clone()).map(Box::new)))
@@ -390,30 +390,30 @@ fn parse_root_value_rich(
                 .then_ignore(ws()),
         ))
         .map_with(move |((op, rd), imm), e| X64Item::AddImm {
-            imm: imm,
-            op: op,
+            imm,
+            op,
             prov: prov_from_span(e.span(), file_id),
-            rd: rd,
+            rd,
         }),
         (((((add_keyword_parser.clone()).map(Box::new))
             .then((x64_reg_parser.clone()).map(Box::new)))
         .then_ignore(just(",").padded()))
         .then((x64_reg_parser.clone()).map(Box::new)))
         .map_with(move |((op, rd), rm), e| X64Item::AddReg {
-            op: op,
+            op,
             prov: prov_from_span(e.span(), file_id),
-            rd: rd,
-            rm: rm,
+            rd,
+            rm,
         }),
         (((((sub_keyword_parser.clone()).map(Box::new))
             .then((x64_reg_parser.clone()).map(Box::new)))
         .then_ignore(just(",").padded()))
         .then((x64_reg_parser.clone()).map(Box::new)))
         .map_with(move |((op, rd), rm), e| X64Item::SubReg {
-            op: op,
+            op,
             prov: prov_from_span(e.span(), file_id),
-            rd: rd,
-            rm: rm,
+            rd,
+            rm,
         }),
         (((jmp_keyword_parser.clone()).map(Box::new)).then(
             token_ident()
@@ -424,9 +424,9 @@ fn parse_root_value_rich(
                 .then_ignore(ws()),
         ))
         .map_with(move |(op, target), e| X64Item::Jmp {
-            op: op,
+            op,
             prov: prov_from_span(e.span(), file_id),
-            target: target,
+            target,
         }),
     ))
     .boxed();
@@ -444,10 +444,10 @@ fn parse_root_value_rich(
         .then_ignore(just("}").padded()))
         .map_with(
             move |(((docs, keyword), dialect), items), e| Program::AArch64 {
-                dialect: dialect,
-                docs: docs,
-                items: items,
-                keyword: keyword,
+                dialect,
+                docs,
+                items,
+                keyword,
                 prov: prov_from_span(e.span(), file_id),
             },
         ),
@@ -458,10 +458,10 @@ fn parse_root_value_rich(
         .then_ignore(just("}").padded()))
         .map_with(
             move |(((docs, keyword), dialect), items), e| Program::X86_64 {
-                dialect: dialect,
-                docs: docs,
-                items: items,
-                keyword: keyword,
+                dialect,
+                docs,
+                items,
+                keyword,
                 prov: prov_from_span(e.span(), file_id),
             },
         ),

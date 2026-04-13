@@ -39,7 +39,7 @@ fn key_of_terminator(value: &Terminator) -> TermId {
 fn validate_block(value: &Block, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     if let Some(value) = value.docs.as_ref() {}
     for value in value.insts.iter() {
-        if !ctx.inst_ids.iter().rev().any(|ids| ids.contains(&value)) {
+        if !ctx.inst_ids.iter().rev().any(|ids| ids.contains(value)) {
             errors.push(format!(
                 "Block.insts references {:?} but no live Inst collection in scope contains it",
                 value
@@ -48,7 +48,7 @@ fn validate_block(value: &Block, ctx: &mut ValidationContext, errors: &mut Vec<S
     }
     for value in value.params.iter() {}
     for value in value.preds.iter() {
-        if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(&value)) {
+        if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(value)) {
             errors.push(format!(
                 "Block.preds references {:?} but no live Edge collection in scope contains it",
                 value
@@ -56,7 +56,7 @@ fn validate_block(value: &Block, ctx: &mut ValidationContext, errors: &mut Vec<S
         }
     }
     for value in value.succs.iter() {
-        if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(&value)) {
+        if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(value)) {
             errors.push(format!(
                 "Block.succs references {:?} but no live Edge collection in scope contains it",
                 value
@@ -107,7 +107,7 @@ fn validate_data_results_line(
 }
 fn validate_edge(value: &Edge, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     for value in value.args.iter() {
-        validate_edge_arg(&value, ctx, errors);
+        validate_edge_arg(value, ctx, errors);
     }
     if let Some(value) = value.docs.as_ref() {}
     if !ctx
@@ -169,13 +169,13 @@ fn validate_function(value: &Function, ctx: &mut ValidationContext, errors: &mut
     ctx.terminator_ids
         .push(value.terms.iter().map(key_of_terminator).collect());
     for value in value.blocks.iter() {
-        validate_block(&value, ctx, errors);
+        validate_block(value, ctx, errors);
     }
     validate_data_args_line(&value.data_args, ctx, errors);
     validate_data_results_line(&value.data_results, ctx, errors);
     if let Some(value) = value.docs.as_ref() {}
     for value in value.edges.iter() {
-        validate_edge(&value, ctx, errors);
+        validate_edge(value, ctx, errors);
     }
     if !ctx
         .block_ids
@@ -189,7 +189,7 @@ fn validate_function(value: &Function, ctx: &mut ValidationContext, errors: &mut
         ));
     }
     for value in value.terms.iter() {
-        validate_terminator(&value, ctx, errors);
+        validate_terminator(value, ctx, errors);
     }
     ctx.terminator_ids.pop();
     ctx.edge_ids.pop();
@@ -199,14 +199,14 @@ fn validate_inst(value: &Inst, ctx: &mut ValidationContext, errors: &mut Vec<Str
     if let Some(value) = value.clobbers.as_ref() {}
     if let Some(value) = value.defs.as_ref() {
         for value in value.iter() {
-            validate_operand(&value, ctx, errors);
+            validate_operand(value, ctx, errors);
         }
     }
     if let Some(value) = value.docs.as_ref() {}
     validate_inst_op(&value.op, ctx, errors);
     if let Some(value) = value.uses.as_ref() {
         for value in value.iter() {
-            validate_operand(&value, ctx, errors);
+            validate_operand(value, ctx, errors);
         }
     }
 }
@@ -216,19 +216,19 @@ fn validate_inst_op(value: &InstOp, ctx: &mut ValidationContext, errors: &mut Ve
             let _ = (ctx, errors);
         }
         InstOp::CallEffect { func, prov, .. } => {
-            validate_intrinsic_ref(&func, ctx, errors);
+            validate_intrinsic_ref(func, ctx, errors);
         }
         InstOp::CallIntrinsic { func, prov, .. } => {
-            validate_intrinsic_ref(&func, ctx, errors);
+            validate_intrinsic_ref(func, ctx, errors);
         }
         InstOp::CallLambda { prov, target, .. } => {
             let _ = (ctx, errors);
         }
         InstOp::CallPure { func, prov, .. } => {
-            validate_intrinsic_ref(&func, ctx, errors);
+            validate_intrinsic_ref(func, ctx, errors);
         }
         InstOp::Const { prov, value, .. } => {
-            validate_const_ref(&value, ctx, errors);
+            validate_const_ref(value, ctx, errors);
         }
         InstOp::Copy(_inner) => {
             let _ = (ctx, errors);
@@ -237,7 +237,7 @@ fn validate_inst_op(value: &InstOp, ctx: &mut ValidationContext, errors: &mut Ve
             let _ = (ctx, errors);
         }
         InstOp::ExternAddr { prov, symbol, .. } => {
-            validate_intrinsic_ref(&symbol, ctx, errors);
+            validate_intrinsic_ref(symbol, ctx, errors);
         }
         InstOp::LoadFromAddr { prov, width, .. } => {
             let _ = (ctx, errors);
@@ -252,7 +252,7 @@ fn validate_inst_op(value: &InstOp, ctx: &mut ValidationContext, errors: &mut Ve
             let _ = (ctx, errors);
         }
         InstOp::UnaryOp { op, prov, .. } => {
-            validate_unary_op(&op, ctx, errors);
+            validate_unary_op(op, ctx, errors);
         }
         InstOp::WriteToSlot { prov, slot, .. } => {
             let _ = (ctx, errors);
@@ -277,7 +277,7 @@ fn validate_intrinsic_ref(
 }
 fn validate_operand(value: &Operand, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     if let Some(value) = value.fixed.as_ref() {
-        validate_fixed_reg(&value, ctx, errors);
+        validate_fixed_reg(value, ctx, errors);
     }
 }
 fn validate_program(value: &Program, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
@@ -285,14 +285,14 @@ fn validate_program(value: &Program, ctx: &mut ValidationContext, errors: &mut V
         .push(value.functions.iter().map(key_of_function).collect());
     if let Some(value) = value.docs.as_ref() {}
     for value in value.functions.iter() {
-        validate_function(&value, ctx, errors);
+        validate_function(value, ctx, errors);
     }
     ctx.function_ids.pop();
 }
 fn validate_terminator(value: &Terminator, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
     match value {
         Terminator::Branch { edge, id, prov, .. } => {
-            if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(&edge)) {
+            if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(edge)) {
                 errors
                     .push(
                         format!(
@@ -314,7 +314,7 @@ fn validate_terminator(value: &Terminator, ctx: &mut ValidationContext, errors: 
                 .edge_ids
                 .iter()
                 .rev()
-                .any(|ids| ids.contains(&fallthrough))
+                .any(|ids| ids.contains(fallthrough))
             {
                 errors
                     .push(
@@ -324,7 +324,7 @@ fn validate_terminator(value: &Terminator, ctx: &mut ValidationContext, errors: 
                         ),
                     );
             }
-            if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(&taken)) {
+            if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(taken)) {
                 errors
                     .push(
                         format!(
@@ -346,7 +346,7 @@ fn validate_terminator(value: &Terminator, ctx: &mut ValidationContext, errors: 
                 .edge_ids
                 .iter()
                 .rev()
-                .any(|ids| ids.contains(&fallthrough))
+                .any(|ids| ids.contains(fallthrough))
             {
                 errors
                     .push(
@@ -356,7 +356,7 @@ fn validate_terminator(value: &Terminator, ctx: &mut ValidationContext, errors: 
                         ),
                     );
             }
-            if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(&taken)) {
+            if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(taken)) {
                 errors
                     .push(
                         format!(
@@ -374,7 +374,7 @@ fn validate_terminator(value: &Terminator, ctx: &mut ValidationContext, errors: 
             targets,
             ..
         } => {
-            if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(&default)) {
+            if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(default)) {
                 errors
                     .push(
                         format!(
@@ -384,7 +384,7 @@ fn validate_terminator(value: &Terminator, ctx: &mut ValidationContext, errors: 
                     );
             }
             for value in targets.iter() {
-                if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(&value)) {
+                if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(value)) {
                     errors
                         .push(
                             format!(
