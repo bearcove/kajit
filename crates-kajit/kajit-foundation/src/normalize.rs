@@ -3,9 +3,8 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 
 use crate::schema::{
-    ModernReprBody, ModernRuleDecl, NodeDecl, NodeFields, ReprBody, RuleExpr, SupportDecl,
-    SupportVariantDecl, SyntaxExpr, SyntaxObject, SyntaxPayload, TemplateDecl, TemplateSyntaxDecl,
-    TypeUse, documented_doc, documented_name, rule_named_parts,
+    ModernReprBody, ModernRuleDecl, SyntaxExpr, SyntaxObject, SyntaxPayload, TemplateDecl,
+    TemplateSyntaxDecl, documented_doc, documented_name,
 };
 
 #[derive(Debug, Clone)]
@@ -102,10 +101,6 @@ pub(crate) enum NormalizedSupportDecl {
     String,
     Int,
     Id,
-    StringSeq,
-    Unit,
-    Struct(HashMap<String, DocumentedValue<SyntaxTypeUse>>),
-    Enum(Vec<DocumentedValue<String>>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,10 +117,7 @@ pub(crate) enum NormalizedRefKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NormalizedNodeKind {
-    Node,
     Struct,
-    Entity,
-    Slot,
 }
 
 #[derive(Debug, Clone)]
@@ -147,199 +139,6 @@ pub(crate) struct NormalizedRepr {
     pub(crate) common: HashMap<String, SyntaxTypeUse>,
     pub(crate) support: HashMap<String, DocumentedValue<NormalizedSupportDecl>>,
     pub(crate) nodes: HashMap<String, DocumentedValue<NormalizedNodeDecl>>,
-}
-
-fn normalize_support_decl(decl: &SupportDecl) -> Result<NormalizedSupportDecl, String> {
-    match decl {
-        SupportDecl::String => Ok(NormalizedSupportDecl::String),
-        SupportDecl::Int => Ok(NormalizedSupportDecl::Int),
-        SupportDecl::Id => Ok(NormalizedSupportDecl::Id),
-        SupportDecl::StringSeq => Ok(NormalizedSupportDecl::StringSeq),
-        SupportDecl::Unit => Ok(NormalizedSupportDecl::Unit),
-        SupportDecl::Struct(fields) => Ok(NormalizedSupportDecl::Struct(normalize_node_fields(
-            fields,
-        )?)),
-        SupportDecl::Enum(variants) if !variants.variants.is_empty() => {
-            let mut out = Vec::new();
-            let mut variant_names = variants.variants.keys().collect::<Vec<_>>();
-            variant_names.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-            for name in variant_names {
-                let decl = &variants.variants[name];
-                match decl {
-                    SupportVariantDecl::Unit => {
-                        out.push(DocumentedValue {
-                            value: documented_name(name).to_owned(),
-                            doc: documented_doc(name).map(|lines| lines.to_vec()),
-                        });
-                    }
-                }
-            }
-            Ok(NormalizedSupportDecl::Enum(out))
-        }
-        SupportDecl::Enum(_) => Err("support enum must have at least one variant".to_owned()),
-    }
-}
-
-pub(crate) fn normalize_type_use(ty: &TypeUse) -> Result<SyntaxTypeUse, String> {
-    match ty {
-        TypeUse::Optional(items) if items.len() == 1 => Ok(SyntaxTypeUse::Optional(Box::new(
-            normalize_type_use(&items[0])?,
-        ))),
-        TypeUse::Seq(items) if items.len() == 1 => {
-            Ok(SyntaxTypeUse::Seq(Box::new(normalize_type_use(&items[0])?)))
-        }
-        TypeUse::Arena(items) if (1..=2).contains(&items.len()) => {
-            let item = Box::new(normalize_type_use(&items[0])?);
-            let key = match items.get(1) {
-                None => None,
-                Some(TypeUse::Key(key_items)) if key_items.len() == 1 => match &key_items[0] {
-                    TypeUse::Ref { name: Some(name) } => Some(name.clone()),
-                    _ => return Err("arena key must reference a declared id type".to_owned()),
-                },
-                Some(TypeUse::Key(_)) => {
-                    return Err("arena key must have exactly one item".to_owned());
-                }
-                Some(_) => return Err("arena metadata must be @key(...)".to_owned()),
-            };
-            Ok(SyntaxTypeUse::Arena { item, key })
-        }
-        TypeUse::Pool(items) if (1..=2).contains(&items.len()) => {
-            let item = Box::new(normalize_type_use(&items[0])?);
-            let key = match items.get(1) {
-                None => None,
-                Some(TypeUse::Key(key_items)) if key_items.len() == 1 => match &key_items[0] {
-                    TypeUse::Ref { name: Some(name) } => Some(name.clone()),
-                    _ => return Err("pool key must reference a declared id type".to_owned()),
-                },
-                Some(TypeUse::Key(_)) => {
-                    return Err("pool key must have exactly one item".to_owned());
-                }
-                Some(_) => return Err("pool metadata must be @key(...)".to_owned()),
-            };
-            Ok(SyntaxTypeUse::Pool { item, key })
-        }
-        TypeUse::Order(items) if items.len() == 1 => Ok(SyntaxTypeUse::Order(Box::new(
-            normalize_type_use(&items[0])?,
-        ))),
-        TypeUse::RefTo(items) if items.len() == 2 => {
-            let id = Box::new(normalize_type_use(&items[0])?);
-            let target = match &items[1] {
-                TypeUse::Ref { name: Some(name) } => name.clone(),
-                _ => return Err("ref_to target must name a declared node type".to_owned()),
-            };
-            Ok(SyntaxTypeUse::RefTo { id, target })
-        }
-        TypeUse::Ref { name: Some(name) } => Ok(SyntaxTypeUse::Ref { name: name.clone() }),
-        TypeUse::Ref { name: None } => Err("type reference missing tag name".to_owned()),
-        TypeUse::Optional(_) => Err("optional type must have exactly one item".to_owned()),
-        TypeUse::Seq(_) => Err("seq type must have exactly one item".to_owned()),
-        TypeUse::Arena(_) => Err("arena type must have one item and optional @key(...)".to_owned()),
-        TypeUse::Pool(_) => Err("pool type must have one item and optional @key(...)".to_owned()),
-        TypeUse::Order(_) => Err("order type must have exactly one item".to_owned()),
-        TypeUse::Key(_) => {
-            Err("@key(...) is only valid inside @arena(...) or @pool(...)".to_owned())
-        }
-        TypeUse::RefTo(_) => Err("@ref_to(...) must have id type and target entity".to_owned()),
-    }
-}
-
-pub(crate) fn normalize_rule(rule: &RuleExpr) -> Result<SyntaxRule, String> {
-    match rule {
-        RuleExpr::Seq(items) => Ok(SyntaxRule::Seq(
-            items
-                .iter()
-                .map(normalize_rule)
-                .collect::<Result<Vec<_>, _>>()?,
-        )),
-        RuleExpr::Choice(items) => Ok(SyntaxRule::Choice(
-            items
-                .iter()
-                .map(normalize_rule)
-                .collect::<Result<Vec<_>, _>>()?,
-        )),
-        RuleExpr::Semantic(items) if items.len() == 2 => {
-            let kind = match &items[0] {
-                RuleExpr::Literal(Some(text)) if !text.trim().is_empty() => text.clone(),
-                _ => {
-                    return Err(
-                        "semantic rule kind must be a non-empty literal (for example keyword)"
-                            .to_owned(),
-                    );
-                }
-            };
-            Ok(SyntaxRule::Semantic {
-                kind,
-                inner: Box::new(normalize_rule(&items[1])?),
-            })
-        }
-        RuleExpr::Tag(items) if items.len() == 1 && !items[0].trim().is_empty() => {
-            Ok(SyntaxRule::Tag(items[0].clone()))
-        }
-        RuleExpr::Field(named) => {
-            let (name, inner) = rule_named_parts(named);
-            Ok(SyntaxRule::Field(SyntaxRuleNamed {
-                name: name.to_owned(),
-                inner: Box::new(normalize_rule(inner)?),
-            }))
-        }
-        RuleExpr::Variant(named) => {
-            let (name, inner) = rule_named_parts(named);
-            Ok(SyntaxRule::Variant(SyntaxRuleNamed {
-                name: name.to_owned(),
-                inner: Box::new(normalize_rule(inner)?),
-            }))
-        }
-        RuleExpr::Ref(names) if names.len() == 1 => Ok(SyntaxRule::Ref {
-            name: names[0].clone(),
-        }),
-        RuleExpr::Token(names) if names.len() == 1 => Ok(SyntaxRule::Token {
-            name: names[0].clone(),
-        }),
-        RuleExpr::Optional(items) if items.len() == 1 => Ok(SyntaxRule::Optional {
-            inner: Box::new(normalize_rule(&items[0])?),
-        }),
-        RuleExpr::Repeat(items) if !items.is_empty() => {
-            let sep = if items.len() >= 2 {
-                match &items[1] {
-                    RuleExpr::Literal(Some(text))
-                        if !text.is_empty()
-                            && text
-                                .chars()
-                                .all(|ch| ch == '_' || ch.is_ascii_alphanumeric()) =>
-                    {
-                        Some(SyntaxRepeatSeparator::RuleRef(text.clone()))
-                    }
-                    RuleExpr::Literal(Some(text)) => {
-                        Some(SyntaxRepeatSeparator::Literal(text.clone()))
-                    }
-                    RuleExpr::Ref(names) if names.len() == 1 => {
-                        Some(SyntaxRepeatSeparator::RuleRef(names[0].clone()))
-                    }
-                    _ => {
-                        return Err(
-                            "repeat separator must be a literal token text or rule name".to_owned()
-                        );
-                    }
-                }
-            } else {
-                None
-            };
-            Ok(SyntaxRule::Repeat {
-                item: Box::new(normalize_rule(&items[0])?),
-                sep,
-            })
-        }
-        RuleExpr::Literal(Some(text)) => Ok(SyntaxRule::Literal(text.clone())),
-        RuleExpr::Ref(_) => Err("ref rule must have exactly one target".to_owned()),
-        RuleExpr::Token(_) => Err("token rule must have exactly one token name".to_owned()),
-        RuleExpr::Semantic(_) => {
-            Err("semantic rule must have exactly kind and wrapped rule".to_owned())
-        }
-        RuleExpr::Tag(_) => Err("tag rule must have exactly one non-empty literal".to_owned()),
-        RuleExpr::Optional(_) => Err("optional rule must have exactly one item".to_owned()),
-        RuleExpr::Repeat(_) => Err("repeat rule must have at least one item".to_owned()),
-        RuleExpr::Literal(None) => Err("literal rule missing text".to_owned()),
-    }
 }
 
 fn collect_inline_semantic_tokens(
@@ -395,62 +194,6 @@ fn collect_inline_semantic_tokens(
             collect_inline_semantic_tokens(out, type_name, variant_name, item, active_kind);
         }
         SyntaxRule::Ref { .. } | SyntaxRule::Token { .. } => {}
-    }
-}
-
-pub(crate) fn normalize_node_fields(
-    fields: &NodeFields,
-) -> Result<HashMap<String, DocumentedValue<SyntaxTypeUse>>, String> {
-    fields
-        .fields
-        .iter()
-        .map(|(name, ty)| {
-            Ok((
-                documented_name(name).to_owned(),
-                DocumentedValue {
-                    value: normalize_type_use(ty)?,
-                    doc: documented_doc(name).map(|lines| lines.to_vec()),
-                },
-            ))
-        })
-        .collect()
-}
-
-fn normalize_node_decl(decl: &NodeDecl) -> Result<NormalizedNodeDecl, String> {
-    match decl {
-        NodeDecl::Node(fields) => Ok(NormalizedNodeDecl::Record {
-            kind: NormalizedNodeKind::Node,
-            fields: normalize_node_fields(fields)?,
-        }),
-        NodeDecl::Struct(fields) => Ok(NormalizedNodeDecl::Record {
-            kind: NormalizedNodeKind::Struct,
-            fields: normalize_node_fields(fields)?,
-        }),
-        NodeDecl::Entity(fields) => Ok(NormalizedNodeDecl::Record {
-            kind: NormalizedNodeKind::Entity,
-            fields: normalize_node_fields(fields)?,
-        }),
-        NodeDecl::Slot(fields) => Ok(NormalizedNodeDecl::Record {
-            kind: NormalizedNodeKind::Slot,
-            fields: normalize_node_fields(fields)?,
-        }),
-        NodeDecl::Enum(variants) => {
-            let mut out = IndexMap::new();
-            for (name, variant) in &variants.variants {
-                out.insert(
-                    documented_name(name).to_owned(),
-                    DocumentedValue {
-                        value: normalize_node_decl(variant)?,
-                        doc: documented_doc(name).map(|lines| lines.to_vec()),
-                    },
-                );
-            }
-            Ok(NormalizedNodeDecl::Enum(out))
-        }
-        NodeDecl::Other { tag, .. } => Err(format!(
-            "unsupported node declaration tag {:?}",
-            tag.as_deref().unwrap_or("<unknown>")
-        )),
     }
 }
 
@@ -1390,7 +1133,7 @@ fn modern_normalize_repr(repr: &ModernReprBody) -> Result<NormalizedRepr, String
 }
 
 pub(crate) fn normalize_repr(repr: &ModernReprBody) -> Result<NormalizedRepr, String> {
-    normalize_modern_repr(repr)
+    modern_normalize_repr(repr)
 }
 
 pub(crate) fn render_default_value(ty: &SyntaxTypeUse, provenance_tag: &str) -> Option<String> {

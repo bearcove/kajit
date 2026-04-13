@@ -16,6 +16,10 @@ impl FinalizedReprEmission {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn len(&self) -> usize {
         match self {
             Self::AArch64(emission) => emission.len(),

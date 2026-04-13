@@ -924,10 +924,7 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         .map(|name| {
             let kind = match repr.nodes.get(name).map(|decl| &decl.value) {
                 Some(NormalizedNodeDecl::Record { kind, .. }) => match kind {
-                    NormalizedNodeKind::Node => "node",
                     NormalizedNodeKind::Struct => "struct",
-                    NormalizedNodeKind::Entity => "entity",
-                    NormalizedNodeKind::Slot => "slot",
                 },
                 Some(NormalizedNodeDecl::Enum(_)) => "enum",
                 None => "<missing>",

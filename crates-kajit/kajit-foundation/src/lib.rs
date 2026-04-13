@@ -25,8 +25,8 @@ pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> 
             continue;
         }
         let loaded = schema::load_pilot_schema(&schema_path)?;
-        let repr = normalize::normalize_repr(&loaded.body)?;
-        reprs.push(normalize::with_module_doc(repr, loaded.doc));
+        let repr = normalize::normalize_repr(&loaded)?;
+        reprs.push(repr);
     }
 
     let out_dir = workspace_root.join("crates-kajit/kajit-reprs/src");

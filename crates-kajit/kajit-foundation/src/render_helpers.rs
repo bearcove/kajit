@@ -552,11 +552,7 @@ pub(crate) fn render_node_decl(
                 .join("\n");
             let docs = render_doc_lines(doc, "");
             let marker_impl = match kind {
-                NormalizedNodeKind::Entity => {
-                    format!("\n\nimpl EntityNode for {name} {{}}")
-                }
-                NormalizedNodeKind::Slot => format!("\n\nimpl SlotNode for {name} {{}}"),
-                NormalizedNodeKind::Node | NormalizedNodeKind::Struct => String::new(),
+                NormalizedNodeKind::Struct => String::new(),
             };
             let body = format!(
                 "#[derive(Debug, Clone, PartialEq, Eq)]\npub struct {name} {{\n{field_rows}\n}}{marker_impl}"
