@@ -15,6 +15,7 @@ indexmap = "2"
 prettyplease = "0.2"
 styx-tree = { version = "3.0.1", features = ["facet"] }
 syn = { version = "2", features = ["full"] }
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

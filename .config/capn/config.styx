@@ -4,24 +4,25 @@
 // Most options default to true. Set to false to disable.
 
 pre-commit {
-  generate-readmes false
-  // rustfmt false
-  // cargo-lock false
-  // arborium false
-  // edition-2024 false
-  // external-path-deps false
-  // internal-dev-deps-release-plz false
+    generate-readmes false
+    // rustfmt false
+    // cargo-lock false
+    // arborium false
+    // edition-2024 false
+    external-path-deps false
+    // internal-dev-deps-release-plz false
 }
 
 pre-push {
-  clippy false
-  // nextest false
-  // doc-tests false
-  docs false
-  cargo-shear false
+    clippy false
+    // nextest false
+    // doc-tests false
+    docs false
+    cargo-shear false
 
-  // Feature configuration (uncomment and customize as needed)
-  // clippy-features (feature1 feature2)
-  // doc-test-features (feature1)
-  // docs-features (feature1)
+    // Feature configuration (uncomment and customize as needed)
+    // clippy-features (feature1 feature2)
+    // doc-test-features (feature1)
+    // docs-features (feature1)
 }
+

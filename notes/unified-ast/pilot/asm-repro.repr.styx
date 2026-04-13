@@ -1,38 +1,7 @@
-name ASM
-file_ext .k-asm
-description "Reduced repro for ASM schema loader crash."
-
 rules {
     templates {
-        Keyword {
-            syntax @template{
-                params ({text @Any})
-                body {
-                    syntax text
-                    highlight keyword
-                }
-            }
-        }
-
-        Operator {
-            syntax @template{
-                params ({text @Any})
-                body {
-                    syntax text
-                    highlight operator
-                }
-            }
-        }
-
         ZeroOperand {
-            syntax @template{
-                params (
-                    { mnemonic @Rule }
-                )
-                body (
-                    @mnemonic
-                )
-            }
+            syntax @template{}
         }
     }
 }

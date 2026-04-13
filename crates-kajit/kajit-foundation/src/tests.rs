@@ -408,6 +408,8 @@ fn hir_support_enum_variant_order_stays_in_schema_order() {
 
 #[test]
 fn asm_repro_schema_loads() {
+    tracing_subscriber::fmt::init();
+
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../notes/unified-ast/pilot/asm-repro.repr.styx");
 

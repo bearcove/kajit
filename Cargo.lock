@@ -353,7 +353,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys",
 ]
 
 [[package]]
@@ -518,8 +518,6 @@ dependencies = [
 [[package]]
 name = "facet-styx"
 version = "3.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0d02f11309f8dac1402aa047d9e6a936e4d574ee18f066451f5fdc7246145b1"
 dependencies = [
  "ariadne 0.6.0",
  "facet",
@@ -528,8 +526,8 @@ dependencies = [
  "facet-reflect",
  "serde_json",
  "styx-format",
- "styx-parse",
- "styx-tree",
+ "styx-parse 3.0.1",
+ "styx-tree 3.0.1",
 ]
 
 [[package]]
@@ -1018,7 +1016,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys",
 ]
 
 [[package]]
@@ -1111,9 +1109,10 @@ dependencies = [
  "facet-styx",
  "indexmap 2.13.0",
  "prettyplease",
- "styx-tree",
+ "styx-tree 3.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "syn 2.0.117",
  "tempfile",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1278,7 +1277,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys",
 ]
 
 [[package]]
@@ -1659,7 +1658,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys",
 ]
 
 [[package]]
@@ -1822,7 +1821,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.59.0",
+ "windows-sys",
 ]
 
 [[package]]
@@ -1848,23 +1847,19 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "styx-cst"
-version = "3.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7336e7c94415ff11e1940eac31ec1bc9dbc87748f86ed5e6d3dc19824dcab786"
+version = "3.0.1"
 dependencies = [
  "rowan",
- "styx-tokenizer",
+ "styx-tokenizer 3.0.0",
 ]
 
 [[package]]
 name = "styx-format"
-version = "3.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "769d5f9ffb60c4c34c0244c5001237a6cd17a75cadc5daab23054945ae5b1dc9"
+version = "3.0.1"
 dependencies = [
  "styx-cst",
- "styx-parse",
- "styx-tree",
+ "styx-parse 3.0.1",
+ "styx-tree 3.0.1",
 ]
 
 [[package]]
@@ -1874,7 +1869,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fcd82bdd66ee6050984a2cdb0aea03dab17c9054d8d4b2b3fb0bc10189c2346b"
 dependencies = [
  "facet",
- "styx-tokenizer",
+ "styx-tokenizer 3.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tracing",
+]
+
+[[package]]
+name = "styx-parse"
+version = "3.0.1"
+dependencies = [
+ "styx-tokenizer 3.0.0",
+ "tracing",
+]
+
+[[package]]
+name = "styx-tokenizer"
+version = "3.0.0"
+dependencies = [
  "tracing",
 ]
 
@@ -1891,13 +1901,22 @@ dependencies = [
 [[package]]
 name = "styx-tree"
 version = "3.0.1"
+dependencies = [
+ "ariadne 0.6.0",
+ "facet-testhelpers",
+ "styx-parse 3.0.1",
+]
+
+[[package]]
+name = "styx-tree"
+version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fefaaecf365d4e8fa1d07b281692d9d7b4adcab4324fac746db0ce0301c42c6"
 dependencies = [
  "ariadne 0.6.0",
  "facet",
  "facet-testhelpers",
- "styx-parse",
+ "styx-parse 3.0.0",
 ]
 
 [[package]]
@@ -1962,7 +1981,7 @@ dependencies = [
  "getrandom 0.4.1",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys",
 ]
 
 [[package]]
@@ -2410,7 +2429,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys",
 ]
 
 [[package]]
@@ -2479,15 +2498,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
  "windows-targets",
-]
-
-[[package]]
-name = "windows-sys"
-version = "0.61.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
-dependencies = [
- "windows-link",
 ]
 
 [[package]]
