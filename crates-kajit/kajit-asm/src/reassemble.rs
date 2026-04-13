@@ -25,6 +25,7 @@ pub fn assemble(program: &Program) -> Result<crate::aarch64::FinalizedEmission, 
         match item {
             Item::Label(label) => {
                 let label_id = label_map[label];
+
                 emitter.bind_label(label_id);
             }
             Item::Instruction(inst) => {

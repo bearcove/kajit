@@ -209,7 +209,6 @@ fn render_token_value_parser(
 }
 
 fn render_ref_value_parser(
-    repr: &NormalizedRepr,
     ref_name: &str,
     ty: &SyntaxTypeUse,
     rule_names: &HashSet<String>,
@@ -217,7 +216,7 @@ fn render_ref_value_parser(
     box_node_refs: bool,
 ) -> Result<String, String> {
     if let SyntaxTypeUse::RefTo { id, .. } = ty {
-        return render_ref_value_parser(repr, ref_name, id, rule_names, node_names, box_node_refs);
+        return render_ref_value_parser(ref_name, id, rule_names, node_names, box_node_refs);
     }
     if !rule_names.contains(ref_name) {
         return Err(format!("unsupported reference parser target {ref_name:?}"));
@@ -283,7 +282,7 @@ fn render_value_parser(
         SyntaxRule::Tag(text) => Ok(format!("just({text:?}).padded()")),
         SyntaxRule::Token { name } => render_token_value_parser(repr, name, ty),
         SyntaxRule::Ref { name } => {
-            render_ref_value_parser(repr, name, ty, rule_names, node_names, box_node_refs)
+            render_ref_value_parser(name, ty, rule_names, node_names, box_node_refs)
         }
         SyntaxRule::Optional { inner } => {
             let SyntaxTypeUse::Optional(inner_ty) = ty else {
@@ -504,8 +503,8 @@ fn flatten_struct_rule_items(
         SyntaxRule::Literal(text) => Ok(vec![SeqItem::Ignore(format!("just({text:?}).padded()"))]),
         SyntaxRule::Tag(text) => Ok(vec![SeqItem::Ignore(format!("just({text:?}).padded()"))]),
         SyntaxRule::Ref { name } => Ok(vec![SeqItem::Ignore(format!(
-            "({}).map(|_| ())",
-            format!("{}_parser.clone()", snake_case(name))
+            "({}_parser.clone()).map(|_| ())",
+            snake_case(name)
         ))]),
         SyntaxRule::Token { name } => Ok(vec![SeqItem::Ignore(format!(
             "{}().then_ignore(ws()).to(())",

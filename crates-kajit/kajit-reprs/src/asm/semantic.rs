@@ -5,17 +5,33 @@ use super::provenance::HasProvenance;
 use super::*;
 use crate::SemanticToken;
 use kajit_types::Prov;
+
+#[derive(Default)]
+struct SemanticTokenSink(Vec<SemanticToken>);
+
+impl SemanticTokenSink {
+    fn new() -> Self {
+        Self(Vec::new())
+    }
+    fn push(&mut self, token: SemanticToken) {
+        self.0.push(token);
+    }
+    fn into_vec(self) -> Vec<SemanticToken> {
+        self.0
+    }
+}
 pub fn semantic_tokens(source: &str) -> Vec<SemanticToken> {
     let Ok(root) = parse_root_text_rich(source, None) else {
         return Vec::new();
     };
-    let mut out = Vec::new();
+    let mut out = SemanticTokenSink::new();
     collect_program(source, &root, &mut out);
+    let mut out = out.into_vec();
     out.sort_by_key(|token| (token.start, token.end, token.kind));
     out.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.kind == b.kind);
     out
 }
-fn emit_prov_token(prov: &Prov, kind: &'static str, out: &mut Vec<SemanticToken>) {
+fn emit_prov_token(prov: &Prov, kind: &'static str, out: &mut SemanticTokenSink) {
     let Some(span) = prov.span.as_ref() else {
         return;
     };
@@ -37,7 +53,7 @@ fn emit_literal_token(
 
     kind: &'static str,
 
-    out: &mut Vec<SemanticToken>,
+    out: &mut SemanticTokenSink,
 ) {
     let Some(prov) = prov else {
         return;
@@ -59,7 +75,7 @@ fn emit_literal_token(
         kind,
     });
 }
-fn collect_a64_item(source: &str, node: &A64Item, out: &mut Vec<SemanticToken>) {
+fn collect_a64_item(source: &str, node: &A64Item, out: &mut SemanticTokenSink) {
     match node {
         A64Item::AddImm {
             imm,
@@ -155,7 +171,7 @@ fn collect_a64_item(source: &str, node: &A64Item, out: &mut Vec<SemanticToken>) 
         }
     }
 }
-fn collect_a64_reg(source: &str, node: &A64Reg, out: &mut Vec<SemanticToken>) {
+fn collect_a64_reg(source: &str, node: &A64Reg, out: &mut SemanticTokenSink) {
     match node {
         A64Reg::Sp(value) => {
             let current_prov = node.provenance();
@@ -194,32 +210,32 @@ fn collect_a_arch64_dialect_keyword(
 
     node: &AArch64DialectKeyword,
 
-    out: &mut Vec<SemanticToken>,
+    out: &mut SemanticTokenSink,
 ) {
     let current_prov = node.provenance();
 }
-fn collect_add_keyword(source: &str, node: &AddKeyword, out: &mut Vec<SemanticToken>) {
+fn collect_add_keyword(source: &str, node: &AddKeyword, out: &mut SemanticTokenSink) {
     let current_prov = node.provenance();
 }
-fn collect_asm_keyword(source: &str, node: &AsmKeyword, out: &mut Vec<SemanticToken>) {
+fn collect_asm_keyword(source: &str, node: &AsmKeyword, out: &mut SemanticTokenSink) {
     let current_prov = node.provenance();
 }
-fn collect_b_keyword(source: &str, node: &BKeyword, out: &mut Vec<SemanticToken>) {
+fn collect_b_keyword(source: &str, node: &BKeyword, out: &mut SemanticTokenSink) {
     let current_prov = node.provenance();
 }
-fn collect_jmp_keyword(source: &str, node: &JmpKeyword, out: &mut Vec<SemanticToken>) {
+fn collect_jmp_keyword(source: &str, node: &JmpKeyword, out: &mut SemanticTokenSink) {
     let current_prov = node.provenance();
 }
-fn collect_mov_keyword(source: &str, node: &MovKeyword, out: &mut Vec<SemanticToken>) {
+fn collect_mov_keyword(source: &str, node: &MovKeyword, out: &mut SemanticTokenSink) {
     let current_prov = node.provenance();
 }
-fn collect_movz_keyword(source: &str, node: &MovzKeyword, out: &mut Vec<SemanticToken>) {
+fn collect_movz_keyword(source: &str, node: &MovzKeyword, out: &mut SemanticTokenSink) {
     let current_prov = node.provenance();
 }
-fn collect_nop_keyword(source: &str, node: &NopKeyword, out: &mut Vec<SemanticToken>) {
+fn collect_nop_keyword(source: &str, node: &NopKeyword, out: &mut SemanticTokenSink) {
     let current_prov = node.provenance();
 }
-fn collect_program(source: &str, node: &Program, out: &mut Vec<SemanticToken>) {
+fn collect_program(source: &str, node: &Program, out: &mut SemanticTokenSink) {
     match node {
         Program::AArch64 {
             dialect,
@@ -263,13 +279,13 @@ fn collect_program(source: &str, node: &Program, out: &mut Vec<SemanticToken>) {
         }
     }
 }
-fn collect_ret_keyword(source: &str, node: &RetKeyword, out: &mut Vec<SemanticToken>) {
+fn collect_ret_keyword(source: &str, node: &RetKeyword, out: &mut SemanticTokenSink) {
     let current_prov = node.provenance();
 }
-fn collect_sub_keyword(source: &str, node: &SubKeyword, out: &mut Vec<SemanticToken>) {
+fn collect_sub_keyword(source: &str, node: &SubKeyword, out: &mut SemanticTokenSink) {
     let current_prov = node.provenance();
 }
-fn collect_x64_item(source: &str, node: &X64Item, out: &mut Vec<SemanticToken>) {
+fn collect_x64_item(source: &str, node: &X64Item, out: &mut SemanticTokenSink) {
     match node {
         X64Item::AddImm { imm, op, prov, rd } => {
             let current_prov = node.provenance();
@@ -344,7 +360,7 @@ fn collect_x64_item(source: &str, node: &X64Item, out: &mut Vec<SemanticToken>) 
         }
     }
 }
-fn collect_x64_reg(source: &str, node: &X64Reg, out: &mut Vec<SemanticToken>) {
+fn collect_x64_reg(source: &str, node: &X64Reg, out: &mut SemanticTokenSink) {
     match node {
         X64Reg::Rax(value) => {
             let current_prov = node.provenance();
@@ -389,7 +405,7 @@ fn collect_x86_64_dialect_keyword(
 
     node: &X86_64DialectKeyword,
 
-    out: &mut Vec<SemanticToken>,
+    out: &mut SemanticTokenSink,
 ) {
     let current_prov = node.provenance();
 }

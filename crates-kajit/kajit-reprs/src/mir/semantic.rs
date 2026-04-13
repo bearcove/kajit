@@ -5,6 +5,21 @@ use super::provenance::HasProvenance;
 use super::*;
 use crate::SemanticToken;
 use kajit_types::Prov;
+
+#[derive(Default)]
+struct SemanticTokenSink(Vec<SemanticToken>);
+
+impl SemanticTokenSink {
+    fn new() -> Self {
+        Self(Vec::new())
+    }
+    fn push(&mut self, token: SemanticToken) {
+        self.0.push(token);
+    }
+    fn into_vec(self) -> Vec<SemanticToken> {
+        self.0
+    }
+}
 pub fn semantic_tokens(source: &str) -> Vec<SemanticToken> {
     let mut graph = Graph::new();
     let Ok(handle) = parse_root_into_graph(&mut graph, source) else {
@@ -22,13 +37,14 @@ pub fn semantic_tokens_in_graph(
     let Some(root) = graph.root(handle) else {
         return Vec::new();
     };
-    let mut out = Vec::new();
+    let mut out = SemanticTokenSink::new();
     collect_program(source, graph, root, &mut out);
+    let mut out = out.into_vec();
     out.sort_by_key(|token| (token.start, token.end, token.kind));
     out.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.kind == b.kind);
     out
 }
-fn emit_prov_token(prov: &Prov, kind: &'static str, out: &mut Vec<SemanticToken>) {
+fn emit_prov_token(prov: &Prov, kind: &'static str, out: &mut SemanticTokenSink) {
     let Some(span) = prov.span.as_ref() else {
         return;
     };
@@ -50,7 +66,7 @@ fn emit_literal_token(
 
     kind: &'static str,
 
-    out: &mut Vec<SemanticToken>,
+    out: &mut SemanticTokenSink,
 ) {
     let Some(prov) = prov else {
         return;
@@ -72,12 +88,12 @@ fn emit_literal_token(
         kind,
     });
 }
-fn collect_block(source: &str, graph: &Graph, node: &Block, out: &mut Vec<SemanticToken>) {
+fn collect_block(source: &str, graph: &Graph, node: &Block, out: &mut SemanticTokenSink) {
     let _ = graph;
     let current_prov = node.provenance();
     emit_literal_token(source, current_prov, "block", "keyword", out);
 }
-fn collect_const_ref(source: &str, graph: &Graph, node: &ConstRef, out: &mut Vec<SemanticToken>) {
+fn collect_const_ref(source: &str, graph: &Graph, node: &ConstRef, out: &mut SemanticTokenSink) {
     let _ = graph;
     match node {
         ConstRef::Named { name, prov } => {
@@ -96,7 +112,7 @@ fn collect_data_args_line(
 
     node: &DataArgsLine,
 
-    out: &mut Vec<SemanticToken>,
+    out: &mut SemanticTokenSink,
 ) {
     let _ = graph;
     let current_prov = node.provenance();
@@ -108,12 +124,12 @@ fn collect_data_results_line(
 
     node: &DataResultsLine,
 
-    out: &mut Vec<SemanticToken>,
+    out: &mut SemanticTokenSink,
 ) {
     let _ = graph;
     let current_prov = node.provenance();
 }
-fn collect_edge(source: &str, graph: &Graph, node: &Edge, out: &mut Vec<SemanticToken>) {
+fn collect_edge(source: &str, graph: &Graph, node: &Edge, out: &mut SemanticTokenSink) {
     let _ = graph;
     let current_prov = node.provenance();
     emit_literal_token(source, current_prov, "edge", "keyword", out);
@@ -121,7 +137,7 @@ fn collect_edge(source: &str, graph: &Graph, node: &Edge, out: &mut Vec<Semantic
         collect_edge_arg(source, graph, value, out);
     }
 }
-fn collect_edge_arg(source: &str, graph: &Graph, node: &EdgeArg, out: &mut Vec<SemanticToken>) {
+fn collect_edge_arg(source: &str, graph: &Graph, node: &EdgeArg, out: &mut SemanticTokenSink) {
     let _ = graph;
     match node {
         EdgeArg::Identity { prov, vreg } => {
@@ -136,7 +152,7 @@ fn collect_edge_arg(source: &str, graph: &Graph, node: &EdgeArg, out: &mut Vec<S
         }
     }
 }
-fn collect_fixed_reg(source: &str, graph: &Graph, node: &FixedReg, out: &mut Vec<SemanticToken>) {
+fn collect_fixed_reg(source: &str, graph: &Graph, node: &FixedReg, out: &mut SemanticTokenSink) {
     let _ = graph;
     match node {
         FixedReg::AbiArg { index, prov } => {
@@ -150,7 +166,7 @@ fn collect_fixed_reg(source: &str, graph: &Graph, node: &FixedReg, out: &mut Vec
         }
     }
 }
-fn collect_function(source: &str, graph: &Graph, node: &Function, out: &mut Vec<SemanticToken>) {
+fn collect_function(source: &str, graph: &Graph, node: &Function, out: &mut SemanticTokenSink) {
     let _ = graph;
     let current_prov = node.provenance();
     emit_literal_token(source, current_prov, "cfg_func", "keyword", out);
@@ -171,7 +187,7 @@ fn collect_function(source: &str, graph: &Graph, node: &Function, out: &mut Vec<
         collect_terminator(source, graph, value, out);
     }
 }
-fn collect_inst(source: &str, graph: &Graph, node: &Inst, out: &mut Vec<SemanticToken>) {
+fn collect_inst(source: &str, graph: &Graph, node: &Inst, out: &mut SemanticTokenSink) {
     let _ = graph;
     let current_prov = node.provenance();
     emit_literal_token(source, current_prov, "inst", "keyword", out);
@@ -187,7 +203,7 @@ fn collect_inst(source: &str, graph: &Graph, node: &Inst, out: &mut Vec<Semantic
         }
     }
 }
-fn collect_inst_op(source: &str, graph: &Graph, node: &InstOp, out: &mut Vec<SemanticToken>) {
+fn collect_inst_op(source: &str, graph: &Graph, node: &InstOp, out: &mut SemanticTokenSink) {
     let _ = graph;
     match node {
         InstOp::BinOp { op, prov } => {
@@ -254,7 +270,7 @@ fn collect_intrinsic_ref(
 
     node: &IntrinsicRef,
 
-    out: &mut Vec<SemanticToken>,
+    out: &mut SemanticTokenSink,
 ) {
     let _ = graph;
     match node {
@@ -267,14 +283,14 @@ fn collect_intrinsic_ref(
         }
     }
 }
-fn collect_operand(source: &str, graph: &Graph, node: &Operand, out: &mut Vec<SemanticToken>) {
+fn collect_operand(source: &str, graph: &Graph, node: &Operand, out: &mut SemanticTokenSink) {
     let _ = graph;
     let current_prov = node.provenance();
     if let Some(value) = node.fixed.as_ref() {
         collect_fixed_reg(source, graph, value, out);
     }
 }
-fn collect_program(source: &str, graph: &Graph, node: &Program, out: &mut Vec<SemanticToken>) {
+fn collect_program(source: &str, graph: &Graph, node: &Program, out: &mut SemanticTokenSink) {
     let _ = graph;
     let current_prov = node.provenance();
     emit_literal_token(source, current_prov, "cfg_program", "keyword", out);
@@ -284,15 +300,7 @@ fn collect_program(source: &str, graph: &Graph, node: &Program, out: &mut Vec<Se
         collect_function(source, graph, value, out);
     }
 }
-fn collect_terminator(
-    source: &str,
-
-    graph: &Graph,
-
-    node: &Terminator,
-
-    out: &mut Vec<SemanticToken>,
-) {
+fn collect_terminator(source: &str, graph: &Graph, node: &Terminator, out: &mut SemanticTokenSink) {
     let _ = graph;
     match node {
         Terminator::Branch { edge, id, prov } => {
@@ -340,7 +348,7 @@ fn collect_terminator(
         }
     }
 }
-fn collect_unary_op(source: &str, graph: &Graph, node: &UnaryOp, out: &mut Vec<SemanticToken>) {
+fn collect_unary_op(source: &str, graph: &Graph, node: &UnaryOp, out: &mut SemanticTokenSink) {
     let _ = graph;
     match node {
         UnaryOp::SignExtend { from_width, prov } => {

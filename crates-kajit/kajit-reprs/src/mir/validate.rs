@@ -4,6 +4,21 @@
 use super::*;
 
 #[derive(Default)]
+struct ErrorSink(Vec<String>);
+
+impl ErrorSink {
+    fn push(&mut self, error: String) {
+        self.0.push(error);
+    }
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    fn into_vec(self) -> Vec<String> {
+        self.0
+    }
+}
+
+#[derive(Default)]
 struct ValidationContext {
     block_ids: Vec<std::collections::BTreeSet<BlockId>>,
 
@@ -36,7 +51,7 @@ fn key_of_terminator(value: &Terminator) -> TermId {
         Terminator::Return { id, .. } => *id,
     }
 }
-fn validate_block(value: &Block, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_block(value: &Block, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     if let Some(value) = value.docs.as_ref() {}
     for value in value.insts.iter() {
         if !ctx.inst_ids.iter().rev().any(|ids| ids.contains(value)) {
@@ -75,7 +90,7 @@ fn validate_block(value: &Block, ctx: &mut ValidationContext, errors: &mut Vec<S
         ));
     }
 }
-fn validate_const_ref(value: &ConstRef, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_const_ref(value: &ConstRef, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     match value {
         ConstRef::Named { name, prov, .. } => {
             let _ = (ctx, errors);
@@ -90,7 +105,7 @@ fn validate_data_args_line(
 
     ctx: &mut ValidationContext,
 
-    errors: &mut Vec<String>,
+    errors: &mut ErrorSink,
 ) {
     for value in value.args.iter() {}
     if let Some(value) = value.docs.as_ref() {}
@@ -100,12 +115,12 @@ fn validate_data_results_line(
 
     ctx: &mut ValidationContext,
 
-    errors: &mut Vec<String>,
+    errors: &mut ErrorSink,
 ) {
     if let Some(value) = value.docs.as_ref() {}
     for value in value.results.iter() {}
 }
-fn validate_edge(value: &Edge, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_edge(value: &Edge, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     for value in value.args.iter() {
         validate_edge_arg(value, ctx, errors);
     }
@@ -133,7 +148,7 @@ fn validate_edge(value: &Edge, ctx: &mut ValidationContext, errors: &mut Vec<Str
         ));
     }
 }
-fn validate_edge_arg(value: &EdgeArg, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_edge_arg(value: &EdgeArg, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     match value {
         EdgeArg::Identity { prov, vreg, .. } => {
             let _ = (ctx, errors);
@@ -148,7 +163,7 @@ fn validate_edge_arg(value: &EdgeArg, ctx: &mut ValidationContext, errors: &mut 
         }
     }
 }
-fn validate_fixed_reg(value: &FixedReg, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_fixed_reg(value: &FixedReg, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     match value {
         FixedReg::AbiArg { index, prov, .. } => {
             let _ = (ctx, errors);
@@ -161,7 +176,7 @@ fn validate_fixed_reg(value: &FixedReg, ctx: &mut ValidationContext, errors: &mu
         }
     }
 }
-fn validate_function(value: &Function, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_function(value: &Function, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     ctx.block_ids
         .push(value.blocks.iter().map(key_of_block).collect());
     ctx.edge_ids
@@ -195,7 +210,7 @@ fn validate_function(value: &Function, ctx: &mut ValidationContext, errors: &mut
     ctx.edge_ids.pop();
     ctx.block_ids.pop();
 }
-fn validate_inst(value: &Inst, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_inst(value: &Inst, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     if let Some(value) = value.clobbers.as_ref() {}
     if let Some(value) = value.defs.as_ref() {
         for value in value.iter() {
@@ -210,7 +225,7 @@ fn validate_inst(value: &Inst, ctx: &mut ValidationContext, errors: &mut Vec<Str
         }
     }
 }
-fn validate_inst_op(value: &InstOp, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_inst_op(value: &InstOp, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     match value {
         InstOp::BinOp { op, prov, .. } => {
             let _ = (ctx, errors);
@@ -264,7 +279,7 @@ fn validate_intrinsic_ref(
 
     ctx: &mut ValidationContext,
 
-    errors: &mut Vec<String>,
+    errors: &mut ErrorSink,
 ) {
     match value {
         IntrinsicRef::Address { prov, value, .. } => {
@@ -275,12 +290,12 @@ fn validate_intrinsic_ref(
         }
     }
 }
-fn validate_operand(value: &Operand, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_operand(value: &Operand, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     if let Some(value) = value.fixed.as_ref() {
         validate_fixed_reg(value, ctx, errors);
     }
 }
-fn validate_program(value: &Program, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_program(value: &Program, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     ctx.function_ids
         .push(value.functions.iter().map(key_of_function).collect());
     if let Some(value) = value.docs.as_ref() {}
@@ -289,7 +304,7 @@ fn validate_program(value: &Program, ctx: &mut ValidationContext, errors: &mut V
     }
     ctx.function_ids.pop();
 }
-fn validate_terminator(value: &Terminator, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_terminator(value: &Terminator, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     match value {
         Terminator::Branch { edge, id, prov, .. } => {
             if !ctx.edge_ids.iter().rev().any(|ids| ids.contains(edge)) {
@@ -400,7 +415,7 @@ fn validate_terminator(value: &Terminator, ctx: &mut ValidationContext, errors: 
         }
     }
 }
-fn validate_unary_op(value: &UnaryOp, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_unary_op(value: &UnaryOp, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     match value {
         UnaryOp::SignExtend {
             from_width, prov, ..
@@ -414,13 +429,14 @@ pub fn validate_root_in_graph(graph: &Graph, handle: ProgramHandle) -> Result<()
         return Err(format!("unknown root handle {:?}", handle));
     };
     let mut ctx = ValidationContext::default();
-    let mut errors = Vec::new();
+    let mut errors = ErrorSink::default();
     ctx.inst_ids
         .push(graph.all_inst().map(key_of_inst).collect());
     for value in graph.all_inst() {
         validate_inst(value, &mut ctx, &mut errors);
     }
     validate_program(root, &mut ctx, &mut errors);
+    let errors = errors.into_vec();
     if errors.is_empty() {
         Ok(())
     } else {

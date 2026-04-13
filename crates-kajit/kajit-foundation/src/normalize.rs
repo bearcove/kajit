@@ -110,8 +110,6 @@ pub(crate) enum NormalizedRefKind {
     IntScalar,
     Id,
     StringSeq,
-    Unit,
-    Enum,
     Unknown,
 }
 
@@ -139,62 +137,6 @@ pub(crate) struct NormalizedRepr {
     pub(crate) common: HashMap<String, SyntaxTypeUse>,
     pub(crate) support: HashMap<String, DocumentedValue<NormalizedSupportDecl>>,
     pub(crate) nodes: HashMap<String, DocumentedValue<NormalizedNodeDecl>>,
-}
-
-fn collect_inline_semantic_tokens(
-    out: &mut HashMap<String, String>,
-    type_name: &str,
-    variant_name: Option<&str>,
-    rule: &SyntaxRule,
-    active_kind: Option<&str>,
-) {
-    match rule {
-        SyntaxRule::Semantic { kind, inner } => {
-            collect_inline_semantic_tokens(out, type_name, variant_name, inner, Some(kind));
-        }
-        SyntaxRule::Tag(text) | SyntaxRule::Literal(text) => {
-            if let Some(kind) = active_kind {
-                out.insert(format!("literal.{text}"), kind.to_owned());
-            }
-        }
-        SyntaxRule::Field(named) => {
-            if let Some(kind) = active_kind {
-                let target = match variant_name {
-                    Some(variant) => format!("field.{type_name}.{variant}.{}", named.name),
-                    None => format!("field.{type_name}.{}", named.name),
-                };
-                out.insert(target, kind.to_owned());
-            }
-            collect_inline_semantic_tokens(out, type_name, variant_name, &named.inner, active_kind);
-        }
-        SyntaxRule::Variant(named) => {
-            if let Some(kind) = active_kind {
-                out.insert(
-                    format!("variant.{type_name}.{}", named.name),
-                    kind.to_owned(),
-                );
-            }
-            collect_inline_semantic_tokens(
-                out,
-                type_name,
-                Some(&named.name),
-                &named.inner,
-                active_kind,
-            );
-        }
-        SyntaxRule::Seq(items) | SyntaxRule::Choice(items) => {
-            for item in items {
-                collect_inline_semantic_tokens(out, type_name, variant_name, item, active_kind);
-            }
-        }
-        SyntaxRule::Optional { inner } => {
-            collect_inline_semantic_tokens(out, type_name, variant_name, inner, active_kind);
-        }
-        SyntaxRule::Repeat { item, .. } => {
-            collect_inline_semantic_tokens(out, type_name, variant_name, item, active_kind);
-        }
-        SyntaxRule::Ref { .. } | SyntaxRule::Token { .. } => {}
-    }
 }
 
 #[derive(Debug, Clone)]

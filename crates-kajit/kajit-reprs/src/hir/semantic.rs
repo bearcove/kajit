@@ -5,17 +5,33 @@ use super::provenance::HasProvenance;
 use super::*;
 use crate::SemanticToken;
 use kajit_types::Prov;
+
+#[derive(Default)]
+struct SemanticTokenSink(Vec<SemanticToken>);
+
+impl SemanticTokenSink {
+    fn new() -> Self {
+        Self(Vec::new())
+    }
+    fn push(&mut self, token: SemanticToken) {
+        self.0.push(token);
+    }
+    fn into_vec(self) -> Vec<SemanticToken> {
+        self.0
+    }
+}
 pub fn semantic_tokens(source: &str) -> Vec<SemanticToken> {
     let Ok(root) = parse_root_text_rich(source, None) else {
         return Vec::new();
     };
-    let mut out = Vec::new();
+    let mut out = SemanticTokenSink::new();
     collect_module(source, &root, &mut out);
+    let mut out = out.into_vec();
     out.sort_by_key(|token| (token.start, token.end, token.kind));
     out.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.kind == b.kind);
     out
 }
-fn emit_prov_token(prov: &Prov, kind: &'static str, out: &mut Vec<SemanticToken>) {
+fn emit_prov_token(prov: &Prov, kind: &'static str, out: &mut SemanticTokenSink) {
     let Some(span) = prov.span.as_ref() else {
         return;
     };
@@ -37,7 +53,7 @@ fn emit_literal_token(
 
     kind: &'static str,
 
-    out: &mut Vec<SemanticToken>,
+    out: &mut SemanticTokenSink,
 ) {
     let Some(prov) = prov else {
         return;
@@ -59,13 +75,13 @@ fn emit_literal_token(
         kind,
     });
 }
-fn collect_block(source: &str, node: &Block, out: &mut Vec<SemanticToken>) {
+fn collect_block(source: &str, node: &Block, out: &mut SemanticTokenSink) {
     let current_prov = node.provenance();
     for value in &node.statements {
         collect_stmt(source, value, out);
     }
 }
-fn collect_expr(source: &str, node: &Expr, out: &mut Vec<SemanticToken>) {
+fn collect_expr(source: &str, node: &Expr, out: &mut SemanticTokenSink) {
     match node {
         Expr::Binary { lhs, op, prov, rhs } => {
             let current_prov = node.provenance();
@@ -94,7 +110,7 @@ fn collect_expr(source: &str, node: &Expr, out: &mut Vec<SemanticToken>) {
         }
     }
 }
-fn collect_function(source: &str, node: &Function, out: &mut Vec<SemanticToken>) {
+fn collect_function(source: &str, node: &Function, out: &mut SemanticTokenSink) {
     let current_prov = node.provenance();
     emit_literal_token(source, current_prov, "fn", "keyword", out);
     emit_prov_token(&node.name.prov, "function", out);
@@ -107,12 +123,12 @@ fn collect_function(source: &str, node: &Function, out: &mut Vec<SemanticToken>)
         collect_param(source, value, out);
     }
 }
-fn collect_local(source: &str, node: &Local, out: &mut Vec<SemanticToken>) {
+fn collect_local(source: &str, node: &Local, out: &mut SemanticTokenSink) {
     let current_prov = node.provenance();
     emit_prov_token(&node.name.prov, "variable", out);
     emit_prov_token(&node.ty.prov, "type", out);
 }
-fn collect_module(source: &str, node: &Module, out: &mut Vec<SemanticToken>) {
+fn collect_module(source: &str, node: &Module, out: &mut SemanticTokenSink) {
     let current_prov = node.provenance();
     emit_literal_token(source, current_prov, "module", "keyword", out);
     for value in &node.functions {
@@ -122,27 +138,16 @@ fn collect_module(source: &str, node: &Module, out: &mut Vec<SemanticToken>) {
         collect_type_def(source, value, out);
     }
 }
-fn collect_param(source: &str, node: &Param, out: &mut Vec<SemanticToken>) {
+fn collect_param(source: &str, node: &Param, out: &mut SemanticTokenSink) {
     let current_prov = node.provenance();
     emit_prov_token(&node.name.prov, "parameter", out);
     emit_prov_token(&node.ty.prov, "type", out);
 }
-fn collect_place(source: &str, node: &Place, out: &mut Vec<SemanticToken>) {
-    match node {
-        Place::Field { base, field, prov } => {
-            let current_prov = node.provenance();
-            collect_place(source, base, out);
-        }
-        Place::Local { name, prov } => {
-            let current_prov = node.provenance();
-        }
-    }
-}
-fn collect_stmt(source: &str, node: &Stmt, out: &mut Vec<SemanticToken>) {
+
+fn collect_stmt(source: &str, node: &Stmt, out: &mut SemanticTokenSink) {
     match node {
         Stmt::Assign { place, prov, value } => {
             let current_prov = node.provenance();
-            collect_place(source, place, out);
             collect_expr(source, value, out);
         }
         Stmt::Expr { prov, value } => {
@@ -164,7 +169,6 @@ fn collect_stmt(source: &str, node: &Stmt, out: &mut Vec<SemanticToken>) {
         }
         Stmt::Init { place, prov, value } => {
             let current_prov = node.provenance();
-            collect_place(source, place, out);
             collect_expr(source, value, out);
         }
         Stmt::Return { prov, value } => {
@@ -176,7 +180,7 @@ fn collect_stmt(source: &str, node: &Stmt, out: &mut Vec<SemanticToken>) {
         }
     }
 }
-fn collect_type_def(source: &str, node: &TypeDef, out: &mut Vec<SemanticToken>) {
+fn collect_type_def(source: &str, node: &TypeDef, out: &mut SemanticTokenSink) {
     let current_prov = node.provenance();
     emit_prov_token(&node.name.prov, "type", out);
 }

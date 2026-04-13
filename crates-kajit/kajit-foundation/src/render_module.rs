@@ -109,30 +109,11 @@ struct RenderParts {
 }
 
 #[derive(Clone)]
-struct PoolInfo {
-    item: String,
-    key: String,
-}
-
-#[derive(Clone)]
 struct ArenaGraphInfo {
     item: String,
     key: String,
     storage_field: String,
     key_accessor: String,
-}
-
-fn is_prov_only_struct(
-    fields: &std::collections::HashMap<String, DocumentedValue<SyntaxTypeUse>>,
-) -> bool {
-    fields.len() == 1
-        && matches!(
-            fields.get("prov"),
-            Some(DocumentedValue {
-                value: SyntaxTypeUse::Ref { .. },
-                ..
-            })
-        )
 }
 
 fn field_id_accessor(
@@ -217,65 +198,6 @@ fn field_id_accessor(
     }
 }
 
-fn collect_pool_infos(repr: &NormalizedRepr) -> std::collections::BTreeMap<String, PoolInfo> {
-    let mut out = std::collections::BTreeMap::new();
-    for decl in repr.nodes.values() {
-        let fields = match &decl.value {
-            NormalizedNodeDecl::Record { fields, .. } => Some(fields),
-            NormalizedNodeDecl::Enum(variants) => {
-                for variant in variants.values() {
-                    if let NormalizedNodeDecl::Record { fields, .. } = &variant.value {
-                        for ty in fields.values() {
-                            if let SyntaxTypeUse::Arena {
-                                item: inner,
-                                key: Some(key),
-                            }
-                            | SyntaxTypeUse::Pool {
-                                item: inner,
-                                key: Some(key),
-                            } = &ty.value
-                                && let SyntaxTypeUse::Ref { name } = inner.as_ref()
-                            {
-                                out.insert(
-                                    name.clone(),
-                                    PoolInfo {
-                                        item: name.clone(),
-                                        key: key.clone(),
-                                    },
-                                );
-                            }
-                        }
-                    }
-                }
-                None
-            }
-        };
-        if let Some(fields) = fields {
-            for ty in fields.values() {
-                if let SyntaxTypeUse::Arena {
-                    item: inner,
-                    key: Some(key),
-                }
-                | SyntaxTypeUse::Pool {
-                    item: inner,
-                    key: Some(key),
-                } = &ty.value
-                    && let SyntaxTypeUse::Ref { name } = inner.as_ref()
-                {
-                    out.insert(
-                        name.clone(),
-                        PoolInfo {
-                            item: name.clone(),
-                            key: key.clone(),
-                        },
-                    );
-                }
-            }
-        }
-    }
-    out
-}
-
 fn collect_arena_graph_infos(repr: &NormalizedRepr) -> Result<Vec<ArenaGraphInfo>, String> {
     let mut infos = std::collections::BTreeMap::<String, ArenaGraphInfo>::new();
 
@@ -349,234 +271,6 @@ fn repr_has_graph_arenas(repr: &NormalizedRepr) -> bool {
     })
 }
 
-fn render_validate_ref_check(id_expr: &str, target: &str, owner: &str, field: &str) -> String {
-    let ctx_name = format!("{}_ids", snake_case(target));
-    format!(
-        r#"if !ctx.{ctx_name}.iter().rev().any(|ids| ids.contains(&{id_expr})) {{
-    errors.push(format!(
-        "{}.{} references {{:?}} but no live {} collection in scope contains it",
-        {id_expr}
-    ));
-}}"#,
-        owner, field, target
-    )
-}
-
-fn render_validate_value(
-    expr: &str,
-    ty: &SyntaxTypeUse,
-    owner: &str,
-    field: &str,
-    node_names: &[String],
-    support_structs: &std::collections::BTreeSet<String>,
-) -> String {
-    match ty {
-        SyntaxTypeUse::Optional(inner) => {
-            let body =
-                render_validate_value("value", inner, owner, field, node_names, support_structs);
-            format!(
-                "if let Some(value) = {expr}.as_ref() {{\n{}\n}}",
-                indent_block(&body, 4)
-            )
-        }
-        SyntaxTypeUse::Seq(inner)
-        | SyntaxTypeUse::Order(inner)
-        | SyntaxTypeUse::Pool { item: inner, .. } => {
-            let body =
-                render_validate_value("value", inner, owner, field, node_names, support_structs);
-            format!(
-                "for value in {expr}.iter() {{\n{}\n}}",
-                indent_block(&body, 4)
-            )
-        }
-        SyntaxTypeUse::Arena { key: Some(_), .. } => String::new(),
-        SyntaxTypeUse::Arena {
-            item: inner,
-            key: None,
-        } => {
-            let body =
-                render_validate_value("value", inner, owner, field, node_names, support_structs);
-            format!(
-                "for value in {expr}.iter() {{\n{}\n}}",
-                indent_block(&body, 4)
-            )
-        }
-        SyntaxTypeUse::RefTo { target, .. } => {
-            render_validate_ref_check(expr, target, owner, field)
-        }
-        SyntaxTypeUse::Ref { name } if node_names.iter().any(|candidate| candidate == name) => {
-            let fn_name = snake_case(name);
-            format!("validate_{fn_name}(&{expr}, ctx, errors);")
-        }
-        SyntaxTypeUse::Ref { name } if support_structs.contains(name) => {
-            let fn_name = snake_case(name);
-            format!("validate_support_{fn_name}(&{expr}, ctx, errors);")
-        }
-        _ => String::new(),
-    }
-}
-
-fn render_record_validate_fn(
-    name: &str,
-    fields: &std::collections::HashMap<String, DocumentedValue<SyntaxTypeUse>>,
-    pool_infos: &std::collections::BTreeMap<String, PoolInfo>,
-    node_names: &[String],
-    support_structs: &std::collections::BTreeSet<String>,
-    receiver_type: &str,
-    fn_name: &str,
-    bound_fields: bool,
-) -> String {
-    let body = render_record_validate_body(
-        name,
-        fields,
-        pool_infos,
-        node_names,
-        support_structs,
-        bound_fields,
-    );
-    let body = if body.trim().is_empty() {
-        String::from("    let _ = (value, ctx, errors);")
-    } else {
-        indent_block(&body, 4)
-    };
-
-    format!(
-        "fn {fn_name}(value: &{receiver_type}, ctx: &mut ValidationContext, errors: &mut Vec<String>) {{\n{body}\n}}"
-    )
-}
-
-fn render_record_validate_body(
-    name: &str,
-    fields: &std::collections::HashMap<String, DocumentedValue<SyntaxTypeUse>>,
-    pool_infos: &std::collections::BTreeMap<String, PoolInfo>,
-    node_names: &[String],
-    support_structs: &std::collections::BTreeSet<String>,
-    bound_fields: bool,
-) -> String {
-    let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
-    field_names.sort();
-
-    let mut push_rows = Vec::new();
-    let mut body_rows = Vec::new();
-    let mut pop_rows = Vec::new();
-    for field_name in &field_names {
-        let ty = &fields[field_name].value;
-        let field_expr = if bound_fields {
-            rust_ident(field_name)
-        } else {
-            format!("value.{}", rust_ident(field_name))
-        };
-        if let SyntaxTypeUse::Pool {
-            item: inner,
-            key: Some(_),
-        } = ty
-            && let SyntaxTypeUse::Ref { name: target } = inner.as_ref()
-            && let Some(pool) = pool_infos.get(target)
-        {
-            let ctx_name = format!("{}_ids", snake_case(&pool.item));
-            let key_fn = format!("key_of_{}", snake_case(&pool.item));
-            push_rows.push(format!(
-                "ctx.{ctx_name}.push({field_expr}.iter().map({key_fn}).collect());"
-            ));
-            pop_rows.push(format!("ctx.{ctx_name}.pop();"));
-        }
-
-        let body = render_validate_value(
-            &field_expr,
-            ty,
-            name,
-            field_name,
-            node_names,
-            support_structs,
-        );
-        if !body.trim().is_empty() {
-            body_rows.push(body);
-        }
-    }
-
-    let mut rows = Vec::new();
-    rows.extend(push_rows);
-    rows.extend(body_rows);
-    rows.extend(pop_rows.into_iter().rev());
-    rows.join("\n")
-}
-
-fn render_node_validate_fn(
-    name: &str,
-    decl: &NormalizedNodeDecl,
-    pool_infos: &std::collections::BTreeMap<String, PoolInfo>,
-    node_names: &[String],
-    support_structs: &std::collections::BTreeSet<String>,
-) -> String {
-    let fn_name = format!("validate_{}", snake_case(name));
-    match decl {
-        NormalizedNodeDecl::Record { fields, .. } => render_record_validate_fn(
-            name,
-            fields,
-            pool_infos,
-            node_names,
-            support_structs,
-            name,
-            &fn_name,
-            false,
-        ),
-        NormalizedNodeDecl::Enum(variants) => {
-            let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
-            variant_names.sort();
-            let mut arms = Vec::new();
-            for variant_name in variant_names {
-                match &variants[&variant_name].value {
-                    NormalizedNodeDecl::Record { fields, .. } => {
-                        if is_prov_only_struct(fields) {
-                            arms.push((variant_name, "_inner".to_owned(), String::new(), true));
-                        } else {
-                            let mut bindings = fields.keys().cloned().collect::<Vec<_>>();
-                            bindings.sort();
-                            let binding_list = bindings
-                                .iter()
-                                .map(|field| rust_ident(field))
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            let body = render_record_validate_body(
-                                &format!("{name}.{variant_name}"),
-                                fields,
-                                pool_infos,
-                                node_names,
-                                support_structs,
-                                true,
-                            );
-                            arms.push((variant_name, binding_list, body, false));
-                        }
-                    }
-                    NormalizedNodeDecl::Enum(_) => {}
-                }
-            }
-
-            let mut out = format!(
-                "fn {fn_name}(value: &{name}, ctx: &mut ValidationContext, errors: &mut Vec<String>) {{\n    match value {{\n"
-            );
-            for (variant_name, binding_list, body, is_tuple) in arms {
-                let arm_body = if body.trim().is_empty() {
-                    "let _ = (ctx, errors);".to_owned()
-                } else {
-                    body
-                };
-                let pattern = if is_tuple {
-                    format!("{name}::{variant_name}({binding_list})")
-                } else {
-                    format!("{name}::{variant_name} {{ {binding_list}, .. }}")
-                };
-                out.push_str(&format!(
-                    "        {pattern} => {{\n{}\n        }},\n",
-                    indent_block(&arm_body, 12)
-                ));
-            }
-            out.push_str("    }\n}");
-            out
-        }
-    }
-}
-
 fn collect_pool_specs(
     owner: &str,
     field: &str,
@@ -598,20 +292,6 @@ fn collect_pool_specs(
         }
         _ => Vec::new(),
     }
-}
-
-fn indent_block(text: &str, spaces: usize) -> String {
-    let pad = " ".repeat(spaces);
-    text.lines()
-        .map(|line| {
-            if line.is_empty() {
-                String::new()
-            } else {
-                format!("{pad}{line}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn collect_ref_specs(
@@ -1952,17 +1632,14 @@ fn add_breathing_room(body: &str) -> String {
         let prev_ends_variant = prev_trimmed.ends_with(',') && !prev.starts_with("        ");
         let prev_ends_field = prev_trimmed.ends_with(',') && prev.starts_with("        ");
 
-        if !out.is_empty() {
-            if starts_top_level_item && prev_ends_item && !prev_trimmed.is_empty() {
-                out.push('\n');
-            } else if (starts_variant_doc || starts_variant)
-                && prev_ends_variant
-                && !prev_trimmed.is_empty()
-            {
-                out.push('\n');
-            } else if starts_field_doc && prev_ends_field && !prev_trimmed.is_empty() {
-                out.push('\n');
-            }
+        if !out.is_empty()
+            && ((starts_top_level_item && prev_ends_item && !prev_trimmed.is_empty())
+                || ((starts_variant_doc || starts_variant)
+                    && prev_ends_variant
+                    && !prev_trimmed.is_empty())
+                || (starts_field_doc && prev_ends_field && !prev_trimmed.is_empty()))
+        {
+            out.push('\n');
         }
 
         out.push_str(line);

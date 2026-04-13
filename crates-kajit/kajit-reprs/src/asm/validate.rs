@@ -4,8 +4,23 @@
 use super::*;
 
 #[derive(Default)]
+struct ErrorSink(Vec<String>);
+
+impl ErrorSink {
+    fn push(&mut self, error: String) {
+        self.0.push(error);
+    }
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    fn into_vec(self) -> Vec<String> {
+        self.0
+    }
+}
+
+#[derive(Default)]
 struct ValidationContext {}
-fn validate_a64_item(value: &A64Item, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_a64_item(value: &A64Item, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     match value {
         A64Item::AddImm {
             imm,
@@ -74,7 +89,7 @@ fn validate_a64_item(value: &A64Item, ctx: &mut ValidationContext, errors: &mut 
         }
     }
 }
-fn validate_a64_reg(value: &A64Reg, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_a64_reg(value: &A64Reg, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     match value {
         A64Reg::Sp(_inner) => {
             let _ = (ctx, errors);
@@ -98,38 +113,32 @@ fn validate_a_arch64_dialect_keyword(
 
     ctx: &mut ValidationContext,
 
-    errors: &mut Vec<String>,
+    errors: &mut ErrorSink,
 ) {
     let _ = (value, ctx, errors);
 }
-fn validate_add_keyword(value: &AddKeyword, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_add_keyword(value: &AddKeyword, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     let _ = (value, ctx, errors);
 }
-fn validate_asm_keyword(value: &AsmKeyword, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_asm_keyword(value: &AsmKeyword, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     let _ = (value, ctx, errors);
 }
-fn validate_b_keyword(value: &BKeyword, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_b_keyword(value: &BKeyword, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     let _ = (value, ctx, errors);
 }
-fn validate_jmp_keyword(value: &JmpKeyword, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_jmp_keyword(value: &JmpKeyword, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     let _ = (value, ctx, errors);
 }
-fn validate_mov_keyword(value: &MovKeyword, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_mov_keyword(value: &MovKeyword, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     let _ = (value, ctx, errors);
 }
-fn validate_movz_keyword(
-    value: &MovzKeyword,
-
-    ctx: &mut ValidationContext,
-
-    errors: &mut Vec<String>,
-) {
+fn validate_movz_keyword(value: &MovzKeyword, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     let _ = (value, ctx, errors);
 }
-fn validate_nop_keyword(value: &NopKeyword, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_nop_keyword(value: &NopKeyword, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     let _ = (value, ctx, errors);
 }
-fn validate_program(value: &Program, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_program(value: &Program, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     match value {
         Program::AArch64 {
             dialect,
@@ -163,13 +172,13 @@ fn validate_program(value: &Program, ctx: &mut ValidationContext, errors: &mut V
         }
     }
 }
-fn validate_ret_keyword(value: &RetKeyword, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_ret_keyword(value: &RetKeyword, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     let _ = (value, ctx, errors);
 }
-fn validate_sub_keyword(value: &SubKeyword, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_sub_keyword(value: &SubKeyword, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     let _ = (value, ctx, errors);
 }
-fn validate_x64_item(value: &X64Item, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_x64_item(value: &X64Item, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     match value {
         X64Item::AddImm {
             imm, op, prov, rd, ..
@@ -220,7 +229,7 @@ fn validate_x64_item(value: &X64Item, ctx: &mut ValidationContext, errors: &mut 
         }
     }
 }
-fn validate_x64_reg(value: &X64Reg, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_x64_reg(value: &X64Reg, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     match value {
         X64Reg::Rax(_inner) => {
             let _ = (ctx, errors);
@@ -247,14 +256,15 @@ fn validate_x86_64_dialect_keyword(
 
     ctx: &mut ValidationContext,
 
-    errors: &mut Vec<String>,
+    errors: &mut ErrorSink,
 ) {
     let _ = (value, ctx, errors);
 }
 pub fn validate_root(root: &Program) -> Result<(), String> {
     let mut ctx = ValidationContext::default();
-    let mut errors = Vec::new();
+    let mut errors = ErrorSink::default();
     validate_program(root, &mut ctx, &mut errors);
+    let errors = errors.into_vec();
     if errors.is_empty() {
         Ok(())
     } else {

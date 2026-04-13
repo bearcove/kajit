@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::normalize::{
-    DocumentedValue, NormalizedNodeDecl, NormalizedRepr, SyntaxTypeUse, classify_ref_type,
-    is_id_type, is_int_scalar_type, is_string_scalar_type,
+    DocumentedValue, NormalizedNodeDecl, NormalizedRepr, SyntaxTypeUse, is_id_type,
+    is_int_scalar_type, is_string_scalar_type,
 };
 use crate::render_helpers::{is_prov_only_struct, rust_ident, snake_case};
 
@@ -178,15 +178,7 @@ fn render_hover_line(
         SyntaxTypeUse::Ref { name } if node_names.iter().any(|node| node == name) => Some(format!(
             "if let Some(prov) = {expr}.provenance() {{ emit_hover(prov, {markdown:?}, {priority}, out); }}"
         )),
-        _ => match classify_ref_type(
-            repr,
-            match ty {
-                SyntaxTypeUse::Ref { name } => name,
-                _ => unreachable!(),
-            },
-        ) {
-            _ => None,
-        },
+        _ => None,
     }
 }
 

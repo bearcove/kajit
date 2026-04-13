@@ -4,13 +4,28 @@
 use super::*;
 
 #[derive(Default)]
+struct ErrorSink(Vec<String>);
+
+impl ErrorSink {
+    fn push(&mut self, error: String) {
+        self.0.push(error);
+    }
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    fn into_vec(self) -> Vec<String> {
+        self.0
+    }
+}
+
+#[derive(Default)]
 struct ValidationContext {}
-fn validate_block(value: &Block, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_block(value: &Block, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     for value in value.statements.iter() {
         validate_stmt(value, ctx, errors);
     }
 }
-fn validate_expr(value: &Expr, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_expr(value: &Expr, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     match value {
         Expr::Binary {
             lhs, op, prov, rhs, ..
@@ -38,7 +53,7 @@ fn validate_expr(value: &Expr, ctx: &mut ValidationContext, errors: &mut Vec<Str
         }
     }
 }
-fn validate_function(value: &Function, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_function(value: &Function, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     validate_block(&value.body, ctx, errors);
     if let Some(value) = value.docs.as_ref() {}
     for value in value.locals.iter() {
@@ -48,10 +63,10 @@ fn validate_function(value: &Function, ctx: &mut ValidationContext, errors: &mut
         validate_param(value, ctx, errors);
     }
 }
-fn validate_local(value: &Local, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_local(value: &Local, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     let _ = (value, ctx, errors);
 }
-fn validate_module(value: &Module, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_module(value: &Module, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     if let Some(value) = value.docs.as_ref() {}
     for value in value.functions.iter() {
         validate_function(value, ctx, errors);
@@ -60,10 +75,10 @@ fn validate_module(value: &Module, ctx: &mut ValidationContext, errors: &mut Vec
         validate_type_def(value, ctx, errors);
     }
 }
-fn validate_param(value: &Param, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_param(value: &Param, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     let _ = (value, ctx, errors);
 }
-fn validate_place(value: &Place, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_place(value: &Place, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     match value {
         Place::Field {
             base, field, prov, ..
@@ -75,7 +90,7 @@ fn validate_place(value: &Place, ctx: &mut ValidationContext, errors: &mut Vec<S
         }
     }
 }
-fn validate_stmt(value: &Stmt, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_stmt(value: &Stmt, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     match value {
         Stmt::Assign {
             place, prov, value, ..
@@ -112,14 +127,15 @@ fn validate_stmt(value: &Stmt, ctx: &mut ValidationContext, errors: &mut Vec<Str
         }
     }
 }
-fn validate_type_def(value: &TypeDef, ctx: &mut ValidationContext, errors: &mut Vec<String>) {
+fn validate_type_def(value: &TypeDef, ctx: &mut ValidationContext, errors: &mut ErrorSink) {
     if let Some(value) = value.docs.as_ref() {}
     for value in value.params.iter() {}
 }
 pub fn validate_root(root: &Module) -> Result<(), String> {
     let mut ctx = ValidationContext::default();
-    let mut errors = Vec::new();
+    let mut errors = ErrorSink::default();
     validate_module(root, &mut ctx, &mut errors);
+    let errors = errors.into_vec();
     if errors.is_empty() {
         Ok(())
     } else {

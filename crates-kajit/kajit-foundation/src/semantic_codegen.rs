@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::normalize::{
-    DocumentedValue, NormalizedNodeDecl, NormalizedRepr, SyntaxRule, SyntaxTypeUse,
-    classify_ref_type, is_id_type, is_int_scalar_type, is_string_scalar_type,
+    DocumentedValue, NormalizedNodeDecl, NormalizedRepr, SyntaxRule, SyntaxTypeUse, is_id_type,
+    is_int_scalar_type, is_string_scalar_type,
 };
 use crate::render_helpers::{is_prov_only_struct, rust_ident, snake_case};
 
@@ -214,18 +214,7 @@ fn render_field_annotation_line(
         SyntaxTypeUse::Ref { name } if node_names.iter().any(|node| node == name) => Some(format!(
             "if let Some(prov) = {expr}.provenance() {{ emit_prov_token(prov, {kind:?}, out); }}"
         )),
-        _ => match classify_ref_type(
-            repr,
-            match ty {
-                SyntaxTypeUse::Ref { name } => name,
-                _ => unreachable!(),
-            },
-        ) {
-            crate::normalize::NormalizedRefKind::Enum => Some(format!(
-                "if let Some(prov) = {expr}.provenance() {{ emit_prov_token(prov, {kind:?}, out); }}"
-            )),
-            _ => None,
-        },
+        SyntaxTypeUse::Ref { .. } => None,
     }
 }
 
@@ -342,16 +331,19 @@ pub(crate) fn render_semantic_block(
                         })
                         .collect::<Vec<_>>()
                 };
-                [
-                    "let current_prov = node.provenance();".to_owned(),
+                let mut rows = Vec::new();
+                if !literal_rows.is_empty() {
+                    rows.push("let current_prov = node.provenance();".to_owned());
+                }
+                rows.extend([
                     literal_rows.join("\n"),
                     field_rows.join("\n"),
                     recurse_rows.join("\n"),
-                ]
-                .into_iter()
-                .filter(|row| !row.is_empty())
-                .collect::<Vec<_>>()
-                .join("\n")
+                ]);
+                rows.into_iter()
+                    .filter(|row| !row.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n")
             }
             NormalizedNodeDecl::Enum(variants) => {
                 let variant_names = variants.keys().cloned().collect::<Vec<_>>();
@@ -446,21 +438,25 @@ pub(crate) fn render_semantic_block(
                                     )
                                 })
                                     .collect::<Vec<_>>();
-                                let rows = [
-                                    "let current_prov = node.provenance();".to_owned(),
-                                    variant_row,
+                                let mut rows = Vec::new();
+                                if !literal_rows.is_empty() {
+                                    rows.push("let current_prov = node.provenance();".to_owned());
+                                }
+                                rows.push(variant_row);
+                                rows.extend([
                                     literal_rows.join("\n"),
                                     field_rows.join("\n"),
                                     recurse_rows.join("\n"),
-                                ]
-                                .into_iter()
-                                .filter(|row| !row.is_empty())
-                                .collect::<Vec<_>>()
-                                .join("\n");
+                                ]);
+                                let body = rows
+                                    .into_iter()
+                                    .filter(|row| !row.is_empty())
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
                                 if is_prov_only_struct(fields, prov_tag) {
                                     format!(
                                         "{node_name}::{variant_name}({pattern_fields}) => {{\n{}\n        }}",
-                                        rows.lines()
+                                        body.lines()
                                             .map(|line| format!("            {line}"))
                                             .collect::<Vec<_>>()
                                             .join("\n")
@@ -468,7 +464,7 @@ pub(crate) fn render_semantic_block(
                                 } else {
                                     format!(
                                         "{node_name}::{variant_name} {{ {pattern_fields} }} => {{\n{}\n        }}",
-                                        rows.lines()
+                                        body.lines()
                                             .map(|line| format!("            {line}"))
                                             .collect::<Vec<_>>()
                                             .join("\n")
