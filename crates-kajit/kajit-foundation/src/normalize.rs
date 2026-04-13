@@ -14,7 +14,7 @@ pub(crate) struct SyntaxRuleNamed {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum SyntaxRule {
+pub enum SyntaxRule {
     Seq(Vec<SyntaxRule>),
     Choice(Vec<SyntaxRule>),
     Semantic {
@@ -47,7 +47,7 @@ pub(crate) enum SyntaxRepeatSeparator {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum SyntaxTypeUse {
+pub enum SyntaxTypeUse {
     Optional(Box<SyntaxTypeUse>),
     Seq(Box<SyntaxTypeUse>),
     Arena {
@@ -104,7 +104,7 @@ pub(crate) enum NormalizedSupportDecl {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum NormalizedRefKind {
+pub enum NormalizedRefKind {
     Provenance,
     StringScalar,
     IntScalar,
