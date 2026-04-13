@@ -147,7 +147,7 @@ mod tests {
         let program = reprs::asm::parse_root_text(source).expect("expected valid .k-asm");
         let output = kajit_asm::repr::assemble_repr_program(&program, source).expect("emit");
         assert!(matches!(output, FinalizedReprEmission::AArch64(_)));
-        assert!(!output.is_empty()());
+        assert!(!output.is_empty());
         assert!(output.trace_text().is_ok());
         assert!(path_matches_ext(path, reprs::asm::REPR_FILE_EXT));
     }
@@ -159,7 +159,7 @@ mod tests {
         let program = reprs::asm::parse_root_text(source).expect("expected valid .k-asm");
         let output = kajit_asm::repr::assemble_repr_program(&program, source).expect("emit");
         assert!(matches!(output, FinalizedReprEmission::X64(_)));
-        assert!(!output.is_empty()());
+        assert!(!output.is_empty());
         assert!(output.trace_text().is_ok());
         assert!(path_matches_ext(path, reprs::asm::REPR_FILE_EXT));
     }

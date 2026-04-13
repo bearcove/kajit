@@ -231,14 +231,6 @@ fn render_ref_value_parser(
         {
             format!("({base}).map(Box::new)")
         }
-        SyntaxTypeUse::Ref { name }
-            if matches!(
-                repr.support.get(name).map(|decl| &decl.value),
-                Some(NormalizedSupportDecl::Struct(_))
-            ) =>
-        {
-            base
-        }
         _ => base,
     })
 }
@@ -633,7 +625,6 @@ fn render_scalar_support_rule_expr(
             let expected_field = match decl {
                 NormalizedSupportDecl::String => "text",
                 NormalizedSupportDecl::Int | NormalizedSupportDecl::Id => "value",
-                _ => unreachable!(),
             };
             let mut items_out = Vec::new();
             let mut bound = None;
@@ -693,7 +684,6 @@ fn render_scalar_support_rule_expr(
                 NormalizedSupportDecl::Id => format!(
                     "({chain}).try_map(move |{bound_name}, span| match {bound_name}.parse::<u32>() {{ Ok(value) => Ok({support_name}(value)), Err(err) => Err(Rich::custom(span, format!(\"invalid id literal {{{bound_name}:?}}: {{err}}\"))) }})"
                 ),
-                _ => unreachable!(),
             };
             Ok(format!("{body}.boxed()"))
         }
@@ -965,48 +955,6 @@ fn render_rule_parser_expr(
             provenance_tag,
             arena_infos,
         ),
-        RuleTargetDecl::Support(NormalizedSupportDecl::Struct(fields)) => {
-            render_struct_parser_expr(
-                repr,
-                rule_name,
-                fields,
-                rule,
-                rule_names,
-                node_names,
-                provenance_tag,
-                arena_infos,
-            )
-        }
-        RuleTargetDecl::Support(NormalizedSupportDecl::Enum(variants)) => {
-            let SyntaxRule::Choice(items) = rule else {
-                return Err(format!("enum rule for {rule_name} must be choice"));
-            };
-            let mut parsers = Vec::new();
-            for item in items {
-                let SyntaxRule::Variant(named) = item else {
-                    return Err(format!(
-                        "enum rule for {rule_name} contains non-variant item"
-                    ));
-                };
-                let variant_name = named.name.as_str();
-                if !variants.iter().any(|variant| variant.value == variant_name) {
-                    return Err(format!(
-                        "support enum {rule_name} is missing variant declaration {variant_name:?}"
-                    ));
-                }
-                let Some(text) = extract_single_literal(named.inner.as_ref()) else {
-                    return Err(format!(
-                        "support enum {rule_name} variant {variant_name:?} must be a literal"
-                    ));
-                };
-                parsers.push(format!("just({text:?}).to({rule_name}::{variant_name})"));
-            }
-            Ok(if parsers.len() == 1 {
-                format!("({}).then_ignore(ws()).boxed()", parsers[0])
-            } else {
-                format!("choice(({})).then_ignore(ws()).boxed()", parsers.join(", "))
-            })
-        }
         RuleTargetDecl::Support(
             NormalizedSupportDecl::String | NormalizedSupportDecl::Int | NormalizedSupportDecl::Id,
         ) => render_scalar_support_rule_expr(
@@ -1021,11 +969,6 @@ fn render_rule_parser_expr(
             node_names,
             arena_infos,
         ),
-        RuleTargetDecl::Support(NormalizedSupportDecl::StringSeq | NormalizedSupportDecl::Unit) => {
-            Err(format!(
-                "support rule target {rule_name:?} has no parser strategy yet"
-            ))
-        }
     }
 }
 

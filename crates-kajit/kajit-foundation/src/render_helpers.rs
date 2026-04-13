@@ -217,7 +217,6 @@ pub(crate) fn render_support_decl(
     name: &str,
     decl: &NormalizedSupportDecl,
     doc: Option<&[String]>,
-    node_names: &[String],
 ) -> String {
     let docs = render_doc_lines(doc, "");
     let body = match decl {
@@ -230,59 +229,6 @@ pub(crate) fn render_support_decl(
         NormalizedSupportDecl::Id => format!(
             "#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]\npub struct {name}(pub u32);\n\nimpl {name} {{\n    pub const fn new(index: u32) -> Self {{\n        Self(index)\n    }}\n\n    pub const fn index(self) -> usize {{\n        self.0 as usize\n    }}\n}}"
         ),
-        NormalizedSupportDecl::StringSeq => format!(
-            "#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct {name}(pub Vec<String>);"
-        ),
-        NormalizedSupportDecl::Unit => {
-            format!("#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct {name};")
-        }
-        NormalizedSupportDecl::Struct(fields) => {
-            let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
-            field_names.sort();
-            let field_rows = field_names
-                .iter()
-                .map(|field_name| {
-                    let field = fields.get(field_name).unwrap();
-                    let ty = render_syntax_type_use(&field.value, node_names, true);
-                    let docs = render_doc_lines(field.doc.as_deref(), "    ");
-                    if docs.is_empty() {
-                        format!("    pub {}: {},", rust_ident(field_name), ty)
-                    } else {
-                        format!("{docs}\n    pub {}: {},", rust_ident(field_name), ty)
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            format!(
-                "#[derive(Debug, Clone, PartialEq, Eq)]\npub struct {name} {{\n{field_rows}\n}}"
-            )
-        }
-        NormalizedSupportDecl::Enum(variants) => {
-            let rows = variants
-                .iter()
-                .enumerate()
-                .map(|(idx, variant)| {
-                    let variant_docs = render_doc_lines(variant.doc.as_deref(), "    ");
-                    if idx == 0 {
-                        if variant_docs.is_empty() {
-                            format!("    #[default]\n    {},", variant.value)
-                        } else {
-                            format!("{variant_docs}\n    #[default]\n    {},", variant.value)
-                        }
-                    } else {
-                        if variant_docs.is_empty() {
-                            format!("    {},", variant.value)
-                        } else {
-                            format!("{variant_docs}\n    {},", variant.value)
-                        }
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            format!(
-                "#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]\npub enum {name} {{\n\n{rows}\n}}"
-            )
-        }
     };
     if docs.is_empty() {
         body

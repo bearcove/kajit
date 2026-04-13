@@ -1,9 +1,7 @@
 use crate::formatter_codegen::render_formatter_block;
 use crate::hover_codegen::render_hover_block;
 use crate::normalize::SyntaxTypeUse;
-use crate::normalize::{
-    DocumentedValue, NormalizedNodeDecl, NormalizedNodeKind, NormalizedRepr, NormalizedSupportDecl,
-};
+use crate::normalize::{DocumentedValue, NormalizedNodeDecl, NormalizedNodeKind, NormalizedRepr};
 use crate::parser_codegen::render_parser_block;
 use crate::render_helpers::{
     collect_syntax_type_tags, render_common_placeholder, render_node_decl, render_provenance_impl,
@@ -63,10 +61,6 @@ pub(crate) fn render_repr_poc_files(reprs: &[NormalizedRepr]) -> Vec<GeneratedMo
                 relative_path: format!("{module_dir}/hover.rs"),
                 contents: format_generated_file(render_hover_file(&parts)),
             },
-            GeneratedModuleFile {
-                relative_path: format!("{module_dir}/validate.rs"),
-                contents: format_generated_file(render_validate_file(&parts)),
-            },
         ]);
         if repr.name == "HIR" {
             files.push(GeneratedModuleFile {
@@ -94,7 +88,6 @@ struct RenderParts {
     common_rows: String,
     support_rows: String,
     node_rows: String,
-    support_field_rows: String,
     node_field_rows: String,
     pool_rows: String,
     ref_rows: String,
@@ -110,7 +103,6 @@ struct RenderParts {
     formatter_rows: String,
     semantic_rows: String,
     hover_rows: String,
-    validate_rows: String,
     graph_storage_field_rows: String,
     graph_storage_init_rows: String,
     graph_storage_method_rows: String,
@@ -585,195 +577,6 @@ fn render_node_validate_fn(
     }
 }
 
-fn render_support_validate_fn(
-    name: &str,
-    decl: &NormalizedSupportDecl,
-    node_names: &[String],
-    support_structs: &std::collections::BTreeSet<String>,
-) -> Option<String> {
-    match decl {
-        NormalizedSupportDecl::Struct(fields) => Some(render_record_validate_fn(
-            name,
-            fields,
-            &std::collections::BTreeMap::new(),
-            node_names,
-            support_structs,
-            name,
-            &format!("validate_support_{}", snake_case(name)),
-            false,
-        )),
-        _ => None,
-    }
-}
-
-fn render_validate_block(repr: &NormalizedRepr, node_names: &[String]) -> Result<String, String> {
-    let pool_infos = collect_pool_infos(repr);
-    let arena_infos = collect_arena_graph_infos(repr)?;
-    let graph_backed = !arena_infos.is_empty();
-    let support_structs = repr
-        .support
-        .iter()
-        .filter_map(|(name, decl)| {
-            matches!(decl.value, NormalizedSupportDecl::Struct(_)).then_some(name.clone())
-        })
-        .collect::<std::collections::BTreeSet<_>>();
-
-    let mut ctx_fields = Vec::new();
-    let mut key_fns = Vec::new();
-    let mut seen_items = std::collections::BTreeSet::<String>::new();
-    let mut items = pool_infos.iter().collect::<Vec<_>>();
-    items.sort_by(|a, b| a.0.cmp(b.0));
-    for (item_name, pool) in items {
-        seen_items.insert(item_name.clone());
-        ctx_fields.push(format!(
-            "    {}_ids: Vec<std::collections::BTreeSet<{}>>,",
-            snake_case(item_name),
-            pool.key
-        ));
-        let decl = repr
-            .nodes
-            .get(item_name)
-            .ok_or_else(|| format!("keyed pool item {item_name} must be a declared node"))?;
-        let accessor = field_id_accessor(item_name, &decl.value, &pool.key)?;
-        key_fns.push(format!(
-            "fn key_of_{}(value: &{}) -> {} {{\n    {}\n}}",
-            snake_case(item_name),
-            item_name,
-            pool.key,
-            accessor
-        ));
-    }
-    for arena in &arena_infos {
-        if seen_items.insert(arena.item.clone()) {
-            ctx_fields.push(format!(
-                "    {}_ids: Vec<std::collections::BTreeSet<{}>>,",
-                snake_case(&arena.item),
-                arena.key
-            ));
-            key_fns.push(format!(
-                "fn key_of_{}(value: &{}) -> {} {{\n    {}\n}}",
-                snake_case(&arena.item),
-                arena.item,
-                arena.key,
-                arena.key_accessor
-            ));
-        }
-    }
-
-    let mut support_fns = repr
-        .support
-        .iter()
-        .filter_map(|(name, decl)| {
-            render_support_validate_fn(name, &decl.value, node_names, &support_structs)
-        })
-        .collect::<Vec<_>>();
-    support_fns.sort();
-
-    let mut node_fns = node_names
-        .iter()
-        .map(|name| {
-            render_node_validate_fn(
-                name,
-                &repr.nodes[name].value,
-                &pool_infos,
-                node_names,
-                &support_structs,
-            )
-        })
-        .collect::<Vec<_>>();
-    node_fns.sort();
-
-    let graph_seed_rows = arena_infos
-        .iter()
-        .map(|info| {
-            let item_snake = snake_case(&info.item);
-            format!(
-                "    ctx.{item_snake}_ids.push(graph.all_{item_snake}().map(key_of_{item_snake}).collect());
-    for value in graph.all_{item_snake}() {{
-        validate_{item_snake}(value, &mut ctx, &mut errors);
-    }}"
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let root_fn = if graph_backed {
-        format!(
-            r#"pub fn validate_root_in_graph(
-    graph: &Graph,
-    handle: {root_handle_name},
-) -> Result<(), String> {{
-    let Some(root) = graph.root(handle) else {{
-        return Err(format!("unknown root handle {{:?}}", handle));
-    }};
-    let mut ctx = ValidationContext::default();
-    let mut errors = Vec::new();
-{graph_seed_rows}
-    validate_{root_snake}(root, &mut ctx, &mut errors);
-    if errors.is_empty() {{
-        Ok(())
-    }} else {{
-        Err(errors.join("\n"))
-    }}
-}}
-
-pub fn validate_root_text(source: &str) -> Result<(), String> {{
-    let mut graph = Graph::new();
-    let handle = parse_root_into_graph(&mut graph, source)?;
-    validate_root_in_graph(&graph, handle)
-}}"#,
-            root_handle_name = format!("{}Handle", repr.syntax.root),
-            graph_seed_rows = graph_seed_rows,
-            root_snake = snake_case(&repr.syntax.root),
-        )
-    } else {
-        format!(
-            r#"pub fn validate_root(root: &{root_name}) -> Result<(), String> {{
-    let mut ctx = ValidationContext::default();
-    let mut errors = Vec::new();
-    validate_{root_snake}(root, &mut ctx, &mut errors);
-    if errors.is_empty() {{
-        Ok(())
-    }} else {{
-        Err(errors.join("\n"))
-    }}
-}}
-
-pub fn validate_root_text(source: &str) -> Result<(), String> {{
-    let root = parse_root_text(source)?;
-    validate_root(&root)
-}}"#,
-            root_name = repr.syntax.root,
-            root_snake = snake_case(&repr.syntax.root),
-        )
-    };
-    Ok(format!(
-        r#"
-#![allow(dead_code, unused_variables)]
-
-use super::*;
-
-#[derive(Default)]
-struct ValidationContext {{
-{ctx_fields}
-}}
-
-{key_fns}
-
-{support_fns}
-
-{node_fns}
-
-{root_fn}
-"#,
-        ctx_fields = ctx_fields.join("\n"),
-        key_fns = key_fns.join("\n\n"),
-        support_fns = support_fns.join("\n\n"),
-        node_fns = node_fns.join("\n\n"),
-        root_fn = root_fn,
-    ))
-}
-
 fn collect_pool_specs(
     owner: &str,
     field: &str,
@@ -941,34 +744,10 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         .iter()
         .map(|name| {
             let decl = repr.support.get(name).unwrap();
-            render_support_decl(name, &decl.value, decl.doc.as_deref(), &node_names)
+            render_support_decl(name, &decl.value, decl.doc.as_deref())
         })
         .collect::<Vec<_>>()
         .join("\n\n");
-
-    let support_field_rows = support_names
-        .iter()
-        .flat_map(|name| {
-            let decl = repr.support.get(name).unwrap();
-            match &decl.value {
-                crate::normalize::NormalizedSupportDecl::Struct(fields) => {
-                    let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
-                    field_names.sort();
-                    field_names
-                        .into_iter()
-                        .map(|field_name| {
-                            let kind = render_type_use_kind(&fields[&field_name].value);
-                            format!(
-                                "    FieldSpec {{ owner: {name:?}, field: {field_name:?}, kind: {kind:?} }},"
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                }
-                _ => Vec::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
 
     let node_field_rows = node_names
         .iter()
@@ -1126,13 +905,6 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
             }
         }
     }
-    for decl in repr.support.values() {
-        if let crate::normalize::NormalizedSupportDecl::Struct(fields) = &decl.value {
-            for ty in fields.values() {
-                collect_syntax_type_tags(&ty.value, &mut placeholder_names);
-            }
-        }
-    }
     placeholder_names.sort();
     placeholder_names.dedup();
     placeholder_names.retain(|name| {
@@ -1236,8 +1008,6 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
     let semantic_rows =
         render_semantic_block(repr, &node_names).expect("semantic block should render");
     let hover_rows = render_hover_block(repr, &node_names).expect("hover block should render");
-    let validate_rows =
-        render_validate_block(repr, &node_names).expect("validate block should render");
     let arena_graph_infos =
         collect_arena_graph_infos(repr).expect("arena graph infos should collect");
     let graph_storage_field_rows = arena_graph_infos
@@ -1309,7 +1079,6 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         common_rows,
         support_rows,
         node_rows,
-        support_field_rows,
         node_field_rows,
         pool_rows,
         ref_rows,
@@ -1325,7 +1094,6 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         formatter_rows,
         semantic_rows,
         hover_rows,
-        validate_rows,
         graph_storage_field_rows,
         graph_storage_init_rows,
         graph_storage_method_rows,
@@ -1848,10 +1616,6 @@ pub static COMMON_TYPES: &[TypeUseSpec] = &[
 {common_rows}
 ];
 
-pub static SUPPORT_FIELDS: &[FieldSpec] = &[
-{support_field_rows}
-];
-
 pub static NODES: &[NodeSpec] = &[
 {node_rows}
 ];
@@ -1882,7 +1646,6 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
         token_rows = parts.token_rows,
         rule_rows = parts.rule_rows,
         common_rows = parts.common_rows,
-        support_field_rows = parts.support_field_rows,
         node_rows = parts.node_rows,
         node_field_rows = parts.node_field_rows,
         pool_rows = parts.pool_rows,
@@ -2079,10 +1842,6 @@ use super::provenance::HasProvenance;
 "#,
         hover_rows = parts.hover_rows,
     )
-}
-
-fn render_validate_file(parts: &RenderParts) -> String {
-    parts.validate_rows.clone()
 }
 
 fn render_tests_file() -> String {

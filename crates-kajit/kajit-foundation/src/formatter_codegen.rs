@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::normalize::{
-    DocumentedValue, NormalizedNodeDecl, NormalizedRepr, NormalizedSupportDecl, SyntaxTypeUse,
-    is_id_type, is_int_scalar_type, is_string_scalar_type,
+    DocumentedValue, NormalizedNodeDecl, NormalizedRepr, SyntaxTypeUse, is_id_type,
+    is_int_scalar_type, is_string_scalar_type,
 };
 use crate::render_helpers::{is_prov_only_struct, rust_ident, snake_case};
 
@@ -35,26 +35,6 @@ pub(crate) fn render_formatter_block(
             .ok_or_else(|| format!("missing node declaration for {node_name}"))?
             .value;
         formatters.push(render_node_formatter(node_name, decl, repr, node_names)?);
-    }
-    let mut support_names = repr.support.keys().cloned().collect::<Vec<_>>();
-    support_names.sort();
-    for support_name in support_names {
-        let decl = &repr
-            .support
-            .get(&support_name)
-            .ok_or_else(|| format!("missing support declaration for {support_name}"))?
-            .value;
-        if matches!(
-            decl,
-            NormalizedSupportDecl::Struct(_) | NormalizedSupportDecl::Enum(_)
-        ) {
-            formatters.push(render_support_formatter(
-                &support_name,
-                decl,
-                repr,
-                node_names,
-            )?);
-        }
     }
 
     let graph_rows = if graph_backed {
@@ -346,55 +326,6 @@ fn render_node_formatter(
                 arms_in_graph.join(",\n")
             ))
         }
-    }
-}
-
-fn render_support_formatter(
-    type_name: &str,
-    decl: &NormalizedSupportDecl,
-    repr: &NormalizedRepr,
-    node_names: &[String],
-) -> Result<String, String> {
-    let fn_name = format!("format_{}", snake_case(type_name));
-    let write_name = format!("write_{}", snake_case(type_name));
-    match decl {
-        NormalizedSupportDecl::Struct(fields) => {
-            if let Some(template) = repr.syntax.canonical_print.get(type_name) {
-                let parts = parse_template(template)?;
-                let body = render_template_lines(&parts, "node", fields, None, repr, node_names)?;
-                Ok(format!(
-                    "pub fn {fn_name}(node: &{type_name}) -> String {{\n    let mut w = Writer::new();\n    {write_name}(&mut w, node);\n    w.finish()\n}}\n\nfn {write_name}(w: &mut Writer, node: &{type_name}) {{\n{body}\n}}"
-                ))
-            } else {
-                Ok(format!(
-                    "pub fn {fn_name}(node: &{type_name}) -> String {{\n    format!(\"{{:?}}\", node)\n}}\n\nfn {write_name}(w: &mut Writer, node: &{type_name}) {{\n    w.text(&format!(\"{{:?}}\", node));\n}}"
-                ))
-            }
-        }
-        NormalizedSupportDecl::Enum(variants) => {
-            let mut variant_names = variants.iter().map(|v| v.value.clone()).collect::<Vec<_>>();
-            variant_names.sort();
-            let arms = variant_names
-                .iter()
-                .map(|variant_name| {
-                    let template_key = format!("{type_name}.{variant_name}");
-                    let body =
-                        if let Some(template) = repr.syntax.canonical_print.get(&template_key) {
-                            format!("w.text({template:?});")
-                        } else {
-                            format!("w.text({variant_name:?});")
-                        };
-                    format!("        {type_name}::{variant_name} => {{ {body} }}")
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            Ok(format!(
-                "pub fn {fn_name}(node: &{type_name}) -> String {{\n    let mut w = Writer::new();\n    {write_name}(&mut w, node);\n    w.finish()\n}}\n\nfn {write_name}(w: &mut Writer, node: &{type_name}) {{\n    match node {{\n{arms}\n    }}\n}}"
-            ))
-        }
-        _ => Err(format!(
-            "support formatter only handles struct/enum, got {type_name}"
-        )),
     }
 }
 
@@ -699,13 +630,6 @@ fn render_value_write_lines(
             _ if is_id_type(repr, name) => {
                 format!("    {writer_name}.text(&{expr}.0.to_string());")
             }
-            _ if matches!(
-                repr.support.get(name).map(|decl| &decl.value),
-                Some(NormalizedSupportDecl::Struct(_) | NormalizedSupportDecl::Enum(_))
-            ) =>
-            {
-                format!("    write_{}({writer_name}, &{expr});", snake_case(name))
-            }
             _ => format!("    {writer_name}.text(&format!(\"{{:?}}\", {expr}));"),
         }]),
     }
@@ -933,13 +857,6 @@ fn render_value_write_lines_in_graph(
             }
             _ if is_id_type(repr, name) => {
                 format!("    {writer_name}.text(&{expr}.0.to_string());")
-            }
-            _ if matches!(
-                repr.support.get(name).map(|decl| &decl.value),
-                Some(NormalizedSupportDecl::Struct(_) | NormalizedSupportDecl::Enum(_))
-            ) =>
-            {
-                format!("    write_{}({writer_name}, &{expr});", snake_case(name))
             }
             _ => format!("    {writer_name}.text(&format!(\"{{:?}}\", {expr}));"),
         }]),

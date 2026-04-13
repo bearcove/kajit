@@ -1186,10 +1186,6 @@ pub(crate) fn classify_ref_type(repr: &NormalizedRepr, name: &str) -> Normalized
         Some(NormalizedSupportDecl::String) => NormalizedRefKind::StringScalar,
         Some(NormalizedSupportDecl::Int) => NormalizedRefKind::IntScalar,
         Some(NormalizedSupportDecl::Id) => NormalizedRefKind::Id,
-        Some(NormalizedSupportDecl::StringSeq) => NormalizedRefKind::StringSeq,
-        Some(NormalizedSupportDecl::Unit) => NormalizedRefKind::Unit,
-        Some(NormalizedSupportDecl::Struct(_)) => NormalizedRefKind::Unknown,
-        Some(NormalizedSupportDecl::Enum(_)) => NormalizedRefKind::Enum,
         None => NormalizedRefKind::Unknown,
     }
 }
