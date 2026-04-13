@@ -182,11 +182,3 @@ fn validate_modern_repr_schema(
         rules: schema.rules.rules.clone(),
     })
 }
-
-pub(crate) fn documented_name(key: &Documented<String>) -> &str {
-    key.value.as_str()
-}
-
-pub(crate) fn documented_doc(key: &Documented<String>) -> Option<&[String]> {
-    key.doc.as_deref()
-}

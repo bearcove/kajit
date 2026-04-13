@@ -25,33 +25,5 @@ pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> 
     fs::create_dir_all(&out_dir)
         .map_err(|e| format!("failed to create {}: {e}", out_dir.display()))?;
 
-    let old_generated_dir = out_dir.join("schema_poc");
-    if old_generated_dir.exists() {
-        fs::remove_dir_all(&old_generated_dir)
-            .map_err(|e| format!("failed to remove {}: {e}", old_generated_dir.display()))?;
-    }
-
-    let mut written = Vec::new();
-    for generated in render_module::render_repr_poc_files(&schemas) {
-        let path = out_dir.join(&generated.relative_path);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
-        }
-        fs::write(&path, generated.contents)
-            .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
-        written.push(path);
-    }
-
-    for repr in &schemas {
-        let module_dir = out_dir.join(repr.name.to_ascii_lowercase());
-        let resolve_path = module_dir.join("resolve.rs");
-        if !resolve_path.exists() {
-            fs::write(&resolve_path, render_module::render_default_resolve_file())
-                .map_err(|e| format!("failed to write {}: {e}", resolve_path.display()))?;
-            written.push(resolve_path);
-        }
-    }
-
-    Ok(written)
+    todo!("woops I deleted 80% of the crate because it was bad");
 }
