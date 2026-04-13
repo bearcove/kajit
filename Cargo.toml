@@ -44,3 +44,16 @@ debug = "line-tables-only"
 
 [patch.crates-io]
 facet-styx = { path = "../styx/crates/facet-styx" }
+facet = { path = "../facet/facet" }
+facet-core = { path = "../facet/facet-core" }
+facet-error = { path = "../facet/facet-error" }
+facet-macro-parse = { path = "../facet/facet-macro-parse" }
+facet-macro-types = { path = "../facet/facet-macro-types" }
+facet-macros = { path = "../facet/facet-macros" }
+facet-macros-impl = { path = "../facet/facet-macros-impl" }
+facet-path = { path = "../facet/facet-path" }
+facet-pretty = { path = "../facet/facet-pretty" }
+facet-reflect = { path = "../facet/facet-reflect" }
+facet-solver = { path = "../facet/facet-solver" }
+facet-testhelpers = { path = "../facet/facet-testhelpers" }
+facet-testhelpers-macros = { path = "../facet/facet-testhelpers-macros" }

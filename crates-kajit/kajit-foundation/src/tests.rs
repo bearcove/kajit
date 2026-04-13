@@ -70,3 +70,39 @@ fn asm_repro_option_indexmap_documented_key() {
 
     let _result: RulesDecl = facet_styx::from_str(input).unwrap();
 }
+
+// Minimal double-free repro: #[facet(flatten)] on an IndexMap whose value type
+// has a required field. When the input provides an entry with an empty value
+// (`ZeroOperand {}`), `require_full_initialization` fails during
+// `finish_deferred`. The ensuing `cleanup_stored_frames_on_error` path in
+// facet-reflect drops the Map (Field(0)) — but the Map already owns the key
+// "ZeroOperand" from `complete_map_key_frame`, AND the cleanup also drops the
+// already-moved key again, producing a double-free / SEGV under ASAN.
+//
+// Stripped back from the full schema repro: no Documented, no Option, no Box,
+// no enum, no untagged — just flatten + map + missing required field.
+#[test]
+fn asm_repro_flatten_map_missing_field() {
+    tracing_subscriber::fmt::init();
+
+    use indexmap::IndexMap;
+
+    #[derive(Debug, PartialEq, Eq, facet::Facet)]
+    #[repr(C)]
+    struct RuleValue {
+        required: String,
+    }
+
+    #[derive(Debug, PartialEq, Eq, facet::Facet)]
+    #[repr(C)]
+    struct RulesDecl {
+        #[facet(flatten)]
+        rules: IndexMap<String, RuleValue>,
+    }
+
+    let input = r#"ZeroOperand {}"#;
+
+    // Expected to return Err (missing `required` field) — but currently
+    // double-frees before it can return.
+    let _result: Result<RulesDecl, _> = facet_styx::from_str(input);
+}

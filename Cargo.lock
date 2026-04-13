@@ -359,8 +359,6 @@ dependencies = [
 [[package]]
 name = "facet"
 version = "0.44.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4aa60b7d3d49d30f477f9490b7fc3ce42009b5b626b625b0356742884c493a11"
 dependencies = [
  "autocfg",
  "facet-core",
@@ -370,8 +368,6 @@ dependencies = [
 [[package]]
 name = "facet-core"
 version = "0.44.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11f9ee47507f15c18243a8cba3b2a85b71176173f0097e9164a54dd4e4e3e4ce"
 dependencies = [
  "autocfg",
  "camino",
@@ -429,8 +425,6 @@ dependencies = [
 [[package]]
 name = "facet-macro-parse"
 version = "0.44.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e77becc35b3b3008e7b3ef23356954e46561177316aff0a92c73fc6ddb2a15a0"
 dependencies = [
  "facet-macro-types",
  "proc-macro2",
@@ -440,8 +434,6 @@ dependencies = [
 [[package]]
 name = "facet-macro-types"
 version = "0.44.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e600db5983cdad99db3b34adfa20b546d80f21ab8feecd35d40bbbfbcf53b5c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -451,8 +443,6 @@ dependencies = [
 [[package]]
 name = "facet-macros"
 version = "0.44.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3a7015e119aa043740dc8aee6b1b70e26b6616e1701b329496bf04990f44133"
 dependencies = [
  "facet-macros-impl",
 ]
@@ -460,8 +450,6 @@ dependencies = [
 [[package]]
 name = "facet-macros-impl"
 version = "0.44.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbb5e6f6cc64210ab12aa625b014db78d34d6a3b63d1011382c141518a1e1f78"
 dependencies = [
  "facet-macro-parse",
  "facet-macro-types",
@@ -474,8 +462,6 @@ dependencies = [
 [[package]]
 name = "facet-path"
 version = "0.44.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77e7b83cb0de7c00d6e76f08d36b047d6cb9efc39e10744dbcf7a4a5a19c4903"
 dependencies = [
  "facet-core",
 ]
@@ -494,12 +480,10 @@ dependencies = [
 [[package]]
 name = "facet-reflect"
 version = "0.44.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9cc255bd928399489868fdddec09e69073d622432cc2b52cfa3c3a5d811305c"
 dependencies = [
  "facet-core",
  "facet-path",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.0",
  "regex",
  "smallvec 2.0.0-alpha.12",
 ]
@@ -507,8 +491,6 @@ dependencies = [
 [[package]]
 name = "facet-solver"
 version = "0.44.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4d2427360875510d60267f4bb132f47aa4f5714896be9ca11c516f14542118d"
 dependencies = [
  "facet-core",
  "facet-reflect",
@@ -533,8 +515,6 @@ dependencies = [
 [[package]]
 name = "facet-testhelpers"
 version = "0.44.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9003d5bede62269bdc9d71708ab5c686e590a2d20aeb2efa1ba7c49e43651c9a"
 dependencies = [
  "color-backtrace",
  "facet-testhelpers-macros",
@@ -546,8 +526,6 @@ dependencies = [
 [[package]]
 name = "facet-testhelpers-macros"
 version = "0.44.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d6e17dfa5fc4da066dbf46244a72e4e3233c901914b8d979f12a3967649b859"
 dependencies = [
  "quote",
  "unsynn",
@@ -804,6 +782,15 @@ name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
+dependencies = [
+ "allocator-api2",
+]
+
+[[package]]
+name = "hashbrown"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
 dependencies = [
  "allocator-api2",
  "equivalent",
@@ -2770,3 +2757,11 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
+
+[[patch.unused]]
+name = "facet-error"
+version = "0.44.3"
+
+[[patch.unused]]
+name = "facet-pretty"
+version = "0.44.4"
