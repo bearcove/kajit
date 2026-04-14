@@ -3,13 +3,15 @@ use std::path::PathBuf;
 use crate::schema;
 
 #[test]
-fn asm_repro_schema_loads() {
+fn all_pilot_schemas_load() {
     tracing_subscriber::fmt::init();
 
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../notes/unified-ast/pilot/asm-repro.repr.styx");
-
-    let _loaded = schema::read_from_file(&path).unwrap();
+    let schemas_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../notes/unified-ast/pilot");
+    for name in ["hir", "ir", "mir", "lir", "asm"] {
+        let path = schemas_dir.join(format!("{name}.repr.styx"));
+        schema::read_from_file(&path).unwrap_or_else(|e| panic!("failed to load {name}: {e}"));
+    }
 }
 
 // Exact pattern from ModernRulesDecl: Option<IndexMap<Documented<String>, T>>
@@ -69,6 +71,64 @@ fn asm_repro_option_indexmap_documented_key() {
     }"#;
 
     let _result: RulesDecl = facet_styx::from_str(input).unwrap();
+}
+
+// Minimal repro of the schema_loads SIGSEGV: nested failure deep inside a
+// Template variant triggers cleanup that severs a pending map key in a
+// non-flatten `Option<IndexMap<Documented<String>, _>>`. The key String
+// backing pointer ends up pointing at 0x4 (discriminant?) and free()ing it
+// aborts.
+#[test]
+fn asm_repro_nested_failure_severs_templates_key() {
+    tracing_subscriber::fmt::init();
+
+    use facet_styx::Documented;
+    use indexmap::IndexMap;
+
+    #[derive(Debug, PartialEq, Eq, facet::Facet)]
+    #[repr(C)]
+    struct TemplateSyntaxDecl {
+        required: String,
+    }
+
+    #[derive(Debug, PartialEq, Eq, facet::Facet)]
+    #[repr(u8)]
+    #[facet(rename_all = "snake_case")]
+    enum SyntaxExpr {
+        Template(Box<TemplateSyntaxDecl>),
+    }
+
+    #[derive(Debug, PartialEq, Eq, facet::Facet)]
+    #[repr(C)]
+    struct TemplateDecl {
+        syntax: SyntaxExpr,
+    }
+
+    #[derive(Debug, PartialEq, Eq, facet::Facet)]
+    #[repr(C)]
+    struct RuleDecl {
+        description: Option<String>,
+    }
+
+    #[derive(Debug, PartialEq, Eq, facet::Facet)]
+    #[repr(C)]
+    struct RulesDecl {
+        templates: Option<IndexMap<Documented<String>, TemplateDecl>>,
+
+        #[facet(flatten)]
+        rules: IndexMap<Documented<String>, RuleDecl>,
+    }
+
+    // `@template{}` is missing `required` → inner struct fails → cleanup
+    // walks up through SyntaxExpr → TemplateDecl → templates map entry.
+    let input = r#"templates {
+        ZeroOperand {
+            syntax @template{}
+        }
+    }"#;
+
+    // Expected: Err (missing field). Currently: SIGABRT / SEGV.
+    let _result: Result<RulesDecl, _> = facet_styx::from_str(input);
 }
 
 // Minimal double-free repro: #[facet(flatten)] on an IndexMap whose value type
