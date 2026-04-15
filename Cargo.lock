@@ -1107,6 +1107,7 @@ name = "kajit-foundation"
 version = "0.1.0"
 dependencies = [
  "facet",
+ "facet-reflect",
  "facet-styx",
  "indexmap 2.13.0",
  "prettyplease",

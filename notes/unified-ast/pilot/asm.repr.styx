@@ -9,111 +9,9 @@ description "Symbolic architecture-specific assembly with canonical print round-
 
 /// Grammar rules for the currently supported pilot subset.
 rules {
-    templates {
-        Keyword {
-            syntax @template{
-                params ({text @Any})
-                body {
-                    syntax text
-                    highlight keyword
-                }
-            }
-        }
-
-        Operator {
-            syntax @template{
-                params ({text @Any})
-                body {
-                    syntax text
-                    highlight operator
-                }
-            }
-        }
-
-        LabelToken {
-            syntax @template{
-                params ({inner @Any})
-                body {
-                    syntax inner
-                    highlight label
-                }
-            }
-        }
-
-        NumberToken {
-            syntax @template{
-                params ({inner @Any})
-                body {
-                    syntax inner
-                    highlight number
-                }
-            }
-        }
-        ZeroOperand {
-            syntax @template{
-                params (
-                    { mnemonic @Rule }
-                )
-                body (
-                    @mnemonic
-                )
-            }
-        }
-
-        Unary {
-            syntax @template{
-                params (
-                    { mnemonic @Rule }
-                    { target @Any }
-                )
-                body (
-                    @mnemonic
-                    @soft_space
-                    @target
-                )
-            }
-        }
-
-        Binary {
-            syntax @template{
-                params (
-                    { mnemonic @Rule }
-                    { lhs @Any }
-                    { rhs @Any }
-                )
-                body (
-                    @mnemonic
-                    @soft_space
-                    @lhs
-                    @Comma
-                    @soft_space
-                    @rhs
-                )
-            }
-        }
-
-        Ternary {
-            syntax @template{
-                params (
-                    { mnemonic @Rule }
-                    { first @Any }
-                    { second @Any }
-                    { third @Any }
-                )
-                body (
-                    @mnemonic
-                    @soft_space
-                    @first
-                    @Comma
-                    @soft_space
-                    @second
-                    @Comma
-                    @soft_space
-                    @third
-                )
-            }
-        }
-    }
+    //----------------------------------------
+    // Keywords / tags etc.
+    //----------------------------------------
 
     AsmKw @Keyword("asm")
     RetKw @Keyword("ret")
@@ -125,8 +23,8 @@ rules {
     BKw @Keyword("b")
     JmpKw @Keyword("jmp")
 
-    AArch64Dialect "aarch64"
-    X86_64Dialect "x86_64"
+    AArch64Dialect @Keyword("aarch64")
+    X86_64Dialect @Keyword("x86_64")
 
     LBrace @Operator("{")
     RBrace @Operator("}")
@@ -144,6 +42,10 @@ rules {
     LabelName @LabelToken(@Ident)
 
     Imm @NumberToken(@Int)
+
+    //----------------------------------------
+    // Registers
+    //----------------------------------------
 
     A64Reg @enum
 
@@ -168,26 +70,30 @@ rules {
     /// An AArch64 assembly unit.
     Program.AArch64 @struct{
         syntax @brace_block(
-            prefix (
+            prefix
+            (
                 @AsmKw
                 @soft_space
                 @AArch64Dialect
                 @soft_space
             )
-            body {items @many(@A64Item @newline)}
+            body
+            {items @many(@A64Item @newline)}
         )
     }
 
     /// An x86-64 assembly unit.
     Program.X86_64 @struct{
         syntax @brace_block(
-            prefix (
+            prefix
+            (
                 @AsmKw
                 @soft_space
                 @X86_64Dialect
                 @soft_space
             )
-            body {items @many(@X64Item @newline)}
+            body
+            {items @many(@X64Item @newline)}
         )
     }
 
@@ -285,5 +191,105 @@ rules {
     /// Jump to a label.
     X64Item.Jmp @struct{
         syntax @Unary(@JmpKw {target @LabelName})
+    }
+}
+
+templates {
+    Keyword {
+        params ($text)
+        body {
+            syntax $text
+            highlight keyword
+        }
+    }
+
+    Operator {
+        syntax @template{
+            params ({text @Any})
+            body {
+                syntax text
+                highlight operator
+            }
+        }
+    }
+
+    LabelToken {
+        syntax @template{
+            params ({inner @Any})
+            body {
+                syntax inner
+                highlight label
+            }
+        }
+    }
+
+    NumberToken {
+        syntax @template{
+            params ({inner @Any})
+            body {
+                syntax inner
+                highlight number
+            }
+        }
+    }
+    ZeroOperand {
+        syntax @template{
+            params ({mnemonic @Rule})
+            body (@mnemonic)
+        }
+    }
+
+    Unary {
+        syntax @template{
+            params (
+                {mnemonic @Rule}
+                {target @Any}
+            )
+            body (
+                @mnemonic
+                @soft_space
+                @target
+            )
+        }
+    }
+
+    Binary {
+        syntax @template{
+            params (
+                {mnemonic @Rule}
+                {lhs @Any}
+                {rhs @Any}
+            )
+            body (
+                @mnemonic
+                @soft_space
+                @lhs
+                @Comma
+                @soft_space
+                @rhs
+            )
+        }
+    }
+
+    Ternary {
+        syntax @template{
+            params (
+                {mnemonic @Rule}
+                {first @Any}
+                {second @Any}
+                {third @Any}
+            )
+            body (
+                @mnemonic
+                @soft_space
+                @first
+                @Comma
+                @soft_space
+                @second
+                @Comma
+                @soft_space
+                @third
+            )
+        }
     }
 }

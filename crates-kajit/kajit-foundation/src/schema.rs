@@ -3,9 +3,9 @@ use std::hash::{Hash, Hasher};
 use std::path::Path;
 
 use facet::Facet;
+use facet_reflect::Span;
 use facet_styx::{Documented, RenderError};
 use indexmap::IndexMap;
-use styx_tree::Span;
 
 /// A definitionlanguage like HIR, IR, MIR
 #[derive(Facet, Debug, Clone)]
@@ -19,11 +19,8 @@ pub struct LangSpec {
     /// Short description of the lang
     pub description: String,
 
-    /// Re-usable templates for rule definition
-    pub templates: IndexMap<WithMeta<String>, TemplateDecl>,
-
-    /// Rule declaration (AST node etc.)
-    pub rules: IndexMap<WithMeta<String>, RuleDecl>,
+    /// Grammar rules (and optionally embedded templates)
+    pub rules: ModernRulesDecl,
 }
 
 /// A metadata container that captures both span and doc metadata.

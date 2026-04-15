@@ -437,7 +437,7 @@ impl Emitter {
     }
 
     fn capture_label(&mut self, _label: LabelId) {
-        todo!()
+        // no-op for now
     }
 
     pub fn current_offset(&self) -> u32 {

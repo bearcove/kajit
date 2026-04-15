@@ -4,10 +4,12 @@ use crate::schema;
 
 #[test]
 fn all_pilot_schemas_load() {
-    tracing_subscriber::fmt::init();
+    let _ = tracing_subscriber::fmt::try_init();
 
-    let schemas_dir =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../notes/unified-ast/pilot");
+    let schemas_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../notes/unified-ast/pilot")
+        .canonicalize()
+        .unwrap();
     for name in ["hir", "ir", "mir", "lir", "asm"] {
         let path = schemas_dir.join(format!("{name}.repr.styx"));
         schema::read_from_file(&path).unwrap_or_else(|e| panic!("failed to load {name}: {e}"));
@@ -19,7 +21,7 @@ fn all_pilot_schemas_load() {
 // This reproduces the double-free in facet-reflect deferred cleanup.
 #[test]
 fn asm_repro_option_indexmap_documented_key() {
-    tracing_subscriber::fmt::init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     use facet_styx::Documented;
     use indexmap::IndexMap;
@@ -80,7 +82,7 @@ fn asm_repro_option_indexmap_documented_key() {
 // aborts.
 #[test]
 fn asm_repro_nested_failure_severs_templates_key() {
-    tracing_subscriber::fmt::init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     use facet_styx::Documented;
     use indexmap::IndexMap;
@@ -143,7 +145,7 @@ fn asm_repro_nested_failure_severs_templates_key() {
 // no enum, no untagged — just flatten + map + missing required field.
 #[test]
 fn asm_repro_flatten_map_missing_field() {
-    tracing_subscriber::fmt::init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     use indexmap::IndexMap;
 
