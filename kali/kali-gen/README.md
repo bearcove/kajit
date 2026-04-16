@@ -130,13 +130,15 @@ A language definition describes:
 
 - the top-level metadata (`name`, `file_ext`, `description`)
 - a set of rules
-- optionally, a set of reusable templates
+
+Some rules are concrete language rules.
+Some rules are reusable templates defined with `@template{...}`.
 
 The grammar and the AST are described together, so a schema can get busy quickly. That is intentional: the goal is one source of truth.
 
 ## Rule kinds
 
-There are two core rule kinds: `@struct` and `@enum`.
+There are three important rule-value forms: `@struct`, `@enum`, and `@template`.
 
 ### `@struct`
 
@@ -228,6 +230,40 @@ pub struct OperandImm {
     pub prov: Prov,
 }
 ```
+
+### `@template`
+
+A `@template` is a reusable rule definition.
+
+Like everything else in Styx, it is just a tagged value. It lives in `rules {}` alongside ordinary rules.
+
+A template has:
+
+- `params`
+- `body`
+
+and its body is just another rule-shaped value.
+
+```styx
+rules {
+    Keyword @template{
+        params ({text @expr})
+        body {
+            syntax $text
+            highlight keyword
+        }
+    }
+
+    RetKw @Keyword("ret")
+}
+```
+
+This should be read as:
+
+- `Keyword` is a reusable template rule
+- `RetKw` is a rule defined by applying that template
+
+Templates are for factoring repeated rule shapes. They are not a separate subsystem and they do not need their own top-level section.
 
 ## Field inference
 
@@ -664,14 +700,15 @@ The exact punctuation of these forms may still evolve a bit, but the intended se
 
 Templates are a first-class part of the design.
 
-A template is a reusable syntax macro. It exists to factor common syntax forms without creating AST structure of its own.
+A template is a reusable rule definition written as `@template{...}` inside `rules {}`.
 
-That distinction is important:
+That means:
 
-- rules define AST nodes
-- templates factor surface syntax
+- templates and ordinary rules live in the same namespace
+- a template has `params` and a `body`
+- applying a template produces a rule body
 
-A template should not secretly invent fields. Fields still come from captures at the call site.
+Templates are useful because they let you factor repeated rule shapes without inventing a separate template language.
 
 ### Why templates matter
 
@@ -679,34 +716,30 @@ Templates are what make schemas ergonomic.
 
 They are especially useful for:
 
+- keyword-like token rules
+- operator-like token rules
 - instruction families
 - punctuated lists
-- block wrappers
-- keyword-led forms
 - common delimiter/layout patterns
 
 ### Example template
 
 ```styx
-templates {
-    Instr2 {
-        params ({kw @expr} {lhs @expr} {rhs @expr})
-        body (
-            $kw
-            @soft_space
-            $lhs
-            ","
-            @soft_space
-            $rhs
-        )
-    }
-}
-```
-
-Then it can be used like this:
-
-```styx
 rules {
+    Instr2 @template{
+        params ({kw @expr} {lhs @expr} {rhs @expr})
+        body {
+            syntax (
+                $kw
+                @soft_space
+                $lhs
+                ","
+                @soft_space
+                $rhs
+            )
+        }
+    }
+
     Mov @struct{
         syntax @Instr2("mov", {dst @Register}, {src @Operand})
     }
@@ -735,7 +768,7 @@ pub struct Mov {
 }
 ```
 
-The template only arranges syntax.
+The template just factors the repeated rule body shape.
 
 ## Highlighting and semantic tokens
 
@@ -762,7 +795,7 @@ This example is intentionally small, but it shows the main pieces together:
 - an enum
 - struct variants
 - field inference
-- a template
+- a template rule
 - repetition
 
 ```styx
@@ -771,20 +804,31 @@ file_ext .mini-asm
 description "Tiny assembly-like language used to demonstrate kali schemas."
 
 rules {
-    AsmKw {
-        syntax "asm"
-        highlight keyword
+    Keyword @template{
+        params ({text @expr})
+        body {
+            syntax $text
+            highlight keyword
+        }
     }
 
-    MovKw {
-        syntax "mov"
-        highlight keyword
+    Instr2 @template{
+        params ({kw @expr} {lhs @expr} {rhs @expr})
+        body {
+            syntax (
+                $kw
+                @soft_space
+                $lhs
+                @Comma
+                @soft_space
+                $rhs
+            )
+        }
     }
 
-    RetKw {
-        syntax "ret"
-        highlight keyword
-    }
+    AsmKw @Keyword("asm")
+    MovKw @Keyword("mov")
+    RetKw @Keyword("ret")
 
     Comma {
         syntax ","
@@ -837,20 +881,6 @@ rules {
             @newline
             @indent({items @repeat0((@Item @newline))})
             "}"
-        )
-    }
-}
-
-templates {
-    Instr2 {
-        params ({kw @expr} {lhs @expr} {rhs @expr})
-        body (
-            $kw
-            @soft_space
-            $lhs
-            @Comma
-            @soft_space
-            $rhs
         )
     }
 }
@@ -950,10 +980,12 @@ These should be built into the language definition model:
 - `@sep0`
 - `@sep1`
 
-### Templates
+### Template rules
 
-These should usually be expressed by the schema author:
+These should usually be expressed by the schema author as rules defined with `@template{...}`:
 
+- `Keyword`
+- `Operator`
 - `Instr0`
 - `Instr1`
 - `Instr2`
@@ -970,7 +1002,7 @@ The broad direction is clear, but many details are still intentionally unsettled
 
 Open questions include:
 
-- exact template parameter kinds
+- exact template parameter syntax
 - exact syntax for some combinator payloads
 - how much formatter control should be implicit vs explicit
 - how comments/trivia should be represented
@@ -984,7 +1016,7 @@ The README should be read as a description of the **current model and direction*
 
 Near-term goals for `kali-gen` are:
 
-1. finalize the schema model for `@struct`, `@enum`, captures, and core combinators
+1. finalize the schema model for `@struct`, `@enum`, `@template`, captures, and core combinators
 2. finalize template syntax and expansion semantics
 3. express a small real grammar in Kali, likely ASM first
 4. generate AST / parser / formatter from that schema
