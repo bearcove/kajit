@@ -1,7 +1,7 @@
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::path::Path;
 
+use camino::Utf8Path;
 use facet::Facet;
 use facet_reflect::Span;
 use facet_styx::{Documented, RenderError};
@@ -148,15 +148,16 @@ pub enum SyntaxPayload {
     Object(SyntaxObject),
 }
 
-pub fn read_from_file(schema_path: &Path) -> Result<LangDef, String> {
+pub fn read_from_file(schema_path: &Utf8Path) -> Result<LangDef, String> {
     let schema_source = fs::read_to_string(schema_path)
-        .map_err(|e| format!("failed to read {}: {e}", schema_path.display()))?;
+        .map_err(|e| format!("failed to read {}: {e}", schema_path))?;
+
     match facet_styx::from_str::<LangDef>(&schema_source) {
         Ok(schema) => Ok(schema),
         Err(err) => Err(format!(
             "failed to parse {} as Styx:\n{}",
-            schema_path.display(),
-            err.render(&schema_path.display().to_string(), &schema_source),
+            schema_path,
+            err.render(&schema_path.to_string(), &schema_source),
         )),
     }
 }

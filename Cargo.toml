@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  # ~~~~~~~~~~~~~~~~~~
   "kajit/kajit-asm",
   "kajit/kajit-mir",
   "kajit/kajit-wares",
@@ -7,10 +8,15 @@ members = [
   "kajit/kajit-cli",
   "kajit/kajit-reprs",
   "kajit/kajit-types",
+
+  # ~~~~~~~~~~~~~~~~~~
+  "kali/kali-gen",
+  "kali/kali",
+
+  # ~~~~~~~~~~~~~~~~~~
   "kajit/vendor/lldb-rs",
   "kajit/vendor/lldb-sys-rs",
 ]
-exclude = ["kali/*", "kafe/*"]
 resolver = "3"
 
 [workspace.dependencies]
