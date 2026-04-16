@@ -7,7 +7,7 @@ use facet_reflect::Span;
 use facet_styx::{Documented, RenderError};
 use indexmap::IndexMap;
 
-/// A definitionlanguage like HIR, IR, MIR
+/// A language like HIR, IR, MIR
 #[derive(Facet, Debug, Clone)]
 pub struct LangSpec {
     /// Name of the langauge
