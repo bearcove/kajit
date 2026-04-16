@@ -127,7 +127,7 @@ pub fn read_from_file(schema_path: &Utf8Path) -> Result<LangDef, String> {
         Err(err) => Err(format!(
             "failed to parse {} as Styx:\n{}",
             schema_path,
-            err.render(&schema_path.to_string(), &schema_source),
+            err.render(schema_path.as_ref(), &schema_source),
         )),
     }
 }
