@@ -22,6 +22,91 @@ Kali is still in development, but the current direction is guided by a few princ
 - prefer reusable templates over many built-in helpers
 - grow progressively from tiny grammars to real representation languages like ASM, HIR, IR, and MIR
 
+## Tiny Styx primer
+
+Kali schemas are written in Styx, so it helps to understand the substrate first.
+
+The most important thing to keep in mind is this:
+
+- Styx is a **document format**
+- Kali schemas are **Styx documents**
+- forms like `@struct`, `@enum`, `@maybe`, and `@repeat0` are **tagged values**, not declaration keywords
+
+That means a line like:
+
+```styx
+Label @struct{
+    syntax ({name @Ident} ":")
+}
+```
+
+should be read as:
+
+- key: `Label`
+- value: a value tagged `struct`
+- payload: an object containing fields like `syntax`
+
+not as “declare a struct named `Label`”.
+
+### Objects
+
+At the top level, a Styx document is an object: a set of keys with values.
+
+```styx
+name ASM
+file_ext .k-asm
+description "Symbolic architecture-specific assembly."
+```
+
+Here, `name`, `file_ext`, and `description` are keys.
+
+### Tagged values
+
+A value can be tagged. For Kali, tags are how the schema describes structure.
+
+```styx
+Operand @enum
+```
+
+Here, the value of `Operand` is tagged with `enum`.
+
+A tagged value can also carry a payload:
+
+```styx
+Label @struct{
+    syntax ({name @Ident} ":")
+}
+```
+
+Here, the value of `Label` is tagged with `struct`, and its payload is an object.
+
+### Nested objects and payloads
+
+Tags can apply to different shapes of payloads:
+
+- objects: `@struct{ ... }`
+- sequences/grouped forms: `@repeat0(...)`
+- unit-like tagged values with no payload: `@enum`
+
+The exact shapes available depend on the schema being parsed, but the important point is that these are still just Styx values.
+
+### How Kali uses Styx
+
+Kali uses Styx objects and tagged values to describe:
+
+- rule kinds like `@struct` and `@enum`
+- syntax combinators like `@maybe(...)` and `@repeat0(...)`
+- metadata like doc comments
+- reusable templates
+
+So when reading the rest of this README, try to think in terms of:
+
+- keys and values
+- tags and payloads
+- objects and sequences
+
+rather than a custom declaration language.
+
 ## Defining a language
 
 Language definitions are `.styx` files.
@@ -61,7 +146,7 @@ Its fields are inferred from named captures in `syntax`.
 
 ```styx
 rules {
-    Label @struct {
+    Label @struct{
         syntax ({name @Ident} ":")
     }
 }
@@ -105,11 +190,11 @@ Its variants are typically written as nested rules like `EnumName.VariantName`.
 rules {
     Operand @enum
 
-    Operand.Reg @struct {
+    Operand.Reg @struct{
         syntax {reg @Register}
     }
 
-    Operand.Imm @struct {
+    Operand.Imm @struct{
         syntax {value @Int}
     }
 }
@@ -152,7 +237,7 @@ Named captures inside a `@struct` become fields on that struct.
 
 ```styx
 rules {
-    RetInstr @struct {
+    RetInstr @struct{
         syntax (@RetKw {target @Register})
     }
 }
@@ -183,7 +268,7 @@ pub struct RetInstr {
 
 ```styx
 rules {
-    MaybeLabelRef @struct {
+    MaybeLabelRef @struct{
         syntax {label @maybe(@LabelName)}
     }
 }
@@ -213,7 +298,7 @@ pub struct MaybeLabelRef {
 
 ```styx
 rules {
-    Program @struct {
+    Program @struct{
         syntax (
             "{"
             {items @repeat0(@Item)}
@@ -250,7 +335,7 @@ pub struct Program {
 
 ```styx
 rules {
-    ArgList @struct {
+    ArgList @struct{
         syntax {args @sep1(@Expr @Comma)}
     }
 }
@@ -279,26 +364,16 @@ pub struct ArgList {
 }
 ```
 
-### Consistency rule for alternatives inside a struct
+### Variation belongs in regexes or enums
 
-A `@struct` may use alternatives in its `syntax`, but all alternatives must infer the **same field set** with compatible types.
+Kali does not currently have a general-purpose inline alternation form.
 
-For example, this is fine:
+Instead:
 
-```styx
-rules {
-    BoolLit @struct {
-        syntax @alt(
-            ("true" {value @TrueTag})
-            ("false" {value @FalseTag})
-        )
-    }
-}
-```
+- use regexes for lexical variation
+- use `@enum` for structural variation
 
-because every branch binds the same field, `value`.
-
-If different branches want different fields, that likely wants an `@enum`, not a single `@struct`.
+For example, if a language wants to accept multiple token spellings, that can live in a token-like rule. If it wants multiple AST shapes, that should be modeled explicitly as an enum with variants.
 
 ## Syntax expressions
 
@@ -311,7 +386,7 @@ A syntax expression can be:
 - a rule reference, like `@Ident`
 - a sequence, like `(@MovKw {dst @Register} "," {src @Operand})`
 - a named capture, like `{dst @Register}`
-- a combinator form, such as `@alt(...)` or `@repeat0(...)`
+- a tagged combinator form, such as `@repeat0(...)`
 
 ### Literals
 
@@ -361,7 +436,7 @@ A syntax expression can refer to another rule using `@RuleName`.
 
 ```styx
 rules {
-    Ret @struct {
+    Ret @struct{
         syntax @RetKw
     }
 }
@@ -383,7 +458,7 @@ A sequence is written using parentheses:
 
 ```styx
 rules {
-    RetInstr @struct {
+    RetInstr @struct{
         syntax (@RetKw @soft_space {reg @Register})
     }
 }
@@ -428,7 +503,7 @@ These are especially important for line-oriented representations like ASM, HIR, 
 
 ```styx
 rules {
-    RetInstr @struct {
+    RetInstr @struct{
         syntax (@RetKw @soft_space {reg @Register})
     }
 }
@@ -449,7 +524,7 @@ but format them canonically as:
 
 ```styx
 rules {
-    Program @struct {
+    Program @struct{
         syntax (
             "{"
             @newline
@@ -478,7 +553,7 @@ and a formatter can normalize that into a canonical line-based layout.
 
 ```styx
 rules {
-    Program @struct {
+    Program @struct{
         syntax (
             "{"
             @newline
@@ -505,44 +580,21 @@ rather than leaving indentation implicit or ad hoc.
 
 ## Core combinators
 
-Because Styx is still a document format, the current direction is to prefer **prefix combinator forms** rather than symbolic operators like `|`, `?`, `*`, or `+`.
+Because Styx is still a document format, the current direction is to prefer **prefix combinator forms** rather than symbolic operators like `?`, `*`, or `+`.
 
 The core combinators are:
 
-- `@alt(...)`
 - `@maybe(...)`
 - `@repeat0(...)`
 - `@repeat1(...)`
 - `@sep0(item sep)`
 - `@sep1(item sep)`
 
-### Alternatives
-
-```styx
-rules {
-    ZeroOrOne @struct {
-        syntax @alt(
-            "zero"
-            "one"
-        )
-    }
-}
-```
-
-`@alt(...)` means “try these alternatives”.
-
-This rule parses either:
-
-- `zero`
-- `one`
-
-and formats using whichever branch corresponds to the AST value being printed.
-
 ### Optional syntax
 
 ```styx
 rules {
-    SignedInt @struct {
+    SignedInt @struct{
         syntax (
             {sign @maybe(@Minus)}
             {value @Int}
@@ -582,7 +634,7 @@ and formats them with one item per line in the indented block.
 
 ```styx
 rules {
-    List @struct {
+    List @struct{
         syntax {items @sep0(@Item @Comma)}
     }
 }
@@ -655,7 +707,7 @@ Then it can be used like this:
 
 ```styx
 rules {
-    Mov @struct {
+    Mov @struct{
         syntax @Instr2("mov", {dst @Register}, {src @Operand})
     }
 }
@@ -749,35 +801,35 @@ rules {
         highlight number
     }
 
-    Register @struct {
+    Register @struct{
         syntax {name @Ident}
     }
 
     Operand @enum
 
-    Operand.Reg @struct {
+    Operand.Reg @struct{
         syntax {reg @Register}
     }
 
-    Operand.Imm @struct {
+    Operand.Imm @struct{
         syntax {value @Int}
     }
 
     Item @enum
 
-    Item.Label @struct {
+    Item.Label @struct{
         syntax ({name @Ident} ":")
     }
 
-    Item.Mov @struct {
+    Item.Mov @struct{
         syntax @Instr2(@MovKw, {dst @Register}, {src @Operand})
     }
 
-    Item.Ret @struct {
+    Item.Ret @struct{
         syntax @RetKw
     }
 
-    Program @struct {
+    Program @struct{
         syntax (
             @AsmKw
             @soft_space
@@ -892,7 +944,6 @@ These should be built into the language definition model:
 - rule references
 - sequence
 - named capture
-- `@alt`
 - `@maybe`
 - `@repeat0`
 - `@repeat1`
