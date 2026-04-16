@@ -7,9 +7,11 @@ use facet_reflect::Span;
 use facet_styx::{Documented, RenderError};
 use indexmap::IndexMap;
 
+mod styx_support;
+
 /// A language like HIR, IR, MIR
 #[derive(Facet, Debug, Clone)]
-pub struct LangSpec {
+pub struct LangDef {
     /// Name of the langauge
     pub name: String,
 
@@ -146,10 +148,10 @@ pub enum SyntaxPayload {
     Object(SyntaxObject),
 }
 
-pub fn read_from_file(schema_path: &Path) -> Result<LangSpec, String> {
+pub fn read_from_file(schema_path: &Path) -> Result<LangDef, String> {
     let schema_source = fs::read_to_string(schema_path)
         .map_err(|e| format!("failed to read {}: {e}", schema_path.display()))?;
-    match facet_styx::from_str::<LangSpec>(&schema_source) {
+    match facet_styx::from_str::<LangDef>(&schema_source) {
         Ok(schema) => Ok(schema),
         Err(err) => Err(format!(
             "failed to parse {} as Styx:\n{}",

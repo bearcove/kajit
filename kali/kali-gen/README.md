@@ -1,4 +1,4 @@
-# kajit-foundation
+# kali-gen
 
 The idea: define a language spec once, and have:
 
