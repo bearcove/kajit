@@ -28,6 +28,10 @@ rules {
 
 We have to define _everything at once_ so it can get a bit busy.
 
+### Defining rules
+
+Everything we show off in this section is implicitly under `rules {}`
+
 Every rule ends up being a struct, with a `Prov` (which contains `FileId`, and
 `Span`)
 
@@ -38,15 +42,51 @@ Syntax can be a literal:
 
 ```styx
 rules { 
-    AsmKw {
-        syntax asm
+    RetKw {
+        syntax ret
         highlight keyword
     }
 }
 ```
 
-In which case it'll match literally `asm`, or it can be a regexp (regular styx literal
-that starts and end in `/`):
+In which case it'll match literally `ret`.
+
+It can be a regexp (regular styx literal that starts and end in `/`):
+
+```styx
+rules {
+    Register {
+        syntax /[A-Za-z_][A-Za-z0-9_]*/
+        highlight register
+    }
+}
+```
+
+You can refer to another rule from within a `syntax` expression by writing `@RuleName`.
+That means “parse using the rule named `RuleName` here”, instead of matching raw text directly.
+This is how larger rules are built out of smaller reusable ones.
+
+```styx
+rules {
+    Ret {
+        syntax @RetKw
+    }
+}
+```
+
+> Note: in styx, `@RetKw` is equivalent to `@RetKw@`, it's a unit value (`@`)
+> tagged with `RetKw`.
+
+`Ret` will then match exactly the same input as `RetKw`, but as a distinct rule in the grammar.
+References can also be combined with other syntax forms, such as sequences.
+
+```styx
+rules {
+    RetInstr {
+        syntax (@RetKw @Register)
+    }
+}
+```
 
 ## Appendix: list of semantic tokens
 

@@ -25,3 +25,12 @@ pub struct Span {
     /// Length in bytes
     pub len: u32,
 }
+
+/// Provenance for a parsed bit of syntax, combining the file and span
+pub struct Prov {
+    /// The file this syntax came from
+    pub file: FileId,
+
+    /// The span within that file
+    pub span: Span,
+}
