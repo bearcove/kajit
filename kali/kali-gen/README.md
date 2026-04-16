@@ -84,9 +84,14 @@ and canonical formatting would emit the same shape:
 - `entry:`
 - `loop_start:`
 
-The generated AST node would conceptually look like:
+The generated Rust type definition would look roughly like:
 
-- `Label { name, prov }`
+```rust
+pub struct Label {
+    pub name: Ident,
+    pub prov: Prov,
+}
+```
 
 where `prov` is the provenance/span metadata automatically attached to nodes.
 
@@ -120,6 +125,25 @@ A useful mental model is:
 - `@struct` = one AST shape
 - `@enum` = alternatives in AST shape
 
+The generated Rust type definitions would look roughly like:
+
+```rust
+pub enum Operand {
+    Reg(OperandReg),
+    Imm(OperandImm),
+}
+
+pub struct OperandReg {
+    pub reg: Register,
+    pub prov: Prov,
+}
+
+pub struct OperandImm {
+    pub value: Int,
+    pub prov: Prov,
+}
+```
+
 ## Field inference
 
 Named captures inside a `@struct` become fields on that struct.
@@ -146,6 +170,15 @@ and format back to the canonical spelling:
 
 - `ret x0`
 
+The generated Rust type definition would look roughly like:
+
+```rust
+pub struct RetInstr {
+    pub target: Register,
+    pub prov: Prov,
+}
+```
+
 ### Optional capture
 
 ```styx
@@ -166,6 +199,15 @@ For example, if this rule is used inside a larger sequence, it can accept either
 - nothing at all
 
 and formatting would either emit the label or omit that position entirely, depending on whether the field is `Some(...)` or `None`.
+
+The generated Rust type definition would look roughly like:
+
+```rust
+pub struct MaybeLabelRef {
+    pub label: Option<LabelName>,
+    pub prov: Prov,
+}
+```
 
 ### Repeated capture
 
@@ -195,6 +237,15 @@ and canonical formatting would emit braces even when the list is empty:
 - `{}`
 - `{ entry: ret }`
 
+The generated Rust type definition would look roughly like:
+
+```rust
+pub struct Program {
+    pub items: Vec<Item>,
+    pub prov: Prov,
+}
+```
+
 ### Separated repetition
 
 ```styx
@@ -218,6 +269,15 @@ and formats it with canonical comma spacing:
 
 - `x`
 - `x, y, z`
+
+The generated Rust type definition would look roughly like:
+
+```rust
+pub struct ArgList {
+    pub args: Vec<Expr>,
+    pub prov: Prov,
+}
+```
 
 ### Consistency rule for alternatives inside a struct
 
@@ -340,6 +400,15 @@ and formats canonically as:
 - `ret x0`
 
 because the sequence explicitly includes both the keyword and the separating layout.
+
+The generated Rust type definition would look roughly like:
+
+```rust
+pub struct RetInstr {
+    pub reg: Register,
+    pub prov: Prov,
+}
+```
 
 ## Layout controls
 
@@ -604,6 +673,16 @@ and formats it canonically as:
 - `mov x0, 42`
 - `mov rax, rbx`
 
+The generated Rust type definition would look roughly like:
+
+```rust
+pub struct Mov {
+    pub dst: Register,
+    pub src: Operand,
+    pub prov: Prov,
+}
+```
+
 The template only arranges syntax.
 
 ## Highlighting and semantic tokens
@@ -747,6 +826,56 @@ and format it back into the same canonical layout:
     mov x0, 42
     ret
 }`
+
+The generated Rust types would look roughly like:
+
+```rust
+pub struct Register {
+    pub name: Ident,
+    pub prov: Prov,
+}
+
+pub enum Operand {
+    Reg(OperandReg),
+    Imm(OperandImm),
+}
+
+pub struct OperandReg {
+    pub reg: Register,
+    pub prov: Prov,
+}
+
+pub struct OperandImm {
+    pub value: Int,
+    pub prov: Prov,
+}
+
+pub enum Item {
+    Label(ItemLabel),
+    Mov(ItemMov),
+    Ret(ItemRet),
+}
+
+pub struct ItemLabel {
+    pub name: Ident,
+    pub prov: Prov,
+}
+
+pub struct ItemMov {
+    pub dst: Register,
+    pub src: Operand,
+    pub prov: Prov,
+}
+
+pub struct ItemRet {
+    pub prov: Prov,
+}
+
+pub struct Program {
+    pub items: Vec<Item>,
+    pub prov: Prov,
+}
+```
 
 It is not “full asm”, but it demonstrates the shape Kali is aiming for.
 
