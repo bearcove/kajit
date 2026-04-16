@@ -74,6 +74,16 @@ That rule says:
 - bind it to the field `name`
 - then match the literal `:`
 
+For example, it parses text like:
+
+- `entry:`
+- `loop_start:`
+
+and canonical formatting would emit the same shape:
+
+- `entry:`
+- `loop_start:`
+
 The generated AST node would conceptually look like:
 
 - `Label { name, prov }`
@@ -128,6 +138,14 @@ This infers the field:
 
 - `target: Register`
 
+For example, with `RetKw = "ret"` and a register rule, this would parse:
+
+- `ret x0`
+
+and format back to the canonical spelling:
+
+- `ret x0`
+
 ### Optional capture
 
 ```styx
@@ -142,12 +160,23 @@ This infers:
 
 - `label: Option<LabelName>`
 
+For example, if this rule is used inside a larger sequence, it can accept either:
+
+- `target_label`
+- nothing at all
+
+and formatting would either emit the label or omit that position entirely, depending on whether the field is `Some(...)` or `None`.
+
 ### Repeated capture
 
 ```styx
 rules {
-    Block @struct {
-        syntax {items @repeat0(@Item)}
+    Program @struct {
+        syntax (
+            "{"
+            {items @repeat0(@Item)}
+            "}"
+        )
     }
 }
 ```
@@ -155,6 +184,16 @@ rules {
 This infers:
 
 - `items: Vec<Item>`
+
+For example, it parses braced sequences like:
+
+- `{}`
+- `{ entry: ret }`
+
+and canonical formatting would emit braces even when the list is empty:
+
+- `{}`
+- `{ entry: ret }`
 
 ### Separated repetition
 
@@ -169,6 +208,16 @@ rules {
 This infers:
 
 - `args: Vec<Expr>`
+
+For example, it parses comma-separated text like:
+
+- `x`
+- `x, y, z`
+
+and formats it with canonical comma spacing:
+
+- `x`
+- `x, y, z`
 
 ### Consistency rule for alternatives inside a struct
 
@@ -217,6 +266,14 @@ rules {
 
 This matches the literal text `ret`.
 
+So it parses:
+
+- `ret`
+
+and formats as:
+
+- `ret`
+
 ### Regexes
 
 ```styx
@@ -229,6 +286,14 @@ rules {
 ```
 
 This matches identifier-like text.
+
+For example, it parses:
+
+- `x0`
+- `entry`
+- `tmp_42`
+
+and formats them back as written, subject to whatever canonicalization the enclosing rule imposes.
 
 ### Rule references
 
@@ -244,6 +309,14 @@ rules {
 
 That means “parse using the rule named `RetKw` here”.
 
+So if `RetKw` matches `ret`, then this rule also parses:
+
+- `ret`
+
+and formats as:
+
+- `ret`
+
 ### Sequences
 
 A sequence is written using parentheses:
@@ -257,6 +330,109 @@ rules {
 ```
 
 The sequence matches each element in order.
+
+For example, this parses:
+
+- `ret x0`
+
+and formats canonically as:
+
+- `ret x0`
+
+because the sequence explicitly includes both the keyword and the separating layout.
+
+## Layout controls
+
+Formatting is part of the schema, so layout-related syntax forms matter just as much as tokens and rule references.
+
+Kali needs to be able to express not only what parses, but how canonical formatting should be laid out. That includes soft spacing, line breaks, and indentation-sensitive structure.
+
+Important layout forms include:
+
+- `@soft_space` — a formatting-aware space boundary
+- `@newline` — a line break
+- indentation-related helpers, such as `@indent(...)`, for nested block content
+
+These are especially important for line-oriented representations like ASM, HIR, IR, and MIR.
+
+### Soft space
+
+```styx
+rules {
+    RetInstr @struct {
+        syntax (@RetKw @soft_space {reg @Register})
+    }
+}
+```
+
+A `@soft_space` marks a spacing boundary that should round-trip canonically in formatted output without having to model raw whitespace as ordinary tokens.
+
+For example, a rule using `(@RetKw @soft_space {reg @Register})` might parse variants like:
+
+- `ret x0`
+- `ret   x0`
+
+but format them canonically as:
+
+- `ret x0`
+
+### Newlines
+
+```styx
+rules {
+    Program @struct {
+        syntax (
+            "{"
+            @newline
+            {items @repeat0((@Item @newline))}
+            "}"
+        )
+    }
+}
+```
+
+This makes line structure explicit in the syntax instead of treating it as an afterthought.
+
+For example, it parses block-shaped text like:
+
+- `{
+ret
+}`
+- `{
+ret
+mov x0, 42
+}`
+
+and a formatter can normalize that into a canonical line-based layout.
+
+### Indentation
+
+```styx
+rules {
+    Program @struct {
+        syntax (
+            "{"
+            @newline
+            @indent({items @repeat0((@Item @newline))})
+            "}"
+        )
+    }
+}
+```
+
+The exact shape of indentation helpers may still evolve, but the schema needs a way to express nested layout intentionally, because formatter generation depends on it.
+
+For example, a formatter for the rule above would typically emit:
+
+- `{
+    ret
+}`
+- `{
+    ret
+    mov x0, 42
+}`
+
+rather than leaving indentation implicit or ad hoc.
 
 ## Core combinators
 
@@ -286,6 +462,13 @@ rules {
 
 `@alt(...)` means “try these alternatives”.
 
+This rule parses either:
+
+- `zero`
+- `one`
+
+and formats using whichever branch corresponds to the AST value being printed.
+
 ### Optional syntax
 
 ```styx
@@ -303,11 +486,28 @@ rules {
 
 ```styx
 rules {
-    Lines @struct {
-        syntax {items @repeat1(@Line)}
+    Program @struct {
+        syntax (
+            "{"
+            @newline
+            @indent({items @repeat1((@Line @newline))})
+            "}"
+        )
     }
 }
 ```
+
+This parses one-or-more line-oriented items inside braces, such as:
+
+- `{
+    ret
+}`
+- `{
+    ret
+    mov x0, 42
+}`
+
+and formats them with one item per line in the indented block.
 
 ### Separated repetition
 
@@ -318,6 +518,18 @@ rules {
     }
 }
 ```
+
+This parses list text like:
+
+- ``
+- `x`
+- `x, y, z`
+
+and formats it with canonical comma placement and spacing:
+
+- ``
+- `x`
+- `x, y, z`
 
 The exact punctuation of these forms may still evolve a bit, but the intended semantics are stable:
 
@@ -381,6 +593,16 @@ rules {
 ```
 
 The important point is that the fields are still `dst` and `src`, because those bindings were introduced by the caller.
+
+So this rule parses text like:
+
+- `mov x0, 42`
+- `mov rax, rbx`
+
+and formats it canonically as:
+
+- `mov x0, 42`
+- `mov rax, rbx`
 
 The template only arranges syntax.
 
@@ -481,7 +703,8 @@ rules {
             @AsmKw
             @soft_space
             "{"
-            {items @repeat0(@Item)}
+            @newline
+            @indent({items @repeat0((@Item @newline))})
             "}"
         )
     }
@@ -508,6 +731,22 @@ This is enough to express:
 - instructions
 - operand alternatives
 - a list of items inside a program
+
+For example, it can parse text like:
+
+- `asm {
+    entry:
+    mov x0, 42
+    ret
+}`
+
+and format it back into the same canonical layout:
+
+- `asm {
+    entry:
+    mov x0, 42
+    ret
+}`
 
 It is not “full asm”, but it demonstrates the shape Kali is aiming for.
 
