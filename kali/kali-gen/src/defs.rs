@@ -7,6 +7,8 @@ use facet_reflect::Span;
 use facet_styx::{Documented, RenderError};
 use indexmap::IndexMap;
 
+use crate::defs::styx_support::WithMeta;
+
 mod styx_support;
 
 /// A language like HIR, IR, MIR
@@ -22,52 +24,20 @@ pub struct LangDef {
     pub description: String,
 
     /// Grammar rules (and optionally embedded templates)
-    pub rules: ModernRulesDecl,
-}
-
-/// A metadata container that captures both span and doc metadata.
-///
-/// This is useful for validation errors that need to point back to source locations,
-/// while also preserving doc comments.
-#[derive(Debug, Clone, Facet)]
-#[facet(metadata_container)]
-pub struct WithMeta<T> {
-    pub value: T,
-
-    #[facet(metadata = "span")]
-    pub span: Option<Span>,
-
-    #[facet(metadata = "doc")]
-    pub doc: Option<Vec<String>>,
-
-    #[facet(metadata = "tag")]
-    pub tag: Option<String>,
-}
-
-impl<T: PartialEq> PartialEq for WithMeta<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
-    }
-}
-
-impl<T: Eq> Eq for WithMeta<T> {}
-
-impl<T: Hash> Hash for WithMeta<T> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.value.hash(state);
-    }
+    pub rules: RulesDef,
 }
 
 #[derive(Facet, Debug, Clone)]
-pub struct ModernRulesDecl {
-    pub templates: Option<IndexMap<Documented<String>, TemplateDecl>>,
+pub struct RulesDef {
+    #[facet(default)]
+    pub templates: IndexMap<WithMeta<String>, WithMeta<TemplateDef>>,
 
-    #[facet(flatten)]
-    pub rules: IndexMap<Documented<String>, RuleDecl>,
+    #[facet(default)]
+    pub rules: IndexMap<WithMeta<String>, WithMeta<RuleDef>>,
 }
 
 #[derive(Facet, Debug, Clone)]
-pub struct TemplateDecl {
+pub struct TemplateDef {
     pub syntax: SyntaxExpr,
     pub highlight: Option<String>,
 }
@@ -87,7 +57,7 @@ pub struct HighlightedSyntax {
 #[derive(Facet, Debug, Clone)]
 #[facet(rename_all = "lowercase")]
 #[repr(u8)]
-pub enum RuleDecl {
+pub enum RuleDef {
     #[facet(untagged)]
     Literal(String),
     #[facet(untagged)]
